@@ -1,0 +1,141 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://trendlab.local/schemas/strategy-artifact.schema.json",
+  "title": "StrategyArtifact",
+  "description": "Schema for strategy artifacts used to generate Pine Script parity",
+  "type": "object",
+  "required": ["strategy_id", "version", "timeframe", "fill_model", "indicators", "rules", "parameters"],
+  "properties": {
+    "strategy_id": {
+      "type": "string",
+      "description": "Unique identifier for the strategy (e.g., 'ma_cross_v1')"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\d+\.\d+\.\d+$",
+      "description": "Semantic version of the artifact schema"
+    },
+    "timeframe": {
+      "type": "string",
+      "enum": ["1d", "1h", "4h", "1w"],
+      "description": "Bar timeframe"
+    },
+    "fill_model": {
+      "type": "object",
+      "required": ["convention", "fees_bps"],
+      "properties": {
+        "convention": {
+          "type": "string",
+          "enum": ["next_open", "next_close", "same_close"],
+          "description": "When orders are filled relative to signal bar"
+        },
+        "fees_bps": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Round-trip fees in basis points"
+        },
+        "slippage_bps": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Slippage in basis points (optional)"
+        }
+      }
+    },
+    "indicators": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "type", "params"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Indicator variable name (e.g., 'fast_ma')"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["sma", "ema", "atr", "rsi", "macd", "bollinger"],
+            "description": "Indicator type"
+          },
+          "params": {
+            "type": "object",
+            "description": "Indicator-specific parameters"
+          },
+          "pine_expr": {
+            "type": "string",
+            "description": "Equivalent Pine Script expression"
+          }
+        }
+      }
+    },
+    "rules": {
+      "type": "object",
+      "required": ["entry_long", "exit_long"],
+      "properties": {
+        "entry_long": {
+          "type": "string",
+          "description": "Boolean expression for long entry (Pine-compatible)"
+        },
+        "exit_long": {
+          "type": "string",
+          "description": "Boolean expression for long exit (Pine-compatible)"
+        },
+        "entry_short": {
+          "type": "string",
+          "description": "Boolean expression for short entry (optional)"
+        },
+        "exit_short": {
+          "type": "string",
+          "description": "Boolean expression for short exit (optional)"
+        }
+      }
+    },
+    "parameters": {
+      "type": "object",
+      "description": "Strategy parameter values used in this artifact"
+    },
+    "parity_vectors": {
+      "type": "array",
+      "description": "Test vectors for Pine parity validation",
+      "items": {
+        "type": "object",
+        "required": ["ts", "indicators", "signals"],
+        "properties": {
+          "ts": {
+            "type": "string",
+            "format": "date",
+            "description": "Bar date (YYYY-MM-DD)"
+          },
+          "indicators": {
+            "type": "object",
+            "description": "Expected indicator values at this bar"
+          },
+          "signals": {
+            "type": "object",
+            "properties": {
+              "entry_long": { "type": "boolean" },
+              "exit_long": { "type": "boolean" },
+              "entry_short": { "type": "boolean" },
+              "exit_short": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "created_at": { "type": "string", "format": "date-time" },
+        "run_id": { "type": "string" },
+        "config_id": { "type": "string" },
+        "symbol": { "type": "string" },
+        "date_range": {
+          "type": "object",
+          "properties": {
+            "start": { "type": "string", "format": "date" },
+            "end": { "type": "string", "format": "date" }
+          }
+        }
+      }
+    }
+  }
+}

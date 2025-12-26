@@ -1,0 +1,19 @@
+[package]
+name = "trendlab-bdd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "BDD tests for TrendLab using cucumber-rs"
+
+[dependencies]
+trendlab-core.workspace = true
+
+[dev-dependencies]
+cucumber.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+futures = "0.3"
+
+[[test]]
+name = "bdd"
+harness = false

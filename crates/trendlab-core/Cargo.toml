@@ -1,0 +1,17 @@
+[package]
+name = "trendlab-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core domain types, strategies, and metrics for TrendLab backtester"
+
+[dependencies]
+polars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+# Unit tests use standard Rust test framework

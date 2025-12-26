@@ -1,0 +1,51 @@
+# Data directory - never commit market data
+/data/
+
+# Rust build artifacts
+/target/
+**/target/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment and secrets
+.env
+.env.*
+*.pem
+*.key
+secrets/
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Coverage
+*.profraw
+*.profdata
+coverage/
+tarpaulin-report.html
+
+# Benchmark artifacts
+criterion/
+
+# Editor backups
+*~
+\#*\#
