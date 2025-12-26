@@ -11,6 +11,12 @@ cargo build --release
 # Run tests
 cargo test
 
+# Full quality gate (fmt + clippy + tests)
+# - Windows:
+.\scripts\verify.ps1
+# - macOS/Linux:
+bash scripts/verify.sh
+
 # See CLI help
 cargo run -p trendlab-cli -- --help
 ```

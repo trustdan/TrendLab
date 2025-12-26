@@ -1,14 +1,12 @@
-Feature: Backtest Engine
-  As a quant researcher
-  I want to backtest trend-following strategies
-  So that I can evaluate their performance
+@deprecated
+Feature: Backtest Engine (deprecated)
+  This feature was an initial scaffold. The real Milestone-0 suite lives in:
+  - invariants.feature
+  - costs.feature
 
-  @invariant
-  Scenario: No lookahead in signal generation
-    Given no data loaded
-    When the backtest runs
-    Then no trades should be generated
-
-  Scenario: Loading fixture data
-    Given a bar series from fixture spy_100_bars.csv
-    Then the result should contain fixture
+  Scenario: Deprecated placeholder
+    Given a synthetic bar series from fixture synth/determinism_30.csv
+    When I compute SMA with window 3
+    And I modify bars after index 0
+    And I compute SMA with window 3 again
+    Then SMA values through index 0 must be identical

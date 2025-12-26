@@ -22,8 +22,8 @@ Examples:
 ## CSV Format
 
 ```csv
-ts,open,high,low,close,volume,symbol
-1672531200000,380.50,382.10,379.80,381.20,50000000,SPY
+ts,open,high,low,close,volume,symbol,timeframe
+2024-01-01T00:00:00Z,380.50,382.10,379.80,381.20,50000000,SPY,1d
 ```
 
 All prices are split-adjusted and dividend-adjusted.
@@ -39,4 +39,7 @@ All prices are split-adjusted and dividend-adjusted.
 
 | File | Description | Bars | Use Case |
 |------|-------------|------|----------|
-| (add fixtures here as they're created) | | | |
+| `synth/determinism_30.csv` | Monotonic synthetic series | 30 | Determinism + accounting invariants |
+| `synth/lookahead_30.csv` | Monotonic synthetic series | 30 | No-lookahead indicator stability |
+| `synth/fill_next_open.csv` | Small series with known opens | 6 | Fill-model invariant (next open) |
+| `synth/costs_roundtrip.csv` | Small series with known opens | 5 | Fees + slippage cost model checks |

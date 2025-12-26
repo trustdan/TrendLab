@@ -1,0 +1,38 @@
+# Dependencies and build artifacts
+target/
+.cargo/
+
+# Data directories (not code)
+data/
+fixtures/
+
+# Documentation and reference materials
+pine-script-docs/
+docs/
+*.md
+
+# Generated files
+artifacts/
+reports/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Lock files
+Cargo.lock
+
+# Schema files (JSON)
+schemas/
+
+# Config files
+configs/
+*.toml
+*.json
+*.yaml
+*.yml
+
+# Claude/AI tool files
+.claude/
