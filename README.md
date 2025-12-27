@@ -20,15 +20,15 @@ The project optimizes for:
 
 ## How it works (high level)
 
-TrendLab’s “happy path” is:
+TrendLab's "happy path" is:
 
-1. **Ingest & cache market data** (planned: Yahoo daily OHLCV → Parquet cache)
-2. **Compute indicators and signals** (strict time alignment; no lookahead)
-3. **Simulate fills and accounting** (default: signal-on-close → fill-next-open; explicit fees/slippage)
-4. **Run sweeps** across parameter grids and universes (planned)
-5. **Rank + report** with robustness diagnostics (planned)
-6. **Export StrategyArtifact** JSON (planned)
-7. **Verify in TradingView** via Pine parity vectors / exported strategy results (planned)
+1. **Ingest & cache market data** ✅ Yahoo daily OHLCV → Parquet cache
+2. **Compute indicators and signals** ✅ Strict time alignment; no lookahead
+3. **Simulate fills and accounting** ✅ Signal-on-close → fill-next-open; explicit fees/slippage
+4. **Run sweeps** ✅ Parallel parameter sweeps across universes via Polars + Rayon
+5. **Rank + report** ✅ Full metrics suite with HTML/CSV export
+6. **Export StrategyArtifact** ✅ JSON schema for Pine generation
+7. **Verify in TradingView** via Pine parity vectors (in progress)
 
 ## Architecture (workspace crates)
 
@@ -38,18 +38,28 @@ TrendLab’s “happy path” is:
 
 For more detail, see `docs/PROJECT_OVERVIEW.md` and `docs/architecture.md`.
 
-## Current status (what’s real today)
+## Current status (what's real today)
 
-Milestone 0 (“Foundation”) is complete:
+**Milestone 0 ("Foundation")** ✅ Complete:
 
-- Cucumber BDD suite is wired and runs under `cargo test`
-- Deterministic fixtures live in `fixtures/synth/`
-- A minimal vertical slice exists in core:
-  - SMA indicator (no-lookahead by construction)
-  - Minimal backtest kernel: next-open fill + fees/slippage + accounting identity
-- One-command quality gate exists (fmt + clippy + tests)
+- Cucumber BDD suite wired and running under `cargo test`
+- Deterministic fixtures in `fixtures/synth/`
+- Minimal vertical slice: SMA indicator, backtest kernel with next-open fill + fees/slippage
 
-Milestone 1 (“Data Layer”) is next: provider ingestion + Parquet cache + data-quality reports + BDD scenarios.
+**Milestone 1 ("Data Layer")** ✅ Complete:
+
+- Yahoo Finance data provider with automatic caching
+- Parquet storage for normalized bar data
+- Data quality validation and missing bar handling
+
+**Milestone 2 ("Polars Integration")** ✅ Complete:
+
+- Dual-backend architecture: Polars-native (vectorized) and sequential
+- 3 strategy families fully ported to Polars: Donchian/Turtle, MA Crossover, TSMOM
+- Unified sweep runner with parallel execution via Rayon
+- Full TUI integration with Polars-native sweeps
+
+See [Backtest Architecture](#backtest-architecture) below for details on the dual-backend design.
 
 ## Quick start
 
@@ -67,7 +77,223 @@ cargo run -p trendlab-cli -- --help
 cargo run -p trendlab-tui --bin trendlab-tui
 ```
 
-## One-command quality gate (“press start”)
+## TUI Features
+
+The TUI provides an interactive terminal interface for backtesting exploration.
+
+### Panels
+
+| Panel | Hotkey | Description |
+|-------|--------|-------------|
+| Data | `1` | Browse universe sectors, select tickers, fetch market data |
+| Strategy | `2` | Choose strategy type and configure parameters |
+| Sweep | `3` | Run parameter sweeps across selected tickers |
+| Results | `4` | View sweep results ranked by metrics |
+| Chart | `5` | Visualize equity curves with legends |
+
+### Full-Auto Mode
+
+On startup, choose between **Manual** and **Full-Auto** modes:
+
+- **Manual**: Use panels to pick tickers, configure strategy, then run sweeps
+- **Full-Auto**: Automatically selects all universe tickers, runs sweeps, and displays results
+
+### Sweep Depth Presets
+
+Full-Auto mode includes research-backed parameter sweep depths:
+
+| Depth | Configs | Description |
+|-------|---------|-------------|
+| **Quick** | ~11 | Core classics only (Turtle 20/55, Golden Cross 50/200) |
+| **Standard** | ~40 | Balanced coverage - good for initial exploration |
+| **Comprehensive** | ~88 | Extended ranges + fine granularity for thorough analysis |
+
+Parameter ranges are based on:
+- **Donchian/Turtle**: Classic Turtle Trading rules (20/10 for S1, 55/20 for S2)
+- **MA Crossover**: Golden Cross variants (50/200 SMA, with EMA options)
+- **TSMOM**: Academic momentum research (63, 126, 252 day lookbacks)
+
+### Startup Modal Controls
+
+| Key | Action |
+|-----|--------|
+| `Left`/`Right` | Switch between Manual and Full-Auto modes |
+| `Up`/`Down` | Select strategy (in Full-Auto mode) |
+| `[`/`]` | Cycle sweep depth (Quick/Standard/Comprehensive) |
+| `Enter` | Start with selected options |
+| `Esc` | Dismiss modal (enters Manual mode) |
+
+### Chart Views
+
+The Chart panel supports multiple view modes (press `m` to cycle):
+
+- **Single**: Individual equity curve
+- **Multi-Ticker**: Overlay best configs per ticker
+- **Portfolio**: Aggregated portfolio equity
+- **Strategy Comparison**: Compare strategies with color-coded legend
+- **Per-Ticker Best**: Each ticker's best strategy result
+
+## Backtest Architecture
+
+TrendLab uses a **dual-backend architecture** for backtesting:
+
+### Polars Backend (Default)
+
+The Polars backend uses vectorized DataFrame operations for high performance:
+
+- **Vectorized indicators**: Rolling windows, exponential moving averages computed column-wise
+- **Parallel sweeps**: Parameter combinations processed in parallel via Rayon
+- **Memory efficient**: Lazy evaluation with predicate pushdown
+- **StrategyV2 trait**: Polars-native strategy implementations
+
+```rust
+// StrategyV2 trait for Polars-native strategies
+pub trait StrategyV2: Send + Sync {
+    fn name(&self) -> &str;
+    fn compute_signals(&self, df: &DataFrame) -> Result<DataFrame>;
+}
+```
+
+Implemented strategies:
+
+| Strategy | Description | Key Parameters |
+|----------|-------------|----------------|
+| `DonchianBreakoutV2` | Channel breakout (Turtle-style) | entry_lookback, exit_lookback |
+| `MACrossoverV2` | Moving average crossover | fast_period, slow_period, ma_type |
+| `TsmomV2` | Time-series momentum | lookback_days |
+
+### Sequential Backend (Fallback)
+
+The sequential backend processes bars one-at-a-time for debugging and validation:
+
+- **Bar-by-bar simulation**: Explicit order of operations
+- **Easier debugging**: Step through each bar's logic
+- **Reference implementation**: Used to validate Polars results
+
+Use `--sequential` flag with CLI commands to use this backend.
+
+### CLI Usage
+
+```bash
+# Run sweep with Polars (default, faster)
+cargo run -p trendlab-cli -- sweep --strategy donchian --universe SPY,QQQ
+
+# Run sweep with sequential backend (for debugging)
+cargo run -p trendlab-cli -- sweep --strategy donchian --universe SPY,QQQ --sequential
+```
+
+### Performance Characteristics
+
+| Backend | Sweep Speed | Memory | Use Case |
+|---------|-------------|--------|----------|
+| Polars | ~10-50x faster | Lower (lazy eval) | Production sweeps |
+| Sequential | Baseline | Higher | Debugging, validation |
+
+## Strategies
+
+TrendLab implements three classic trend-following strategy families:
+
+### Donchian Breakout / Turtle System
+
+Channel breakout strategy based on the Turtle Trading rules:
+
+- **Entry**: Long when price breaks above N-day high
+- **Exit**: Exit when price breaks below M-day low
+- **Presets**: Turtle S1 (20/10), Turtle S2 (55/20)
+
+### MA Crossover
+
+Moving average crossover with configurable MA types:
+
+- **Entry**: Long when fast MA crosses above slow MA
+- **Exit**: Exit when fast MA crosses below slow MA
+- **MA Types**: SMA (Simple), EMA (Exponential)
+- **Presets**: Golden Cross (50/200 SMA)
+
+### TSMOM (Time-Series Momentum)
+
+Academic momentum strategy based on Moskowitz et al. research:
+
+- **Signal**: Long if return over lookback period is positive
+- **Lookbacks**: 63 (quarterly), 126 (semi-annual), 252 (annual)
+
+## Indicators
+
+All indicators are pure functions with no lookahead:
+
+| Indicator | Description | Module |
+|-----------|-------------|--------|
+| Donchian Channel | Highest high / lowest low over N bars | `indicators.rs` |
+| SMA | Simple moving average | `indicators.rs` |
+| EMA | Exponential moving average | `indicators.rs` |
+| ATR | Average true range (standard) | `indicators.rs` |
+| ATR Wilder | Wilder's smoothed ATR | `indicators.rs` |
+
+## Metrics
+
+Full performance metrics computed for every backtest:
+
+| Metric | Description |
+|--------|-------------|
+| Total Return | End equity / initial equity - 1 |
+| CAGR | Compound annual growth rate |
+| Sharpe | Annualized risk-adjusted return (252 days) |
+| Sortino | Downside-only Sharpe variant |
+| Max Drawdown | Largest peak-to-trough decline |
+| Calmar | CAGR / Max Drawdown |
+| Win Rate | Winning trades / total trades |
+| Profit Factor | Gross profit / gross loss |
+| Turnover | Annual trading volume as multiple of capital |
+
+## Position Sizing
+
+TrendLab supports multiple position sizing approaches:
+
+| Sizer | Description |
+|-------|-------------|
+| Fixed | Constant number of units per trade |
+| Volatility | Units = risk budget / (ATR × price) — Turtle-style |
+
+**Pyramiding** is also supported: add to winning positions up to a configurable maximum.
+
+## Universe Configuration
+
+Tickers are organized by sector in `configs/universe.toml`:
+
+- **11 equity sectors**: Technology, Healthcare, Financials, etc.
+- **12 ETF categories**: Broad market, sector ETFs, commodities
+- **150+ tickers** ready to use
+
+Load universe in code:
+
+```rust
+let universe = Universe::load("configs/universe.toml")?;
+for sector in &universe.sectors {
+    println!("{}: {} tickers", sector.name, sector.len());
+}
+```
+
+## BDD Test Coverage
+
+15 Gherkin feature files covering:
+
+| Feature | Tests |
+|---------|-------|
+| `strategy_donchian.feature` | Donchian breakout entry/exit logic |
+| `strategy_turtle_s1.feature` | Turtle System 1 rules |
+| `strategy_turtle_s2.feature` | Turtle System 2 rules |
+| `strategy_ma_crossover.feature` | MA crossover logic |
+| `strategy_tsmom.feature` | Time-series momentum |
+| `indicators.feature` | SMA, EMA, Donchian, ATR |
+| `invariants.feature` | No-lookahead, accounting identity |
+| `costs.feature` | Fees and slippage handling |
+| `volatility_sizing.feature` | ATR-based sizing |
+| `pyramiding.feature` | Position pyramiding |
+| `sweep.feature` | Parameter sweep infrastructure |
+| `data_quality.feature` | Data validation |
+| `artifact_parity.feature` | Pine export format |
+
+## One-command quality gate ("press start")
 
 **Windows:**
 
@@ -89,19 +315,34 @@ bash scripts/verify.sh
 4. Implement the minimum change in `trendlab-core` / `trendlab-cli`
 5. Re-run `scripts/verify.*` until green
 
-## Planned CLI commands (roadmap)
+## CLI Commands
 
-These are the intended UX, but most are not implemented yet:
+All major commands are implemented and working:
 
 ```bash
-# Fetch daily bars from Yahoo Finance
+# Data management
 trendlab data refresh-yahoo --tickers SPY,QQQ,IWM --start 2020-01-01 --end 2024-12-31
+trendlab data refresh-yahoo --tickers SPY --start 2020-01-01 --end 2024-12-31 --force
+trendlab data status --ticker SPY
 
-# Run a sweep (example)
-trendlab sweep --strategy donchian --universe SPY,QQQ --start 2020-01-01 --end 2023-12-31
+# Run a single backtest
+trendlab run --strategy donchian --ticker SPY --start 2020-01-01 --end 2023-12-31
 
-# Export a StrategyArtifact for Pine parity
-trendlab artifact export --run-id 20241226_001 --config-id best_sharpe
+# Run parameter sweep (Polars by default)
+trendlab sweep --strategy donchian --ticker SPY --start 2020-01-01 --end 2023-12-31
+trendlab sweep --strategy donchian --ticker SPY --start 2020-01-01 --end 2023-12-31 --sequential
+trendlab sweep --strategy donchian --ticker SPY --start 2020-01-01 --end 2023-12-31 \
+    --grid "entry:10,20,30,40;exit:5,10,15" --top-n 10
+
+# Reporting
+trendlab report list
+trendlab report summary --run-id sweep_001 --top-n 10
+trendlab report html --run-id sweep_001 --open
+trendlab report export --run-id sweep_001 --output results.csv
+
+# Strategy artifacts (for Pine parity)
+trendlab artifact export --run-id sweep_001 --config-id best_sharpe
+trendlab artifact validate --path artifact.json
 ```
 
 ## Project structure

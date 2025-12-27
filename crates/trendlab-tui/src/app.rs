@@ -1,15 +1,107 @@
 //! Application state for TrendLab TUI
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::NaiveDate;
+use ratatui::layout::Rect;
 use trendlab_core::{
-    BacktestConfig, Bar, CostModel, FillModel, MultiSweepResult, PyramidConfig, Sector,
-    SweepConfigResult, SweepGrid, Universe,
+    BacktestConfig, Bar, CostModel, FillModel, Metrics, MultiStrategyGrid,
+    MultiStrategySweepResult, MultiSweepResult, PyramidConfig, Sector, StrategyTypeId,
+    SweepConfigResult, SweepDepth, SweepGrid, Universe,
 };
 
 use crate::worker::{WorkerChannels, WorkerCommand};
+
+/// Startup flow mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartupMode {
+    Manual,
+    FullAuto,
+}
+
+impl StartupMode {
+    #[allow(dead_code)]
+    pub fn name(&self) -> &'static str {
+        match self {
+            StartupMode::Manual => "Manual",
+            StartupMode::FullAuto => "Full-Auto",
+        }
+    }
+}
+
+/// Strategy selection for Full-Auto mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StrategySelection {
+    /// Run all strategies and compare
+    #[default]
+    AllStrategies,
+    /// Run a single strategy type
+    Single(StrategyType),
+}
+
+impl StrategySelection {
+    /// Get all options for the startup modal
+    pub fn all_options() -> Vec<StrategySelection> {
+        let mut options = vec![StrategySelection::AllStrategies];
+        for st in StrategyType::all() {
+            options.push(StrategySelection::Single(*st));
+        }
+        options
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            StrategySelection::AllStrategies => "All Strategies",
+            StrategySelection::Single(st) => st.name(),
+        }
+    }
+}
+
+/// Startup modal state (shown on app launch).
+#[derive(Debug, Clone)]
+pub struct StartupState {
+    pub active: bool,
+    pub mode: StartupMode,
+    pub selected_strategy_index: usize,
+    /// Strategy selection for Full-Auto mode (All Strategies = index 0)
+    pub strategy_selection: StrategySelection,
+    /// Sweep depth for parameter range coverage
+    pub sweep_depth: SweepDepth,
+}
+
+impl Default for StartupState {
+    fn default() -> Self {
+        Self {
+            active: true,
+            mode: StartupMode::Manual,
+            selected_strategy_index: 0,
+            strategy_selection: StrategySelection::AllStrategies,
+            sweep_depth: SweepDepth::Standard,
+        }
+    }
+}
+
+/// Full-auto pipeline stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AutoStage {
+    #[default]
+    Idle,
+    LoadingCache,
+    FetchingMissing,
+    Sweeping,
+}
+
+/// Full-auto run state.
+#[derive(Debug, Clone, Default)]
+pub struct AutoRunState {
+    pub enabled: bool,
+    pub stage: AutoStage,
+    pub desired_symbols: Vec<String>,
+    pub pending_missing: Vec<String>,
+    pub jump_to_chart_on_complete: bool,
+}
 
 /// Panel identifiers
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,7 +237,8 @@ impl DataState {
 
     /// Get the currently selected sector.
     pub fn selected_sector(&self) -> Option<&Sector> {
-        self.universe.get_sector_by_index(self.selected_sector_index)
+        self.universe
+            .get_sector_by_index(self.selected_sector_index)
     }
 
     /// Get tickers in the currently selected sector.
@@ -157,7 +250,8 @@ impl DataState {
 
     /// Get the currently focused ticker (in ticker view mode).
     pub fn focused_ticker(&self) -> Option<&String> {
-        self.current_sector_tickers().get(self.selected_ticker_index)
+        self.current_sector_tickers()
+            .get(self.selected_ticker_index)
     }
 
     /// Check if a ticker is selected for multi-ticker sweep.
@@ -441,6 +535,8 @@ pub struct ResultsState {
     pub view_mode: ResultsViewMode,
     /// Multi-sweep results (when running across multiple symbols)
     pub multi_sweep_result: Option<MultiSweepResult>,
+    /// Multi-strategy sweep results (when running all strategies across all symbols)
+    pub multi_strategy_result: Option<MultiStrategySweepResult>,
     /// Per-ticker summaries (derived from multi_sweep_result)
     pub ticker_summaries: Vec<TickerSummary>,
     /// Selected ticker index (in PerTicker view)
@@ -472,7 +568,8 @@ impl ResultsState {
                 }
             }
             // Sort by symbol name for consistent display
-            self.ticker_summaries.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+            self.ticker_summaries
+                .sort_by(|a, b| a.symbol.cmp(&b.symbol));
         }
     }
 
@@ -517,6 +614,82 @@ pub enum ChartViewMode {
     MultiTicker,
     /// Aggregated portfolio equity curve
     Portfolio,
+    /// Strategy comparison: overlay best configs per strategy
+    StrategyComparison,
+    /// Per-ticker best strategy: each ticker's best strategy
+    PerTickerBestStrategy,
+    /// OHLC candlestick chart
+    Candlestick,
+}
+
+/// A single candlestick for rendering
+#[derive(Debug, Clone)]
+pub struct CandleData {
+    /// Index in the data series (for X position)
+    pub index: usize,
+    /// Open price
+    pub open: f64,
+    /// High price
+    pub high: f64,
+    /// Low price
+    pub low: f64,
+    /// Close price
+    pub close: f64,
+    /// Volume
+    pub volume: f64,
+    /// Date for label display
+    pub date: String,
+}
+
+impl CandleData {
+    /// Returns true if this is a bullish (up) candle
+    pub fn is_bullish(&self) -> bool {
+        self.close >= self.open
+    }
+
+    /// Returns the body top (higher of open/close)
+    pub fn body_top(&self) -> f64 {
+        self.open.max(self.close)
+    }
+
+    /// Returns the body bottom (lower of open/close)
+    pub fn body_bottom(&self) -> f64 {
+        self.open.min(self.close)
+    }
+}
+
+/// Cursor state for crosshair and tooltip
+#[derive(Debug, Clone, Default)]
+pub struct CursorState {
+    /// Raw terminal coordinates (column, row)
+    pub terminal_pos: Option<(u16, u16)>,
+    /// Chart-relative coordinates (x, y within chart area)
+    pub chart_pos: Option<(u16, u16)>,
+    /// Data point index under cursor (for tooltip)
+    pub data_index: Option<usize>,
+    /// Whether cursor is within chart bounds
+    pub in_chart: bool,
+}
+
+/// Animation state for smooth transitions
+#[derive(Debug, Clone)]
+pub struct AnimationState {
+    /// Target zoom level (animate toward this)
+    pub target_zoom: f64,
+    /// Target scroll offset
+    pub target_scroll: f64,
+    /// Is animation active
+    pub animating: bool,
+}
+
+impl Default for AnimationState {
+    fn default() -> Self {
+        Self {
+            target_zoom: 1.0,
+            target_scroll: 0.0,
+            animating: false,
+        }
+    }
 }
 
 /// Per-ticker equity curve for multi-curve display
@@ -524,6 +697,26 @@ pub enum ChartViewMode {
 pub struct TickerCurve {
     pub symbol: String,
     pub equity: Vec<f64>,
+}
+
+/// Per-strategy equity curve for strategy comparison view
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct StrategyCurve {
+    pub strategy_type: StrategyTypeId,
+    pub equity: Vec<f64>,
+    pub metrics: Metrics,
+}
+
+/// Per-ticker best strategy result for best strategy view
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct TickerBestStrategy {
+    pub symbol: String,
+    pub strategy_type: StrategyTypeId,
+    pub config_display: String,
+    pub equity: Vec<f64>,
+    pub metrics: Metrics,
 }
 
 /// Chart panel state
@@ -541,6 +734,24 @@ pub struct ChartState {
     pub ticker_curves: Vec<TickerCurve>,
     /// Portfolio aggregate equity curve
     pub portfolio_curve: Vec<f64>,
+    /// Per-strategy equity curves (for StrategyComparison mode)
+    pub strategy_curves: Vec<StrategyCurve>,
+    /// Per-ticker best strategy results (for PerTickerBestStrategy mode)
+    pub ticker_best_strategies: Vec<TickerBestStrategy>,
+    /// OHLC candle data for candlestick view
+    pub candle_data: Vec<CandleData>,
+    /// Currently selected symbol for candlestick view
+    pub candle_symbol: Option<String>,
+    /// Show volume subplot
+    pub show_volume: bool,
+    /// Cursor state for crosshair
+    pub cursor: CursorState,
+    /// Animation state for smooth zoom/pan
+    pub animation: AnimationState,
+    /// Crosshair visibility
+    pub show_crosshair: bool,
+    /// Last chart rendering area (for hit-testing)
+    pub chart_area: Cell<Option<Rect>>,
 }
 
 impl ChartState {
@@ -549,18 +760,65 @@ impl ChartState {
         !self.ticker_curves.is_empty()
     }
 
+    /// Check if we have strategy comparison data
+    pub fn has_strategy_curves(&self) -> bool {
+        !self.strategy_curves.is_empty()
+    }
+
+    /// Check if we have candlestick data
+    pub fn has_candle_data(&self) -> bool {
+        !self.candle_data.is_empty()
+    }
+
     /// Cycle through chart view modes
     pub fn cycle_view_mode(&mut self) {
         self.view_mode = match self.view_mode {
             ChartViewMode::Single => {
+                if self.has_candle_data() {
+                    ChartViewMode::Candlestick
+                } else if self.has_multi_curves() {
+                    ChartViewMode::MultiTicker
+                } else if self.has_strategy_curves() {
+                    ChartViewMode::StrategyComparison
+                } else {
+                    ChartViewMode::Single
+                }
+            }
+            ChartViewMode::Candlestick => {
                 if self.has_multi_curves() {
                     ChartViewMode::MultiTicker
+                } else if self.has_strategy_curves() {
+                    ChartViewMode::StrategyComparison
                 } else {
                     ChartViewMode::Single
                 }
             }
             ChartViewMode::MultiTicker => ChartViewMode::Portfolio,
-            ChartViewMode::Portfolio => ChartViewMode::Single,
+            ChartViewMode::Portfolio => {
+                if self.has_strategy_curves() {
+                    ChartViewMode::StrategyComparison
+                } else if self.has_candle_data() {
+                    ChartViewMode::Candlestick
+                } else {
+                    ChartViewMode::Single
+                }
+            }
+            ChartViewMode::StrategyComparison => {
+                if !self.ticker_best_strategies.is_empty() {
+                    ChartViewMode::PerTickerBestStrategy
+                } else if self.has_candle_data() {
+                    ChartViewMode::Candlestick
+                } else {
+                    ChartViewMode::Single
+                }
+            }
+            ChartViewMode::PerTickerBestStrategy => {
+                if self.has_candle_data() {
+                    ChartViewMode::Candlestick
+                } else {
+                    ChartViewMode::Single
+                }
+            }
         };
     }
 
@@ -568,9 +826,42 @@ impl ChartState {
     pub fn view_mode_name(&self) -> &'static str {
         match self.view_mode {
             ChartViewMode::Single => "Single",
+            ChartViewMode::Candlestick => "Candlestick",
             ChartViewMode::MultiTicker => "Multi-Ticker",
             ChartViewMode::Portfolio => "Portfolio",
+            ChartViewMode::StrategyComparison => "Strategy Comparison",
+            ChartViewMode::PerTickerBestStrategy => "Per-Ticker Best",
         }
+    }
+
+    /// Update candle data from bars
+    pub fn update_candle_data(&mut self, bars: &[Bar], symbol: &str) {
+        self.candle_data = bars
+            .iter()
+            .enumerate()
+            .map(|(i, bar)| CandleData {
+                index: i,
+                open: bar.open,
+                high: bar.high,
+                low: bar.low,
+                close: bar.close,
+                volume: bar.volume,
+                date: bar.ts.format("%Y-%m-%d").to_string(),
+            })
+            .collect();
+        self.candle_symbol = Some(symbol.to_string());
+    }
+
+    /// Animated zoom in
+    pub fn zoom_in_animated(&mut self) {
+        self.animation.target_zoom = (self.animation.target_zoom * 1.2).min(4.0);
+        self.animation.animating = true;
+    }
+
+    /// Animated zoom out
+    pub fn zoom_out_animated(&mut self) {
+        self.animation.target_zoom = (self.animation.target_zoom / 1.2).max(0.25);
+        self.animation.animating = true;
     }
 }
 
@@ -584,6 +875,8 @@ pub struct App {
     pub chart: ChartState,
     pub status_message: String,
     pub operation: OperationState,
+    pub startup: StartupState,
+    pub auto: AutoRunState,
 }
 
 impl App {
@@ -629,6 +922,8 @@ impl App {
             status_message: "Welcome to TrendLab TUI. Press Tab to switch panels, q to quit."
                 .to_string(),
             operation: OperationState::Idle,
+            startup: StartupState::default(),
+            auto: AutoRunState::default(),
         }
     }
 
@@ -682,20 +977,18 @@ impl App {
 
     pub fn handle_up(&mut self) {
         match self.active_panel {
-            Panel::Data => {
-                match self.data.view_mode {
-                    DataViewMode::Sectors => {
-                        if self.data.selected_sector_index > 0 {
-                            self.data.selected_sector_index -= 1;
-                        }
-                    }
-                    DataViewMode::Tickers => {
-                        if self.data.selected_ticker_index > 0 {
-                            self.data.selected_ticker_index -= 1;
-                        }
+            Panel::Data => match self.data.view_mode {
+                DataViewMode::Sectors => {
+                    if self.data.selected_sector_index > 0 {
+                        self.data.selected_sector_index -= 1;
                     }
                 }
-            }
+                DataViewMode::Tickers => {
+                    if self.data.selected_ticker_index > 0 {
+                        self.data.selected_ticker_index -= 1;
+                    }
+                }
+            },
             Panel::Strategy => {
                 if self.strategy.editing_strategy {
                     // Up/Down cycles through strategy types (left panel)
@@ -731,22 +1024,20 @@ impl App {
 
     pub fn handle_down(&mut self) {
         match self.active_panel {
-            Panel::Data => {
-                match self.data.view_mode {
-                    DataViewMode::Sectors => {
-                        let max_idx = self.data.universe.sector_count().saturating_sub(1);
-                        if self.data.selected_sector_index < max_idx {
-                            self.data.selected_sector_index += 1;
-                        }
-                    }
-                    DataViewMode::Tickers => {
-                        let max_idx = self.data.current_sector_tickers().len().saturating_sub(1);
-                        if self.data.selected_ticker_index < max_idx {
-                            self.data.selected_ticker_index += 1;
-                        }
+            Panel::Data => match self.data.view_mode {
+                DataViewMode::Sectors => {
+                    let max_idx = self.data.universe.sector_count().saturating_sub(1);
+                    if self.data.selected_sector_index < max_idx {
+                        self.data.selected_sector_index += 1;
                     }
                 }
-            }
+                DataViewMode::Tickers => {
+                    let max_idx = self.data.current_sector_tickers().len().saturating_sub(1);
+                    if self.data.selected_ticker_index < max_idx {
+                        self.data.selected_ticker_index += 1;
+                    }
+                }
+            },
             Panel::Strategy => {
                 if self.strategy.editing_strategy {
                     // Up/Down cycles through strategy types (left panel)
@@ -898,44 +1189,11 @@ impl App {
             }
             Panel::Sweep => {
                 if !self.sweep.is_running {
-                    // Check if we have data loaded
-                    if let Some(bars) = self.data.selected_bars() {
-                        if bars.is_empty() {
-                            self.status_message =
-                                "No bars loaded. Select a symbol and press Enter in Data panel."
-                                    .to_string();
-                            return;
-                        }
-
-                        let grid = self.sweep.to_sweep_grid();
-                        let backtest_config = BacktestConfig {
-                            initial_cash: 100_000.0,
-                            fill_model: FillModel::NextOpen,
-                            cost_model: CostModel {
-                                fees_bps_per_side: 10.0,
-                                slippage_bps: 5.0,
-                            },
-                            qty: 100.0,
-                            pyramid_config: PyramidConfig::default(),
-                        };
-
-                        // Send sweep command to worker
-                        let cmd = WorkerCommand::StartSweep {
-                            bars: Arc::new(bars.clone()),
-                            grid,
-                            backtest_config,
-                        };
-
-                        if channels.command_tx.send(cmd).is_ok() {
-                            self.sweep.is_running = true;
-                            self.sweep.progress = 0.0;
-                            self.status_message = "Starting sweep...".to_string();
-                        } else {
-                            self.status_message = "Failed to start sweep.".to_string();
-                        }
+                    // If user selected multiple tickers, run multi-sweep; otherwise run single.
+                    if self.data.selected_tickers.len() >= 2 {
+                        self.start_multi_sweep(channels);
                     } else {
-                        self.status_message =
-                            "Load data first! Go to Data panel and press Enter.".to_string();
+                        self.start_single_sweep(channels);
                     }
                 }
             }
@@ -1105,19 +1363,134 @@ impl App {
         self.status_message = format!("View: {}", self.results.view_mode_name());
     }
 
-    /// Handle 'm' key to toggle chart view mode (single vs multi-ticker vs portfolio)
+    /// Handle 'm' key to toggle chart view mode (single vs multi-ticker vs portfolio vs candlestick)
     pub fn handle_toggle_chart_mode(&mut self) {
         if self.active_panel != Panel::Chart {
             return;
         }
 
-        if !self.chart.has_multi_curves() {
-            self.status_message = "Run a multi-symbol sweep first.".to_string();
+        // Allow cycling if we have any data (multi-curves, candle data, or strategy curves)
+        if !self.chart.has_multi_curves()
+            && !self.chart.has_candle_data()
+            && !self.chart.has_strategy_curves()
+        {
+            self.status_message = "Load data first.".to_string();
             return;
         }
 
         self.chart.cycle_view_mode();
         self.status_message = format!("Chart: {}", self.chart.view_mode_name());
+    }
+
+    /// Handle 'v' key in Chart panel to toggle volume subplot
+    pub fn handle_toggle_volume(&mut self) {
+        if self.active_panel != Panel::Chart {
+            return;
+        }
+
+        self.chart.show_volume = !self.chart.show_volume;
+        self.status_message = if self.chart.show_volume {
+            "Volume subplot ON".to_string()
+        } else {
+            "Volume subplot OFF".to_string()
+        };
+    }
+
+    /// Handle 'c' key in Chart panel to toggle crosshair
+    pub fn handle_toggle_crosshair(&mut self) {
+        if self.active_panel != Panel::Chart {
+            return;
+        }
+
+        self.chart.show_crosshair = !self.chart.show_crosshair;
+        self.status_message = if self.chart.show_crosshair {
+            "Crosshair ON".to_string()
+        } else {
+            "Crosshair OFF".to_string()
+        };
+    }
+
+    /// Update cursor position from mouse event
+    pub fn update_cursor_position(&mut self, col: u16, row: u16) {
+        self.chart.cursor.terminal_pos = Some((col, row));
+
+        // Check if cursor is within chart area
+        if let Some(chart_area) = self.chart.chart_area.get() {
+            if col >= chart_area.x
+                && col < chart_area.x + chart_area.width
+                && row >= chart_area.y
+                && row < chart_area.y + chart_area.height
+            {
+                let rel_x = col - chart_area.x;
+                let rel_y = row - chart_area.y;
+                self.chart.cursor.chart_pos = Some((rel_x, rel_y));
+                self.chart.cursor.in_chart = true;
+
+                // Calculate data index from x position
+                self.chart.cursor.data_index =
+                    self.calculate_data_index(rel_x, chart_area.width);
+            } else {
+                self.chart.cursor.in_chart = false;
+                self.chart.cursor.chart_pos = None;
+                self.chart.cursor.data_index = None;
+            }
+        }
+    }
+
+    /// Calculate which data point is under the cursor
+    fn calculate_data_index(&self, rel_x: u16, chart_width: u16) -> Option<usize> {
+        let data_len = match self.chart.view_mode {
+            ChartViewMode::Single => self.chart.equity_curve.len(),
+            ChartViewMode::Portfolio => self.chart.portfolio_curve.len(),
+            ChartViewMode::Candlestick => self.chart.candle_data.len(),
+            ChartViewMode::MultiTicker => self
+                .chart
+                .ticker_curves
+                .first()
+                .map(|c| c.equity.len())
+                .unwrap_or(0),
+            _ => self.chart.equity_curve.len(),
+        };
+
+        if data_len == 0 || chart_width == 0 {
+            return None;
+        }
+
+        // Account for zoom and scroll
+        let visible_range = (data_len as f64 / self.chart.zoom_level) as usize;
+        let start_idx = self.chart.scroll_offset;
+        let ratio = rel_x as f64 / chart_width as f64;
+        let idx = start_idx + (ratio * visible_range as f64) as usize;
+
+        if idx < data_len {
+            Some(idx)
+        } else {
+            None
+        }
+    }
+
+    /// Tick animations (called every frame)
+    pub fn tick_animations(&mut self) {
+        if self.chart.animation.animating {
+            // Ease-out interpolation (smooth deceleration)
+            let ease = 0.15;
+
+            let zoom_diff = self.chart.animation.target_zoom - self.chart.zoom_level;
+            let scroll_diff =
+                self.chart.animation.target_scroll - self.chart.scroll_offset as f64;
+
+            if zoom_diff.abs() < 0.001 && scroll_diff.abs() < 0.5 {
+                // Close enough, snap to target
+                self.chart.zoom_level = self.chart.animation.target_zoom;
+                self.chart.scroll_offset = self.chart.animation.target_scroll as usize;
+                self.chart.animation.animating = false;
+            } else {
+                // Interpolate
+                self.chart.zoom_level += zoom_diff * ease;
+                self.chart.scroll_offset =
+                    (self.chart.scroll_offset as f64 + scroll_diff * ease) as usize;
+            }
+        }
     }
 
     /// Handle Space key to toggle ticker selection in Data panel.
@@ -1227,6 +1600,10 @@ impl App {
 
         self.data.bar_count = bar_count;
         self.data.date_range = date_range.clone();
+
+        // Also update candle data for chart candlestick view
+        self.chart.update_candle_data(&all_bars, symbol);
+
         self.data.bars_cache.insert(symbol.to_string(), all_bars);
 
         if let Some((start, end)) = date_range {
@@ -1237,6 +1614,7 @@ impl App {
     }
 
     /// Update data info for selected symbol
+    #[allow(dead_code)]
     fn update_data_info(&mut self) {
         if let Some(symbol) = self.data.selected_symbol() {
             if let Some(bars) = self.data.bars_cache.get(symbol) {
@@ -1250,6 +1628,211 @@ impl App {
                 self.data.bar_count = 0;
                 self.data.date_range = None;
             }
+        }
+    }
+
+    /// Start a single-symbol sweep using the currently selected symbol's bars.
+    pub fn start_single_sweep(&mut self, channels: &WorkerChannels) {
+        // Check if we have data loaded
+        if let Some(bars) = self.data.selected_bars() {
+            if bars.is_empty() {
+                self.status_message =
+                    "No bars loaded. Select a symbol and press Enter in Data panel.".to_string();
+                return;
+            }
+
+            let grid = self.sweep.to_sweep_grid();
+            let backtest_config = BacktestConfig {
+                initial_cash: 100_000.0,
+                fill_model: FillModel::NextOpen,
+                cost_model: CostModel {
+                    fees_bps_per_side: 10.0,
+                    slippage_bps: 5.0,
+                },
+                qty: 100.0,
+                pyramid_config: PyramidConfig::default(),
+            };
+
+            // Send sweep command to worker
+            // Use Polars by default for Donchian sweeps (vectorized, faster)
+            let cmd = WorkerCommand::StartSweep {
+                bars: Arc::new(bars.clone()),
+                grid,
+                backtest_config,
+                use_polars: true,
+            };
+
+            if channels.command_tx.send(cmd).is_ok() {
+                self.sweep.is_running = true;
+                self.sweep.progress = 0.0;
+                self.status_message = "Starting sweep...".to_string();
+            } else {
+                self.status_message = "Failed to start sweep.".to_string();
+            }
+        } else {
+            self.status_message = "Load data first! Go to Data panel and press Enter.".to_string();
+        }
+    }
+
+    /// Start a multi-symbol sweep using selected tickers' cached bars.
+    pub fn start_multi_sweep(&mut self, channels: &WorkerChannels) {
+        let selected = self.data.selected_tickers_sorted();
+        if selected.len() < 2 {
+            self.status_message = "Select at least 2 tickers first (Data panel).".to_string();
+            return;
+        }
+
+        // Build symbol->bars map from cache
+        let mut symbol_bars: HashMap<String, Arc<Vec<Bar>>> = HashMap::new();
+        let mut missing: Vec<String> = Vec::new();
+        for sym in &selected {
+            if let Some(bars) = self.data.bars_cache.get(sym) {
+                if !bars.is_empty() {
+                    symbol_bars.insert(sym.clone(), Arc::new(bars.clone()));
+                } else {
+                    missing.push(sym.clone());
+                }
+            } else {
+                missing.push(sym.clone());
+            }
+        }
+
+        if symbol_bars.len() < 2 {
+            self.status_message = format!(
+                "Need bars for >= 2 selected tickers. Missing: {}",
+                missing.join(", ")
+            );
+            return;
+        }
+
+        let grid = self.sweep.to_sweep_grid();
+        let backtest_config = BacktestConfig {
+            initial_cash: 100_000.0,
+            fill_model: FillModel::NextOpen,
+            cost_model: CostModel {
+                fees_bps_per_side: 10.0,
+                slippage_bps: 5.0,
+            },
+            qty: 100.0,
+            pyramid_config: PyramidConfig::default(),
+        };
+
+        let cmd = WorkerCommand::StartMultiSweep {
+            symbol_bars,
+            grid,
+            backtest_config,
+        };
+
+        if channels.command_tx.send(cmd).is_ok() {
+            self.sweep.is_running = true;
+            self.sweep.progress = 0.0;
+            self.status_message = format!("Starting multi-sweep ({} symbols)...", selected.len());
+        } else {
+            self.status_message = "Failed to start multi-sweep.".to_string();
+        }
+    }
+
+    /// Start a multi-strategy sweep (all strategies) using selected tickers' cached bars.
+    pub fn start_multi_strategy_sweep(&mut self, channels: &WorkerChannels) {
+        let selected = self.data.selected_tickers_sorted();
+        if selected.is_empty() {
+            self.status_message = "No tickers selected.".to_string();
+            return;
+        }
+
+        // Build symbol->bars map from cache
+        let mut symbol_bars: HashMap<String, Arc<Vec<Bar>>> = HashMap::new();
+        let mut missing: Vec<String> = Vec::new();
+        for sym in &selected {
+            if let Some(bars) = self.data.bars_cache.get(sym) {
+                if !bars.is_empty() {
+                    symbol_bars.insert(sym.clone(), Arc::new(bars.clone()));
+                } else {
+                    missing.push(sym.clone());
+                }
+            } else {
+                missing.push(sym.clone());
+            }
+        }
+
+        if symbol_bars.is_empty() {
+            self.status_message = format!(
+                "No bars loaded for selected tickers. Missing: {}",
+                missing.join(", ")
+            );
+            return;
+        }
+
+        // Use selected sweep depth from startup modal
+        let strategy_grid = MultiStrategyGrid::with_depth(self.startup.sweep_depth);
+        let backtest_config = BacktestConfig {
+            initial_cash: 100_000.0,
+            fill_model: FillModel::NextOpen,
+            cost_model: CostModel {
+                fees_bps_per_side: 10.0,
+                slippage_bps: 5.0,
+            },
+            qty: 100.0,
+            pyramid_config: PyramidConfig::default(),
+        };
+
+        let cmd = WorkerCommand::StartMultiStrategySweep {
+            symbol_bars,
+            strategy_grid,
+            backtest_config,
+        };
+
+        if channels.command_tx.send(cmd).is_ok() {
+            self.sweep.is_running = true;
+            self.sweep.progress = 0.0;
+            self.status_message = format!(
+                "Starting multi-strategy sweep ({} symbols, all strategies)...",
+                selected.len()
+            );
+        } else {
+            self.status_message = "Failed to start multi-strategy sweep.".to_string();
+        }
+    }
+
+    /// Kick off full-auto mode: select all universe tickers, load cached data, fetch missing,
+    /// then run a multi-sweep and jump to the combined chart.
+    pub fn start_full_auto(&mut self, channels: &WorkerChannels) {
+        // Select all tickers across the universe
+        let mut all: Vec<String> = Vec::new();
+        for sector in self.data.universe.sectors.iter() {
+            all.extend(sector.tickers.iter().cloned());
+        }
+        all.sort();
+        all.dedup();
+
+        if all.is_empty() {
+            self.status_message = "Universe has no tickers to run.".to_string();
+            return;
+        }
+
+        self.data.selected_tickers.clear();
+        for sym in &all {
+            self.data.selected_tickers.insert(sym.clone());
+        }
+
+        self.auto.enabled = true;
+        self.auto.stage = AutoStage::LoadingCache;
+        self.auto.desired_symbols = all.clone();
+        self.auto.pending_missing.clear();
+        self.auto.jump_to_chart_on_complete = true;
+
+        // Ask worker to load cached data for everything we selected.
+        let cmd = WorkerCommand::LoadCachedData {
+            symbols: all.clone(),
+        };
+        if channels.command_tx.send(cmd).is_ok() {
+            self.status_message = format!(
+                "Full-Auto: loading cached data for {} tickers...",
+                all.len()
+            );
+        } else {
+            self.status_message = "Full-Auto: failed to start cache load.".to_string();
+            self.auto.stage = AutoStage::Idle;
         }
     }
 }

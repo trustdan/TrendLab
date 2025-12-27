@@ -8,54 +8,116 @@ description = "Curated list of US equities by sector"
 [[sectors]]
 id = "basic_materials"
 name = "Basic Materials"
-tickers = ["LIN", "SCCO", "NEM", "CF"]
+tickers = ["LIN", "SCCO", "NEM", "CF", "FCX", "APD", "SHW", "DOW", "NUE", "ECL", "DD", "PPG", "ALB", "CTVA"]
 
 [[sectors]]
 id = "comms_services"
 name = "Communication Services"
-tickers = ["GOOG", "META", "RDDT", "NFLX"]
+tickers = ["GOOG", "META", "RDDT", "NFLX", "DIS", "T", "VZ", "CMCSA", "TMUS", "SPOT", "ROKU", "CHTR", "EA", "TTWO"]
 
 [[sectors]]
 id = "consumer_cyclical"
 name = "Consumer Cyclical"
-tickers = ["AMZN", "TJX", "DASH", "HD", "BABA"]
+tickers = ["AMZN", "TJX", "DASH", "HD", "BABA", "TSLA", "MCD", "NKE", "SBUX", "LOW", "GM", "F", "CMG", "BKNG", "ABNB"]
 
 [[sectors]]
 id = "consumer_defensive"
 name = "Consumer Defensive"
-tickers = ["WMT", "PM", "UL", "COST", "PG", "MDLZ"]
+tickers = ["WMT", "PM", "UL", "COST", "PG", "MDLZ", "KO", "PEP", "MO", "CL", "GIS", "KHC", "STZ", "SYY", "KR", "HSY"]
 
 [[sectors]]
 id = "energy"
 name = "Energy"
-tickers = ["XOM", "CVX", "SHEL"]
+tickers = ["XOM", "CVX", "SHEL", "COP", "SLB", "EOG", "MPC", "VLO", "PSX", "OXY", "BP", "HAL", "DVN", "KMI"]
 
 [[sectors]]
 id = "financial"
 name = "Financial"
-tickers = ["BRK-B", "JPM", "MS", "COIN", "PYPL", "IBKR"]
+tickers = ["BRK-B", "JPM", "MS", "COIN", "PYPL", "IBKR", "BAC", "WFC", "GS", "C", "V", "MA", "BLK", "SCHW", "AXP", "CME", "ICE"]
 
 [[sectors]]
 id = "healthcare"
 name = "Healthcare"
-tickers = ["LLY", "JNJ", "ABBV", "UNH"]
+tickers = ["LLY", "JNJ", "ABBV", "UNH", "PFE", "MRK", "TMO", "ABT", "BMY", "AMGN", "GILD", "CVS", "ISRG", "DHR", "VRTX"]
 
 [[sectors]]
 id = "industrials"
 name = "Industrials"
-tickers = ["GE", "RTX", "BA", "ETN", "MMM"]
+tickers = ["GE", "RTX", "BA", "ETN", "MMM", "CAT", "HON", "UNP", "DE", "LMT", "UPS", "NOC", "GD", "WM", "FDX", "EMR"]
 
 [[sectors]]
 id = "real_estate"
 name = "Real Estate"
-tickers = ["PLD", "AMT", "O"]
+tickers = ["PLD", "AMT", "O", "EQIX", "CCI", "SPG", "PSA", "WELL", "DLR", "AVB", "EQR", "SBAC", "VTR"]
 
 [[sectors]]
 id = "technology"
 name = "Technology"
-tickers = ["NVDA", "AAPL", "PLTR", "CSCO", "MSFT", "AMD"]
+tickers = ["NVDA", "AAPL", "PLTR", "CSCO", "MSFT", "AMD", "AVGO", "CRM", "ORCL", "ADBE", "INTC", "QCOM", "TXN", "NOW", "MU", "AMAT", "IBM"]
 
 [[sectors]]
 id = "utilities"
 name = "Utilities"
-tickers = ["EIX", "NEE", "DUK", "AEP", "SO"]
+tickers = ["EIX", "NEE", "DUK", "AEP", "SO", "D", "SRE", "XEL", "ED", "EXC", "WEC", "CEG", "PEG", "AWK", "ES"]
+
+# ETF Universe
+
+[[etfs]]
+id = "broad_market"
+name = "Broad Market US Equity"
+tickers = ["SPY", "VOO", "IVV", "QQQ", "VTI", "IWM", "DIA", "RSP", "VXF", "SPLG"]
+
+[[etfs]]
+id = "technology_etf"
+name = "Technology ETFs"
+tickers = ["XLK", "VGT", "SMH", "SOXX", "IGV", "FTEC", "FDN"]
+
+[[etfs]]
+id = "financials_etf"
+name = "Financials ETFs"
+tickers = ["XLF", "VFH", "KRE", "KBE", "IAI"]
+
+[[etfs]]
+id = "healthcare_etf"
+name = "Healthcare ETFs"
+tickers = ["XLV", "VHT", "IBB", "XBI", "ARKG"]
+
+[[etfs]]
+id = "energy_etf"
+name = "Energy ETFs"
+tickers = ["XLE", "VDE", "XOP", "OIH", "AMLP"]
+
+[[etfs]]
+id = "industrials_etf"
+name = "Industrials ETFs"
+tickers = ["XLI", "VIS", "ITA", "PPA"]
+
+[[etfs]]
+id = "consumer_discretionary_etf"
+name = "Consumer Discretionary ETFs"
+tickers = ["XLY", "VCR", "BITO"]
+
+[[etfs]]
+id = "consumer_staples_etf"
+name = "Consumer Staples ETFs"
+tickers = ["XLP", "VDC", "KXI"]
+
+[[etfs]]
+id = "utilities_etf"
+name = "Utilities ETFs"
+tickers = ["XLU", "VPU"]
+
+[[etfs]]
+id = "materials_etf"
+name = "Materials ETFs"
+tickers = ["XLB", "VAW", "GDX", "GDXJ", "SLV", "GLD"]
+
+[[etfs]]
+id = "real_estate_etf"
+name = "Real Estate ETFs"
+tickers = ["VNQ", "XLRE", "IYR", "MORT"]
+
+[[etfs]]
+id = "communications_etf"
+name = "Communications ETFs"
+tickers = ["XLC", "VOX"]

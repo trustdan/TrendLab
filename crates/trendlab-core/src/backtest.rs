@@ -216,7 +216,7 @@ impl BacktestResult {
 }
 
 /// Run a backtest over `bars` with a stateful strategy.
-pub fn run_backtest<S: Strategy>(
+pub fn run_backtest<S: Strategy + ?Sized>(
     bars: &[Bar],
     strategy: &mut S,
     config: BacktestConfig,

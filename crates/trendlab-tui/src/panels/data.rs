@@ -115,8 +115,7 @@ fn draw_ticker_list(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
     let sector = match app.data.selected_sector() {
         Some(s) => s,
         None => {
-            let para = Paragraph::new("No sector selected")
-                .block(panel_block("Tickers", false));
+            let para = Paragraph::new("No sector selected").block(panel_block("Tickers", false));
             f.render_widget(para, area);
             return;
         }
@@ -265,20 +264,26 @@ fn draw_sector_summary(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
     let mut lines = vec![];
 
     // Header
-    lines.push(Line::from(vec![Span::styled(
-        "Universe: ",
-        Style::default().fg(colors::FG_DARK),
-    ), Span::styled(
-        &app.data.universe.name,
-        Style::default()
-            .fg(colors::CYAN)
-            .add_modifier(Modifier::BOLD),
-    )]));
+    lines.push(Line::from(vec![
+        Span::styled("Universe: ", Style::default().fg(colors::FG_DARK)),
+        Span::styled(
+            &app.data.universe.name,
+            Style::default()
+                .fg(colors::CYAN)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
     lines.push(Line::from(""));
 
     // Selection summary
     let total_selected = app.data.selected_tickers.len();
-    let total_tickers: usize = app.data.universe.sectors.iter().map(|s| s.tickers.len()).sum();
+    let total_tickers: usize = app
+        .data
+        .universe
+        .sectors
+        .iter()
+        .map(|s| s.tickers.len())
+        .sum();
 
     lines.push(Line::from(vec![
         Span::styled("Selected: ", Style::default().fg(colors::FG_DARK)),
@@ -298,9 +303,7 @@ fn draw_sector_summary(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
     if total_selected > 0 {
         lines.push(Line::from(vec![Span::styled(
             "Selected by sector:",
-            Style::default()
-                .fg(colors::FG)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(colors::FG).add_modifier(Modifier::BOLD),
         )]));
 
         for sector in &app.data.universe.sectors {
@@ -312,10 +315,7 @@ fn draw_sector_summary(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
                         format!("{}: ", sector.name),
                         Style::default().fg(colors::FG_DARK),
                     ),
-                    Span::styled(
-                        format!("{}", count),
-                        Style::default().fg(colors::GREEN),
-                    ),
+                    Span::styled(format!("{}", count), Style::default().fg(colors::GREEN)),
                 ]));
             }
         }
@@ -350,9 +350,7 @@ fn draw_sector_summary(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
     lines.push(Line::from(""));
     lines.push(Line::from(vec![Span::styled(
         "Navigation:",
-        Style::default()
-            .fg(colors::FG)
-            .add_modifier(Modifier::BOLD),
+        Style::default().fg(colors::FG).add_modifier(Modifier::BOLD),
     )]));
     lines.push(Line::from(vec![Span::styled(
         "  ↑↓: Select sector  →/Enter: Browse tickers",

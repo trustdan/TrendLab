@@ -1,13 +1,14 @@
 //! Sweep command implementation - parameter sweep execution.
 
 use anyhow::{bail, Context, Result};
-use chrono::{Datelike, NaiveDate, Utc};
+use chrono::{NaiveDate, Utc};
 use std::fs;
 
 use trendlab_core::{
     backtest::{BacktestConfig, CostModel, FillModel},
-    generate_summary_markdown, read_parquet, run_sweep, RankMetric, ResultPaths, RunManifest,
-    SweepConfig, SweepGrid, SweepResult,
+    generate_summary_markdown, run_strategy_sweep_polars_parallel, run_sweep,
+    scan_symbol_parquet_lazy, PolarsBacktestConfig, RankMetric, ResultPaths, RunManifest,
+    StrategyGridConfig, StrategyParams, StrategyTypeId, SweepConfig, SweepGrid, SweepResult,
 };
 
 use super::data::DataConfig;
@@ -121,6 +122,7 @@ pub fn execute_sweep(
     end: NaiveDate,
     grid_spec: Option<&str>,
     data_config: &DataConfig,
+    sequential: bool,
 ) -> Result<SweepExecutionResult> {
     let start_time = std::time::Instant::now();
 
@@ -149,48 +151,32 @@ pub fn execute_sweep(
         num_configs
     );
 
-    // Load data
+    // Load data using direct Parquet pipeline (Phase 4)
     let parquet_dir = data_config.parquet_dir();
-    let symbol_dir = parquet_dir.join(format!("1d/symbol={}", ticker));
 
-    if !symbol_dir.exists() {
-        bail!(
-            "No data found for {}. Run 'trendlab data refresh-yahoo --tickers {}' first.",
-            ticker,
-            ticker
-        );
-    }
-
-    let mut all_bars = Vec::new();
-    for year in start.year()..=end.year() {
-        let year_path = symbol_dir.join(format!("year={}/data.parquet", year));
-        if year_path.exists() {
-            let bars = read_parquet(&year_path)?;
-            all_bars.extend(bars);
+    // Use scan_symbol_parquet_lazy for direct Parquet -> LazyFrame pipeline
+    // This avoids the Vec<Bar> intermediate conversion
+    let lf = match scan_symbol_parquet_lazy(&parquet_dir, ticker, "1d", Some(start), Some(end)) {
+        Ok(lf) => lf,
+        Err(e) => {
+            bail!(
+                "No data found for {}. Run 'trendlab data refresh-yahoo --tickers {}' first.\nError: {}",
+                ticker,
+                ticker,
+                e
+            );
         }
-    }
+    };
 
-    if all_bars.is_empty() {
-        bail!(
-            "No bars found for {} in date range {} to {}",
-            ticker,
-            start,
-            end
-        );
-    }
+    // Collect to DataFrame for the Polars sweep
+    let df = lf.collect().context("Failed to collect Parquet data")?;
+    let bar_count = df.height();
 
-    // Filter and sort
-    all_bars.retain(|b| {
-        let d = b.ts.date_naive();
-        d >= start && d <= end
-    });
-    all_bars.sort_by_key(|b| b.ts);
-
-    if all_bars.is_empty() {
+    if bar_count == 0 {
         bail!("No bars in date range {} to {} for {}", start, end, ticker);
     }
 
-    println!("Loaded {} bars for {}", all_bars.len(), ticker);
+    println!("Loaded {} bars for {} (direct Parquet pipeline)", bar_count, ticker);
 
     // Configure backtest
     let backtest_config = BacktestConfig {
@@ -209,7 +195,32 @@ pub fn execute_sweep(
         "Running sweep with {} threads...",
         rayon::current_num_threads()
     );
-    let sweep_result = run_sweep(&all_bars, &grid, backtest_config);
+
+    let sweep_result = if sequential {
+        // Use sequential (original) backtest - needs Vec<Bar>
+        // Convert DataFrame back to bars for sequential backtest
+        use trendlab_core::dataframe_to_bars;
+        let all_bars = dataframe_to_bars(&df)?;
+        run_sweep(&all_bars, &grid, backtest_config)
+    } else {
+        // Use Polars vectorized backtest (direct DataFrame - Phase 4)
+        let polars_config = PolarsBacktestConfig::new(100_000.0, 100.0).with_cost_model(CostModel {
+            fees_bps_per_side: 10.0,
+            slippage_bps: 5.0,
+        });
+
+        // Create a Donchian strategy grid config
+        let strategy_config = StrategyGridConfig {
+            strategy_type: StrategyTypeId::Donchian,
+            enabled: true,
+            params: StrategyParams::Donchian {
+                entry_lookbacks: grid_spec.entry_lookbacks.clone(),
+                exit_lookbacks: grid_spec.exit_lookbacks.clone(),
+            },
+        };
+
+        run_strategy_sweep_polars_parallel(&df, &strategy_config, &polars_config)?
+    };
 
     let elapsed = start_time.elapsed();
     let elapsed_secs = elapsed.as_secs_f64();

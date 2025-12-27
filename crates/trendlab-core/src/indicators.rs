@@ -113,10 +113,20 @@ pub fn ema_close(bars: &[Bar], window: usize) -> Vec<Option<f64>> {
 }
 
 /// Moving average type for strategy configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MAType {
     SMA,
     EMA,
+}
+
+impl MAType {
+    /// Get display name.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::SMA => "SMA",
+            Self::EMA => "EMA",
+        }
+    }
 }
 
 /// Compute True Range for each bar.

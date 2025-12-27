@@ -333,7 +333,10 @@ fn draw_aggregated_view(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
             .map(|r| r.config_results.len())
             .sum();
         lines.push(Line::from(vec![
-            Span::styled("Total configs tested: ", Style::default().fg(colors::FG_DARK)),
+            Span::styled(
+                "Total configs tested: ",
+                Style::default().fg(colors::FG_DARK),
+            ),
             Span::styled(
                 format!("{}", total_configs),
                 Style::default().fg(colors::YELLOW),
@@ -346,9 +349,7 @@ fn draw_aggregated_view(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
         if let Some(ref agg) = multi.aggregated {
             lines.push(Line::from(vec![Span::styled(
                 "Portfolio Metrics:",
-                Style::default()
-                    .fg(colors::FG)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(colors::FG).add_modifier(Modifier::BOLD),
             )]));
 
             let cagr_style = if agg.metrics.cagr > 0.2 {
@@ -404,9 +405,7 @@ fn draw_aggregated_view(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
             // Compute summary stats from per-ticker results
             lines.push(Line::from(vec![Span::styled(
                 "Per-Symbol Statistics:",
-                Style::default()
-                    .fg(colors::FG)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(colors::FG).add_modifier(Modifier::BOLD),
             )]));
 
             // Calculate average and best metrics

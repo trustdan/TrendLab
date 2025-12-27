@@ -5,7 +5,7 @@
 
 use crate::bar::Bar;
 use crate::data::ProviderError;
-use chrono::{Datelike, TimeZone, Utc};
+use chrono::{Datelike, NaiveDate, TimeZone, Utc};
 use polars::prelude::*;
 use std::collections::HashMap;
 use std::path::Path;
@@ -236,6 +236,162 @@ pub fn read_parquet(path: &Path) -> Result<Vec<Bar>, ProviderError> {
         })?;
 
     dataframe_to_bars(&df)
+}
+
+/// Scan a Parquet file as a LazyFrame (for direct Polars pipeline).
+///
+/// This is the preferred method for Phase 4 - skips the Vec<Bar> intermediate.
+/// Uses `scan_parquet` for lazy evaluation with predicate pushdown.
+pub fn scan_parquet_lazy(path: &Path) -> Result<LazyFrame, ProviderError> {
+    LazyFrame::scan_parquet(path, ScanArgsParquet::default()).map_err(|e| ProviderError::IoError {
+        message: format!("Failed to scan Parquet: {}", e),
+    })
+}
+
+/// Scan multiple Parquet files as a single LazyFrame.
+///
+/// This is optimal for loading data across multiple year partitions.
+/// Uses vertical concatenation of lazy scans for maximum performance.
+///
+/// # Arguments
+/// * `paths` - List of Parquet file paths to scan
+///
+/// # Returns
+/// A LazyFrame containing all data, sorted by timestamp.
+pub fn scan_multiple_parquet_lazy(paths: &[std::path::PathBuf]) -> Result<LazyFrame, ProviderError> {
+    if paths.is_empty() {
+        // Return empty LazyFrame with correct schema
+        let empty_df = DataFrame::new(vec![
+            Series::new("ts".into(), Vec::<i64>::new())
+                .cast(&DataType::Datetime(TimeUnit::Milliseconds, Some("UTC".into())))
+                .unwrap()
+                .into(),
+            Series::new("open".into(), Vec::<f64>::new()).into(),
+            Series::new("high".into(), Vec::<f64>::new()).into(),
+            Series::new("low".into(), Vec::<f64>::new()).into(),
+            Series::new("close".into(), Vec::<f64>::new()).into(),
+            Series::new("volume".into(), Vec::<f64>::new()).into(),
+            Series::new("symbol".into(), Vec::<String>::new()).into(),
+            Series::new("timeframe".into(), Vec::<String>::new()).into(),
+        ])
+        .map_err(|e| ProviderError::ParseError {
+            message: e.to_string(),
+        })?;
+        return Ok(empty_df.lazy());
+    }
+
+    // Scan all files lazily
+    let lazy_frames: Vec<LazyFrame> = paths
+        .iter()
+        .map(|p| {
+            LazyFrame::scan_parquet(p, ScanArgsParquet::default()).map_err(|e| {
+                ProviderError::IoError {
+                    message: format!("Failed to scan Parquet {}: {}", p.display(), e),
+                }
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Concatenate all LazyFrames
+    let combined = concat(lazy_frames, UnionArgs::default()).map_err(|e| ProviderError::IoError {
+        message: format!("Failed to concatenate Parquet files: {}", e),
+    })?;
+
+    // Sort by timestamp for consistent ordering
+    let sort_opts = SortMultipleOptions::new().with_order_descending(false);
+    Ok(combined.sort(["ts"], sort_opts))
+}
+
+/// Scan Parquet files for a symbol with optional date filtering.
+///
+/// This is the high-level function for Phase 4 direct Parquet pipeline.
+/// It scans the appropriate year partitions and applies predicate pushdown
+/// for date filtering when possible.
+///
+/// # Arguments
+/// * `base_dir` - Base Parquet directory (e.g., "data/parquet")
+/// * `symbol` - Ticker symbol
+/// * `timeframe` - Timeframe (e.g., "1d")
+/// * `start_date` - Optional start date filter (inclusive)
+/// * `end_date` - Optional end date filter (inclusive)
+///
+/// # Returns
+/// A LazyFrame containing the filtered data, sorted by timestamp.
+pub fn scan_symbol_parquet_lazy(
+    base_dir: &Path,
+    symbol: &str,
+    timeframe: &str,
+    start_date: Option<NaiveDate>,
+    end_date: Option<NaiveDate>,
+) -> Result<LazyFrame, ProviderError> {
+    let symbol_dir = base_dir.join(format!("{}/symbol={}", timeframe, symbol));
+
+    if !symbol_dir.exists() {
+        return Err(ProviderError::IoError {
+            message: format!("No data found for symbol {} at {}", symbol, symbol_dir.display()),
+        });
+    }
+
+    // Determine which year directories to scan based on date range
+    let years_to_scan: Vec<i32> = if let (Some(start), Some(end)) = (start_date, end_date) {
+        (start.year()..=end.year()).collect()
+    } else {
+        // Scan all available years
+        std::fs::read_dir(&symbol_dir)
+            .map_err(|e| ProviderError::IoError {
+                message: format!("Failed to read symbol directory: {}", e),
+            })?
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with("year=") {
+                    name.strip_prefix("year=")?.parse::<i32>().ok()
+                } else {
+                    None
+                }
+            })
+            .collect()
+    };
+
+    // Build list of parquet file paths
+    let parquet_paths: Vec<std::path::PathBuf> = years_to_scan
+        .iter()
+        .map(|year| symbol_dir.join(format!("year={}/data.parquet", year)))
+        .filter(|p| p.exists())
+        .collect();
+
+    if parquet_paths.is_empty() {
+        return Err(ProviderError::IoError {
+            message: format!(
+                "No Parquet files found for {} in years {:?}",
+                symbol, years_to_scan
+            ),
+        });
+    }
+
+    // Scan all partitions
+    let mut lf = scan_multiple_parquet_lazy(&parquet_paths)?;
+
+    // Apply date filtering with predicate pushdown
+    if let Some(start) = start_date {
+        let start_ts = Utc
+            .with_ymd_and_hms(start.year(), start.month(), start.day(), 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        lf = lf.filter(col("ts").gt_eq(lit(start_ts)));
+    }
+
+    if let Some(end) = end_date {
+        let end_ts = Utc
+            .with_ymd_and_hms(end.year(), end.month(), end.day(), 23, 59, 59)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        lf = lf.filter(col("ts").lt_eq(lit(end_ts)));
+    }
+
+    Ok(lf)
 }
 
 /// Write bars to partitioned Parquet files.

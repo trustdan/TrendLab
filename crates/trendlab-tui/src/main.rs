@@ -85,7 +85,7 @@ fn run_app<B: ratatui::backend::Backend>(
 
         // 3. Drain all pending updates from worker (non-blocking)
         while let Ok(update) = channels.update_rx.try_recv() {
-            apply_update(app, update);
+            apply_update(app, update, channels);
         }
     }
 }
@@ -98,6 +98,11 @@ enum KeyResult {
 
 /// Handle a key press event.
 fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyResult {
+    // Handle startup modal
+    if app.startup.active {
+        return handle_startup_key(app, code, channels);
+    }
+
     // Handle search mode in Data panel
     if app.active_panel == app::Panel::Data && app.data.search_mode {
         return handle_search_key(app, code, channels);
@@ -321,8 +326,112 @@ fn trigger_search(app: &mut App, channels: &WorkerChannels) {
     }
 }
 
+/// Handle keys while the startup modal is active.
+fn handle_startup_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyResult {
+    use app::{StartupMode, StrategySelection, StrategyType};
+    use trendlab_core::SweepDepth;
+
+    match code {
+        KeyCode::Esc => {
+            app.startup.active = false;
+            app.status_message = "Manual mode. Use panels to configure and run sweeps.".to_string();
+            KeyResult::Continue
+        }
+        KeyCode::Left | KeyCode::Char('h') => {
+            app.startup.mode = StartupMode::Manual;
+            KeyResult::Continue
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            app.startup.mode = StartupMode::FullAuto;
+            KeyResult::Continue
+        }
+        KeyCode::Char('[') => {
+            // Cycle sweep depth backward
+            if app.startup.mode == StartupMode::FullAuto {
+                let depths = SweepDepth::all();
+                let current_idx = depths
+                    .iter()
+                    .position(|d| *d == app.startup.sweep_depth)
+                    .unwrap_or(1);
+                if current_idx > 0 {
+                    app.startup.sweep_depth = depths[current_idx - 1];
+                }
+            }
+            KeyResult::Continue
+        }
+        KeyCode::Char(']') => {
+            // Cycle sweep depth forward
+            if app.startup.mode == StartupMode::FullAuto {
+                let depths = SweepDepth::all();
+                let current_idx = depths
+                    .iter()
+                    .position(|d| *d == app.startup.sweep_depth)
+                    .unwrap_or(1);
+                if current_idx < depths.len() - 1 {
+                    app.startup.sweep_depth = depths[current_idx + 1];
+                }
+            }
+            KeyResult::Continue
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if app.startup.mode == StartupMode::FullAuto && app.startup.selected_strategy_index > 0
+            {
+                app.startup.selected_strategy_index -= 1;
+                // Update strategy_selection based on index
+                let options = StrategySelection::all_options();
+                if let Some(sel) = options.get(app.startup.selected_strategy_index) {
+                    app.startup.strategy_selection = *sel;
+                }
+            }
+            KeyResult::Continue
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if app.startup.mode == StartupMode::FullAuto {
+                let options = StrategySelection::all_options();
+                let max_idx = options.len().saturating_sub(1);
+                if app.startup.selected_strategy_index < max_idx {
+                    app.startup.selected_strategy_index += 1;
+                    // Update strategy_selection based on index
+                    if let Some(sel) = options.get(app.startup.selected_strategy_index) {
+                        app.startup.strategy_selection = *sel;
+                    }
+                }
+            }
+            KeyResult::Continue
+        }
+        KeyCode::Enter => {
+            if app.startup.mode == StartupMode::Manual {
+                app.startup.active = false;
+                app.status_message =
+                    "Manual mode. Select data, strategy, then run sweeps.".to_string();
+                return KeyResult::Continue;
+            }
+
+            // Full-auto: set strategy_selection from selected index
+            let options = StrategySelection::all_options();
+            if let Some(sel) = options.get(app.startup.selected_strategy_index) {
+                app.startup.strategy_selection = *sel;
+
+                // Also set the strategy.selected_type if a single strategy is chosen
+                if let StrategySelection::Single(st) = sel {
+                    app.strategy.selected_type = *st;
+                    // Find the index in StrategyType::all()
+                    if let Some(idx) = StrategyType::all().iter().position(|s| s == st) {
+                        app.strategy.selected_type_index = idx;
+                    }
+                }
+            }
+
+            app.startup.active = false;
+            app.start_full_auto(channels);
+            KeyResult::Continue
+        }
+        _ => KeyResult::Continue,
+    }
+}
+
 /// Apply a worker update to the app state.
-fn apply_update(app: &mut App, update: WorkerUpdate) {
+fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) {
     match update {
         WorkerUpdate::Ready => {
             app.status_message = "Worker ready.".to_string();
@@ -400,6 +509,81 @@ fn apply_update(app: &mut App, update: WorkerUpdate) {
         WorkerUpdate::FetchAllComplete { symbols_fetched } => {
             app.status_message = format!("Fetch complete: {} symbols", symbols_fetched);
             app.operation = app::OperationState::Idle;
+
+            // Full-auto: if we were fetching missing symbols, start the appropriate sweep.
+            if app.auto.enabled && app.auto.stage == app::AutoStage::FetchingMissing {
+                app.auto.stage = app::AutoStage::Sweeping;
+                match app.startup.strategy_selection {
+                    app::StrategySelection::AllStrategies => {
+                        app.start_multi_strategy_sweep(channels);
+                    }
+                    app::StrategySelection::Single(_) => {
+                        app.start_multi_sweep(channels);
+                    }
+                }
+            }
+        }
+
+        // Cache load updates
+        WorkerUpdate::CacheLoadStarted {
+            symbol,
+            index,
+            total,
+        } => {
+            app.status_message = format!("Loading cache {} ({}/{})", symbol, index + 1, total);
+        }
+
+        WorkerUpdate::CacheLoadComplete { symbol, bars } => {
+            let bar_count = bars.len();
+            app.status_message = format!("Cache loaded {}: {} bars", symbol, bar_count);
+            app.data.bars_cache.insert(symbol.clone(), bars);
+            if !app.data.symbols.contains(&symbol) {
+                app.data.symbols.push(symbol);
+            }
+        }
+
+        WorkerUpdate::CacheLoadError { symbol, error } => {
+            // For full-auto we treat missing cache as expected; we will fetch later.
+            app.status_message = format!("Cache miss {}: {}", symbol, error);
+            if app.auto.enabled && app.auto.stage == app::AutoStage::LoadingCache {
+                app.auto.pending_missing.push(symbol);
+            }
+        }
+
+        WorkerUpdate::CacheLoadAllComplete {
+            symbols_loaded,
+            symbols_missing,
+        } => {
+            app.status_message = format!(
+                "Cache load complete: {} loaded, {} missing",
+                symbols_loaded, symbols_missing
+            );
+
+            if app.auto.enabled && app.auto.stage == app::AutoStage::LoadingCache {
+                // Fetch missing tickers (if any), then start the appropriate sweep.
+                if !app.auto.pending_missing.is_empty() {
+                    let missing = std::mem::take(&mut app.auto.pending_missing);
+                    app.auto.stage = app::AutoStage::FetchingMissing;
+                    let _ = channels.command_tx.send(WorkerCommand::FetchData {
+                        symbols: missing.clone(),
+                        start: chrono::NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
+                        end: chrono::NaiveDate::from_ymd_opt(2024, 12, 31).unwrap(),
+                        force: false,
+                    });
+                    app.status_message =
+                        format!("Full-Auto: fetching {} missing tickers...", missing.len());
+                } else {
+                    app.auto.stage = app::AutoStage::Sweeping;
+                    match app.startup.strategy_selection {
+                        app::StrategySelection::AllStrategies => {
+                            app.start_multi_strategy_sweep(channels);
+                        }
+                        app::StrategySelection::Single(_) => {
+                            app.start_multi_sweep(channels);
+                        }
+                    }
+                }
+            }
         }
 
         // Sweep updates
@@ -475,14 +659,13 @@ fn apply_update(app: &mut App, update: WorkerUpdate) {
         }
 
         WorkerUpdate::MultiSweepSymbolComplete { symbol, result } => {
-            app.status_message = format!(
-                "{}: {} configs tested",
-                symbol,
-                result.config_results.len()
-            );
+            app.status_message =
+                format!("{}: {} configs tested", symbol, result.config_results.len());
         }
 
         WorkerUpdate::MultiSweepComplete { result } => {
+            use trendlab_core::RankMetric;
+
             let symbol_count = result.symbol_count();
             let total_configs = result.total_configs();
             app.status_message = format!(
@@ -503,10 +686,147 @@ fn apply_update(app: &mut App, update: WorkerUpdate) {
                 app.results.results = sweep_result.config_results.clone();
                 app.results.selected_index = 0;
             }
+
+            // Populate synthesized multi-curve chart: best config per symbol + aggregated portfolio.
+            let mut curves: Vec<app::TickerCurve> = Vec::new();
+            for (symbol, sweep_result) in &result.symbol_results {
+                if let Some(best) = sweep_result.top_n(1, RankMetric::Sharpe, false).first() {
+                    let equity: Vec<f64> = best
+                        .backtest_result
+                        .equity
+                        .iter()
+                        .map(|p| p.equity)
+                        .collect();
+                    curves.push(app::TickerCurve {
+                        symbol: symbol.clone(),
+                        equity,
+                    });
+                }
+            }
+            curves.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+            app.chart.ticker_curves = curves;
+            app.chart.portfolio_curve = result
+                .aggregated
+                .as_ref()
+                .map(|a| a.equity_curve.clone())
+                .unwrap_or_default();
+            app.chart.view_mode = app::ChartViewMode::MultiTicker;
+
+            if app.auto.enabled && app.auto.jump_to_chart_on_complete {
+                app.active_panel = app::Panel::Chart;
+                app.auto.stage = app::AutoStage::Idle;
+                app.auto.enabled = false;
+                app.status_message = format!(
+                    "Full-Auto complete: showing combined chart ({} symbols)",
+                    symbol_count
+                );
+            }
         }
 
         WorkerUpdate::MultiSweepCancelled { completed_symbols } => {
-            app.status_message = format!("Multi-sweep cancelled after {} symbols", completed_symbols);
+            app.status_message =
+                format!("Multi-sweep cancelled after {} symbols", completed_symbols);
+            app.sweep.is_running = false;
+            app.operation = app::OperationState::Idle;
+        }
+
+        // Multi-strategy sweep updates
+        WorkerUpdate::MultiStrategySweepStarted {
+            total_symbols,
+            total_strategies,
+            total_configs,
+        } => {
+            app.status_message = format!(
+                "Starting multi-strategy sweep: {} symbols x {} strategies ({} configs)",
+                total_symbols, total_strategies, total_configs
+            );
+            app.sweep.is_running = true;
+        }
+
+        WorkerUpdate::MultiStrategySweepStrategyStarted {
+            symbol,
+            strategy_type,
+        } => {
+            app.status_message = format!("Sweeping {} with {}", symbol, strategy_type.name());
+        }
+
+        WorkerUpdate::MultiStrategySweepProgress {
+            completed_configs,
+            total_configs,
+            current_strategy,
+            current_symbol,
+        } => {
+            let pct = (completed_configs as f64 / total_configs as f64 * 100.0) as usize;
+            app.status_message = format!(
+                "Progress: {}% ({}/{}) - {} on {}",
+                pct,
+                completed_configs,
+                total_configs,
+                current_strategy.name(),
+                current_symbol
+            );
+        }
+
+        WorkerUpdate::MultiStrategySweepComplete { result } => {
+            let symbol_count = result.best_per_symbol.len();
+            let strategy_count = result.best_per_strategy.len();
+            app.status_message = format!(
+                "Multi-strategy sweep complete: {} symbols x {} strategies",
+                symbol_count, strategy_count
+            );
+            app.sweep.is_running = false;
+            app.operation = app::OperationState::Idle;
+
+            // Store multi-strategy result
+            app.results.multi_strategy_result = Some(result.clone());
+
+            // Populate strategy comparison curves (best config per strategy)
+            let mut strategy_curves: Vec<app::StrategyCurve> = Vec::new();
+            for entry in &result.strategy_comparison {
+                if let Some(best) = result.best_per_strategy.get(&entry.strategy_type) {
+                    strategy_curves.push(app::StrategyCurve {
+                        strategy_type: entry.strategy_type,
+                        equity: best.equity_curve.clone(),
+                        metrics: best.metrics.clone(),
+                    });
+                }
+            }
+            app.chart.strategy_curves = strategy_curves;
+
+            // Populate per-ticker best strategy curves
+            let mut ticker_best: Vec<app::TickerBestStrategy> = Vec::new();
+            for (symbol, best) in &result.best_per_symbol {
+                ticker_best.push(app::TickerBestStrategy {
+                    symbol: symbol.clone(),
+                    strategy_type: best.strategy_type,
+                    config_display: best.config_id.display(),
+                    equity: best.equity_curve.clone(),
+                    metrics: best.metrics.clone(),
+                });
+            }
+            ticker_best.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+            app.chart.ticker_best_strategies = ticker_best;
+
+            // Set chart to strategy comparison view
+            app.chart.view_mode = app::ChartViewMode::StrategyComparison;
+
+            // Auto-jump to chart if in full-auto mode
+            if app.auto.enabled && app.auto.jump_to_chart_on_complete {
+                app.active_panel = app::Panel::Chart;
+                app.auto.stage = app::AutoStage::Idle;
+                app.auto.enabled = false;
+                app.status_message = format!(
+                    "Full-Auto complete: {} strategies across {} symbols",
+                    strategy_count, symbol_count
+                );
+            }
+        }
+
+        WorkerUpdate::MultiStrategySweepCancelled { completed_configs } => {
+            app.status_message = format!(
+                "Multi-strategy sweep cancelled after {} configs",
+                completed_configs
+            );
             app.sweep.is_running = false;
             app.operation = app::OperationState::Idle;
         }

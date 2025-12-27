@@ -27,7 +27,11 @@
       "Bash(dir c:UsersDanTrendLabdata /s /b)",
       "Bash(cmd /c \"dir c:\\\\Users\\\\Dan\\\\TrendLab\\\\data /s /b 2>&1\")",
       "Bash(python -c:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(find:*)",
+      "Bash(cargo tree:*)",
+      "Bash(cargo clean:*)",
+      "Bash(cargo doc:*)"
     ]
   }
 }

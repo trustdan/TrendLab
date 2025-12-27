@@ -72,6 +72,10 @@ enum Commands {
         /// Number of top configurations to display
         #[arg(long, default_value = "5")]
         top_n: usize,
+
+        /// Use sequential backtest instead of vectorized Polars (slower but useful for debugging)
+        #[arg(long, default_value = "false")]
+        sequential: bool,
     },
 
     /// Generate reports
@@ -222,6 +226,7 @@ async fn main() -> Result<()> {
             end,
             grid,
             top_n,
+            sequential,
         } => {
             let start_date = data::parse_date(&start)?;
             let end_date = data::parse_date(&end)?;
@@ -234,6 +239,10 @@ async fn main() -> Result<()> {
             if let Some(ref g) = grid {
                 println!("  Grid:     {}", g);
             }
+            println!(
+                "  Engine:   {}",
+                if sequential { "Sequential" } else { "Polars (vectorized)" }
+            );
             println!();
 
             let result = sweep::execute_sweep(
@@ -243,6 +252,7 @@ async fn main() -> Result<()> {
                 end_date,
                 grid.as_deref(),
                 &config,
+                sequential,
             )?;
 
             println!("{}", sweep::format_sweep_summary(&result, top_n));

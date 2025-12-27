@@ -13,8 +13,11 @@ use std::thread::{self, JoinHandle};
 use chrono::NaiveDate;
 use std::collections::HashMap;
 use trendlab_core::{
-    AggregatedPortfolioResult, BacktestConfig, Bar, DataQualityChecker, DataQualityReport,
-    MultiSweepResult, RankMetric, SweepConfigResult, SweepGrid, SweepResult,
+    bars_to_dataframe, run_donchian_sweep_polars, run_strategy_sweep_polars_parallel,
+    scan_symbol_parquet_lazy, AggregatedPortfolioResult, BacktestConfig, Bar, CostModel,
+    DataQualityChecker, DataQualityReport, DonchianBacktestConfig, IntoLazy, MultiStrategyGrid,
+    MultiStrategySweepResult, MultiSweepResult, PolarsBacktestConfig, RankMetric, StrategyTypeId,
+    SweepConfigResult, SweepGrid, SweepResult,
 };
 
 /// Commands sent from TUI thread to worker thread.
@@ -31,11 +34,16 @@ pub enum WorkerCommand {
         force: bool,
     },
 
+    /// Load cached data from local Parquet store for given symbols (no network).
+    LoadCachedData { symbols: Vec<String> },
+
     /// Start a parameter sweep.
     StartSweep {
         bars: Arc<Vec<Bar>>,
         grid: SweepGrid,
         backtest_config: BacktestConfig,
+        /// Use Polars-native backtest (vectorized, faster for large sweeps)
+        use_polars: bool,
     },
 
     /// Start a multi-ticker parameter sweep.
@@ -43,6 +51,40 @@ pub enum WorkerCommand {
         /// Map of symbol -> bars
         symbol_bars: HashMap<String, Arc<Vec<Bar>>>,
         grid: SweepGrid,
+        backtest_config: BacktestConfig,
+    },
+
+    /// Start a multi-strategy sweep (all strategies across all symbols).
+    StartMultiStrategySweep {
+        /// Map of symbol -> bars
+        symbol_bars: HashMap<String, Arc<Vec<Bar>>>,
+        /// Strategy grid with configs for each strategy type
+        strategy_grid: MultiStrategyGrid,
+        backtest_config: BacktestConfig,
+    },
+
+    /// Start a single-symbol sweep directly from Parquet (Phase 4 direct pipeline).
+    /// This skips the Vec<Bar> intermediate for maximum performance.
+    StartSweepFromParquet {
+        symbol: String,
+        start: NaiveDate,
+        end: NaiveDate,
+        grid: SweepGrid,
+        backtest_config: BacktestConfig,
+        /// Use Polars-native backtest (always true for this command)
+        use_polars: bool,
+    },
+
+    /// Start a multi-strategy sweep directly from Parquet (Phase 4 direct pipeline).
+    /// This scans Parquet files directly into LazyFrames for maximum performance.
+    StartMultiStrategySweepFromParquet {
+        /// List of symbols to sweep
+        symbols: Vec<String>,
+        /// Date range
+        start: NaiveDate,
+        end: NaiveDate,
+        /// Strategy grid with configs for each strategy type
+        strategy_grid: MultiStrategyGrid,
         backtest_config: BacktestConfig,
     },
 
@@ -94,6 +136,25 @@ pub enum WorkerUpdate {
         symbols_fetched: usize,
     },
 
+    // Cache load updates
+    CacheLoadStarted {
+        symbol: String,
+        index: usize,
+        total: usize,
+    },
+    CacheLoadComplete {
+        symbol: String,
+        bars: Vec<Bar>,
+    },
+    CacheLoadError {
+        symbol: String,
+        error: String,
+    },
+    CacheLoadAllComplete {
+        symbols_loaded: usize,
+        symbols_missing: usize,
+    },
+
     // Sweep updates
     SweepStarted {
         total_configs: usize,
@@ -128,6 +189,29 @@ pub enum WorkerUpdate {
     },
     MultiSweepCancelled {
         completed_symbols: usize,
+    },
+
+    // Multi-strategy sweep updates
+    MultiStrategySweepStarted {
+        total_symbols: usize,
+        total_strategies: usize,
+        total_configs: usize,
+    },
+    MultiStrategySweepStrategyStarted {
+        symbol: String,
+        strategy_type: StrategyTypeId,
+    },
+    MultiStrategySweepProgress {
+        completed_configs: usize,
+        total_configs: usize,
+        current_strategy: StrategyTypeId,
+        current_symbol: String,
+    },
+    MultiStrategySweepComplete {
+        result: MultiStrategySweepResult,
+    },
+    MultiStrategySweepCancelled {
+        completed_configs: usize,
     },
 
     // General
@@ -204,12 +288,21 @@ fn worker_loop(
                 ));
             }
 
+            WorkerCommand::LoadCachedData { symbols } => {
+                handle_load_cached(&symbols, &update_tx, &cancel_flag);
+            }
+
             WorkerCommand::StartSweep {
                 bars,
                 grid,
                 backtest_config,
+                use_polars,
             } => {
-                handle_sweep(&bars, &grid, backtest_config, &update_tx, &cancel_flag);
+                if use_polars {
+                    handle_sweep_polars(&bars, &grid, backtest_config, &update_tx, &cancel_flag);
+                } else {
+                    handle_sweep(&bars, &grid, backtest_config, &update_tx, &cancel_flag);
+                }
             }
 
             WorkerCommand::StartMultiSweep {
@@ -217,7 +310,64 @@ fn worker_loop(
                 grid,
                 backtest_config,
             } => {
-                handle_multi_sweep(symbol_bars, &grid, backtest_config, &update_tx, &cancel_flag);
+                handle_multi_sweep(
+                    symbol_bars,
+                    &grid,
+                    backtest_config,
+                    &update_tx,
+                    &cancel_flag,
+                );
+            }
+
+            WorkerCommand::StartMultiStrategySweep {
+                symbol_bars,
+                strategy_grid,
+                backtest_config,
+            } => {
+                handle_multi_strategy_sweep(
+                    symbol_bars,
+                    &strategy_grid,
+                    backtest_config,
+                    &update_tx,
+                    &cancel_flag,
+                );
+            }
+
+            WorkerCommand::StartSweepFromParquet {
+                symbol,
+                start,
+                end,
+                grid,
+                backtest_config,
+                use_polars: _,
+            } => {
+                handle_sweep_from_parquet(
+                    &symbol,
+                    start,
+                    end,
+                    &grid,
+                    backtest_config,
+                    &update_tx,
+                    &cancel_flag,
+                );
+            }
+
+            WorkerCommand::StartMultiStrategySweepFromParquet {
+                symbols,
+                start,
+                end,
+                strategy_grid,
+                backtest_config,
+            } => {
+                handle_multi_strategy_sweep_from_parquet(
+                    &symbols,
+                    start,
+                    end,
+                    &strategy_grid,
+                    backtest_config,
+                    &update_tx,
+                    &cancel_flag,
+                );
             }
 
             WorkerCommand::Cancel => {
@@ -233,6 +383,97 @@ fn worker_loop(
         // Signal idle after each operation
         let _ = update_tx.send(WorkerUpdate::Idle);
     }
+}
+
+/// Load cached bars for a list of symbols from local Parquet store.
+fn handle_load_cached(
+    symbols: &[String],
+    update_tx: &Sender<WorkerUpdate>,
+    cancel_flag: &Arc<AtomicBool>,
+) {
+    use std::path::Path;
+    use trendlab_core::read_parquet;
+
+    let total = symbols.len();
+    let mut loaded = 0usize;
+    let mut missing = 0usize;
+
+    let parquet_dir = Path::new("data/parquet/1d");
+
+    for (index, symbol) in symbols.iter().enumerate() {
+        if cancel_flag.load(Ordering::SeqCst) {
+            return;
+        }
+
+        let _ = update_tx.send(WorkerUpdate::CacheLoadStarted {
+            symbol: symbol.clone(),
+            index,
+            total,
+        });
+
+        let symbol_dir = parquet_dir.join(format!("symbol={}", symbol));
+        if !symbol_dir.exists() {
+            missing += 1;
+            let _ = update_tx.send(WorkerUpdate::CacheLoadError {
+                symbol: symbol.clone(),
+                error: "No cached data (missing parquet directory)".to_string(),
+            });
+            continue;
+        }
+
+        let mut all_bars: Vec<Bar> = Vec::new();
+        match std::fs::read_dir(&symbol_dir) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        let data_file = path.join("data.parquet");
+                        if data_file.exists() {
+                            match read_parquet(&data_file) {
+                                Ok(mut bars) => all_bars.append(&mut bars),
+                                Err(e) => {
+                                    let _ = update_tx.send(WorkerUpdate::CacheLoadError {
+                                        symbol: symbol.clone(),
+                                        error: format!("Parquet read error: {}", e),
+                                    });
+                                    all_bars.clear();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = update_tx.send(WorkerUpdate::CacheLoadError {
+                    symbol: symbol.clone(),
+                    error: format!("IO error: {}", e),
+                });
+                continue;
+            }
+        }
+
+        if all_bars.is_empty() {
+            missing += 1;
+            let _ = update_tx.send(WorkerUpdate::CacheLoadError {
+                symbol: symbol.clone(),
+                error: "No bars found in cache".to_string(),
+            });
+            continue;
+        }
+
+        all_bars.sort_by_key(|b| b.ts);
+        loaded += 1;
+        let _ = update_tx.send(WorkerUpdate::CacheLoadComplete {
+            symbol: symbol.clone(),
+            bars: all_bars,
+        });
+    }
+
+    let _ = update_tx.send(WorkerUpdate::CacheLoadAllComplete {
+        symbols_loaded: loaded,
+        symbols_missing: missing,
+    });
 }
 
 /// Handle data fetch operation (async).
@@ -421,6 +662,99 @@ fn handle_sweep(
     });
 }
 
+/// Handle sweep operation using Polars-native backtest (vectorized).
+fn handle_sweep_polars(
+    bars: &[Bar],
+    grid: &SweepGrid,
+    config: BacktestConfig,
+    update_tx: &Sender<WorkerUpdate>,
+    cancel_flag: &Arc<AtomicBool>,
+) {
+    use trendlab_core::{compute_metrics, ConfigId};
+
+    let combinations = grid.combinations();
+    let total = combinations.len();
+
+    let _ = update_tx.send(WorkerUpdate::SweepStarted {
+        total_configs: total,
+    });
+
+    // Convert bars to DataFrame once
+    let df = match bars_to_dataframe(bars) {
+        Ok(df) => df,
+        Err(e) => {
+            let _ = update_tx.send(WorkerUpdate::SweepCancelled { completed: 0 });
+            eprintln!("Failed to convert bars to DataFrame: {}", e);
+            return;
+        }
+    };
+
+    // Build configs for Polars sweep
+    let polars_configs: Vec<DonchianBacktestConfig> = combinations
+        .iter()
+        .map(|&(entry, exit)| {
+            DonchianBacktestConfig::new(entry, exit)
+                .with_initial_cash(config.initial_cash)
+                .with_qty(config.qty)
+                .with_cost_model(config.cost_model)
+        })
+        .collect();
+
+    // Check for cancellation before running sweep
+    if cancel_flag.load(Ordering::SeqCst) {
+        let _ = update_tx.send(WorkerUpdate::SweepCancelled { completed: 0 });
+        return;
+    }
+
+    // Run Polars sweep (uses indicator reuse optimization)
+    let polars_results = match run_donchian_sweep_polars(df.lazy(), &polars_configs) {
+        Ok(results) => results,
+        Err(e) => {
+            let _ = update_tx.send(WorkerUpdate::SweepCancelled { completed: 0 });
+            eprintln!("Polars sweep failed: {}", e);
+            return;
+        }
+    };
+
+    // Convert Polars results to SweepConfigResult format
+    let results: Vec<SweepConfigResult> = combinations
+        .iter()
+        .zip(polars_results.iter())
+        .filter_map(|(&(entry, exit), polars_result)| {
+            // Convert PolarsBacktestResult to BacktestResult
+            let backtest_result = match polars_result.to_backtest_result() {
+                Ok(r) => r,
+                Err(_) => return None,
+            };
+
+            let metrics = compute_metrics(&backtest_result, config.initial_cash);
+
+            Some(SweepConfigResult {
+                config_id: ConfigId::new(entry, exit),
+                backtest_result,
+                metrics,
+            })
+        })
+        .collect();
+
+    // Send progress update (all at once for Polars)
+    let _ = update_tx.send(WorkerUpdate::SweepProgress {
+        completed: results.len(),
+        total,
+    });
+
+    let sweep_result = SweepResult {
+        sweep_id: format!("tui_polars_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S")),
+        config_results: results,
+        started_at: chrono::Utc::now(),
+        completed_at: chrono::Utc::now(),
+    };
+
+    let _ = update_tx.send(WorkerUpdate::SweepComplete {
+        result: sweep_result,
+    });
+}
+
 /// Handle multi-ticker sweep operation.
 fn handle_multi_sweep(
     symbol_bars: HashMap<String, Arc<Vec<Bar>>>,
@@ -439,10 +773,7 @@ fn handle_multi_sweep(
         configs_per_symbol,
     });
 
-    let sweep_id = format!(
-        "multi_tui_{}",
-        chrono::Utc::now().format("%Y%m%d_%H%M%S")
-    );
+    let sweep_id = format!("multi_tui_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S"));
     let mut multi_result = MultiSweepResult::new(sweep_id);
     let started_at = chrono::Utc::now();
 
@@ -520,14 +851,363 @@ fn handle_multi_sweep(
     }
 
     // Compute aggregated portfolio results
-    multi_result.aggregated =
-        AggregatedPortfolioResult::from_symbol_results(&multi_result.symbol_results, RankMetric::Sharpe);
+    multi_result.aggregated = AggregatedPortfolioResult::from_symbol_results(
+        &multi_result.symbol_results,
+        RankMetric::Sharpe,
+    );
     multi_result.started_at = started_at;
     multi_result.completed_at = chrono::Utc::now();
 
     let _ = update_tx.send(WorkerUpdate::MultiSweepComplete {
         result: multi_result,
     });
+}
+
+/// Handle sweep from Parquet directly (Phase 4 - no Vec<Bar> intermediate).
+///
+/// This loads data directly from Parquet files into a LazyFrame,
+/// avoiding the Vec<Bar> conversion overhead.
+fn handle_sweep_from_parquet(
+    symbol: &str,
+    start: NaiveDate,
+    end: NaiveDate,
+    grid: &SweepGrid,
+    config: BacktestConfig,
+    update_tx: &Sender<WorkerUpdate>,
+    cancel_flag: &Arc<AtomicBool>,
+) {
+    use std::path::Path;
+    use trendlab_core::compute_metrics;
+
+    let parquet_dir = Path::new("data/parquet");
+
+    // Scan Parquet directly into LazyFrame with date filtering
+    let lf = match scan_symbol_parquet_lazy(parquet_dir, symbol, "1d", Some(start), Some(end)) {
+        Ok(lf) => lf,
+        Err(e) => {
+            let _ = update_tx.send(WorkerUpdate::SweepCancelled { completed: 0 });
+            eprintln!("Failed to scan Parquet for {}: {}", symbol, e);
+            return;
+        }
+    };
+
+    // Collect to DataFrame for the sweep
+    let df = match lf.collect() {
+        Ok(df) => df,
+        Err(e) => {
+            let _ = update_tx.send(WorkerUpdate::SweepCancelled { completed: 0 });
+            eprintln!("Failed to collect Parquet data: {}", e);
+            return;
+        }
+    };
+
+    let total = grid.len();
+    let _ = update_tx.send(WorkerUpdate::SweepStarted {
+        total_configs: total,
+    });
+
+    // Check for cancellation
+    if cancel_flag.load(Ordering::SeqCst) {
+        let _ = update_tx.send(WorkerUpdate::SweepCancelled { completed: 0 });
+        return;
+    }
+
+    // Build Polars configs for sweep
+    let combinations = grid.combinations();
+    let polars_configs: Vec<DonchianBacktestConfig> = combinations
+        .iter()
+        .map(|&(entry, exit)| {
+            DonchianBacktestConfig::new(entry, exit)
+                .with_initial_cash(config.initial_cash)
+                .with_qty(config.qty)
+                .with_cost_model(config.cost_model)
+        })
+        .collect();
+
+    // Run Polars sweep (uses indicator reuse optimization)
+    let polars_results = match run_donchian_sweep_polars(df.lazy(), &polars_configs) {
+        Ok(results) => results,
+        Err(e) => {
+            let _ = update_tx.send(WorkerUpdate::SweepCancelled { completed: 0 });
+            eprintln!("Polars sweep failed: {}", e);
+            return;
+        }
+    };
+
+    // Convert Polars results to SweepConfigResult format
+    use trendlab_core::ConfigId;
+    let results: Vec<SweepConfigResult> = combinations
+        .iter()
+        .zip(polars_results.iter())
+        .filter_map(|(&(entry, exit), polars_result)| {
+            let backtest_result = match polars_result.to_backtest_result() {
+                Ok(r) => r,
+                Err(_) => return None,
+            };
+
+            let metrics = compute_metrics(&backtest_result, config.initial_cash);
+
+            Some(SweepConfigResult {
+                config_id: ConfigId::new(entry, exit),
+                backtest_result,
+                metrics,
+            })
+        })
+        .collect();
+
+    // Send progress update
+    let _ = update_tx.send(WorkerUpdate::SweepProgress {
+        completed: results.len(),
+        total,
+    });
+
+    let sweep_result = SweepResult {
+        sweep_id: format!(
+            "tui_parquet_{}",
+            chrono::Utc::now().format("%Y%m%d_%H%M%S")
+        ),
+        config_results: results,
+        started_at: chrono::Utc::now(),
+        completed_at: chrono::Utc::now(),
+    };
+
+    let _ = update_tx.send(WorkerUpdate::SweepComplete {
+        result: sweep_result,
+    });
+}
+
+/// Handle multi-strategy sweep from Parquet directly (Phase 4 - no Vec<Bar> intermediate).
+///
+/// This scans Parquet files directly into LazyFrames for each symbol,
+/// avoiding the Vec<Bar> conversion overhead.
+fn handle_multi_strategy_sweep_from_parquet(
+    symbols: &[String],
+    start: NaiveDate,
+    end: NaiveDate,
+    grid: &MultiStrategyGrid,
+    config: BacktestConfig,
+    update_tx: &Sender<WorkerUpdate>,
+    cancel_flag: &Arc<AtomicBool>,
+) {
+    use std::path::Path;
+
+    let parquet_dir = Path::new("data/parquet");
+
+    let total_symbols = symbols.len();
+    let enabled_strategies = grid.enabled_strategies();
+    let total_strategies = enabled_strategies.len();
+    let total_configs = grid.total_configs() * total_symbols;
+
+    let _ = update_tx.send(WorkerUpdate::MultiStrategySweepStarted {
+        total_symbols,
+        total_strategies,
+        total_configs,
+    });
+
+    let sweep_id = format!(
+        "multi_strategy_parquet_{}",
+        chrono::Utc::now().format("%Y%m%d_%H%M%S")
+    );
+    let mut result = MultiStrategySweepResult::new(sweep_id);
+    let started_at = chrono::Utc::now();
+    let completed_configs = Arc::new(AtomicUsize::new(0));
+
+    // Polars backtest config
+    let polars_config = PolarsBacktestConfig::new(config.initial_cash, config.qty)
+        .with_cost_model(CostModel {
+            fees_bps_per_side: config.cost_model.fees_bps_per_side,
+            slippage_bps: config.cost_model.slippage_bps,
+        });
+
+    // For each symbol
+    for symbol in symbols {
+        if cancel_flag.load(Ordering::SeqCst) {
+            let _ = update_tx.send(WorkerUpdate::MultiStrategySweepCancelled {
+                completed_configs: completed_configs.load(Ordering::SeqCst),
+            });
+            return;
+        }
+
+        // Scan Parquet directly into LazyFrame
+        let lf = match scan_symbol_parquet_lazy(parquet_dir, symbol, "1d", Some(start), Some(end)) {
+            Ok(lf) => lf,
+            Err(e) => {
+                eprintln!("Failed to scan Parquet for {}: {}", symbol, e);
+                continue;
+            }
+        };
+
+        // Collect to DataFrame
+        let df = match lf.collect() {
+            Ok(df) => df,
+            Err(e) => {
+                eprintln!("Failed to collect Parquet data for {}: {}", symbol, e);
+                continue;
+            }
+        };
+
+        // For each strategy
+        for strategy_config in &grid.strategies {
+            if !strategy_config.enabled {
+                continue;
+            }
+            if cancel_flag.load(Ordering::SeqCst) {
+                break;
+            }
+
+            let _ = update_tx.send(WorkerUpdate::MultiStrategySweepStrategyStarted {
+                symbol: symbol.clone(),
+                strategy_type: strategy_config.strategy_type,
+            });
+
+            // Run Polars-native sweep
+            let sweep_result =
+                match run_strategy_sweep_polars_parallel(&df, strategy_config, &polars_config) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!(
+                            "Polars sweep failed for {} / {:?}: {}",
+                            symbol, strategy_config.strategy_type, e
+                        );
+                        continue;
+                    }
+                };
+
+            // Update progress
+            let num_configs = sweep_result.config_results.len();
+            let new_count =
+                completed_configs.fetch_add(num_configs, Ordering::SeqCst) + num_configs;
+
+            let _ = update_tx.send(WorkerUpdate::MultiStrategySweepProgress {
+                completed_configs: new_count,
+                total_configs,
+                current_strategy: strategy_config.strategy_type,
+                current_symbol: symbol.clone(),
+            });
+
+            result.add_result(symbol.clone(), strategy_config.strategy_type, sweep_result);
+        }
+    }
+
+    // Compute aggregations
+    result.started_at = started_at;
+    result.compute_aggregations();
+
+    let _ = update_tx.send(WorkerUpdate::MultiStrategySweepComplete { result });
+}
+
+/// Handle multi-strategy sweep operation (all strategies across all symbols).
+///
+/// Uses Polars-native backtest for vectorized performance.
+fn handle_multi_strategy_sweep(
+    symbol_bars: HashMap<String, Arc<Vec<Bar>>>,
+    grid: &MultiStrategyGrid,
+    config: BacktestConfig,
+    update_tx: &Sender<WorkerUpdate>,
+    cancel_flag: &Arc<AtomicBool>,
+) {
+    let total_symbols = symbol_bars.len();
+    let enabled_strategies = grid.enabled_strategies();
+    let total_strategies = enabled_strategies.len();
+    let total_configs = grid.total_configs() * total_symbols;
+
+    let _ = update_tx.send(WorkerUpdate::MultiStrategySweepStarted {
+        total_symbols,
+        total_strategies,
+        total_configs,
+    });
+
+    let sweep_id = format!(
+        "multi_strategy_polars_{}",
+        chrono::Utc::now().format("%Y%m%d_%H%M%S")
+    );
+    let mut result = MultiStrategySweepResult::new(sweep_id);
+    let started_at = chrono::Utc::now();
+    let completed_configs = Arc::new(AtomicUsize::new(0));
+
+    // Polars backtest config (mirrors the BacktestConfig)
+    let polars_config = PolarsBacktestConfig::new(config.initial_cash, config.qty)
+        .with_cost_model(CostModel {
+            fees_bps_per_side: config.cost_model.fees_bps_per_side,
+            slippage_bps: config.cost_model.slippage_bps,
+        });
+
+    // Sort symbols for deterministic ordering
+    let mut symbols: Vec<String> = symbol_bars.keys().cloned().collect();
+    symbols.sort();
+
+    // For each symbol
+    for symbol in &symbols {
+        if cancel_flag.load(Ordering::SeqCst) {
+            let _ = update_tx.send(WorkerUpdate::MultiStrategySweepCancelled {
+                completed_configs: completed_configs.load(Ordering::SeqCst),
+            });
+            return;
+        }
+
+        let bars = match symbol_bars.get(symbol) {
+            Some(b) => b,
+            None => continue,
+        };
+
+        // Convert bars to DataFrame for Polars backtest
+        let df = match bars_to_dataframe(bars) {
+            Ok(df) => df,
+            Err(e) => {
+                eprintln!("Failed to convert bars for {}: {}", symbol, e);
+                continue;
+            }
+        };
+
+        // For each strategy
+        for strategy_config in &grid.strategies {
+            if !strategy_config.enabled {
+                continue;
+            }
+            if cancel_flag.load(Ordering::SeqCst) {
+                break;
+            }
+
+            let _ = update_tx.send(WorkerUpdate::MultiStrategySweepStrategyStarted {
+                symbol: symbol.clone(),
+                strategy_type: strategy_config.strategy_type,
+            });
+
+            // Run Polars-native sweep for this strategy/symbol
+            let sweep_result =
+                match run_strategy_sweep_polars_parallel(&df, strategy_config, &polars_config) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!(
+                            "Polars sweep failed for {} / {:?}: {}",
+                            symbol, strategy_config.strategy_type, e
+                        );
+                        continue;
+                    }
+                };
+
+            // Update progress
+            let num_configs = sweep_result.config_results.len();
+            let new_count =
+                completed_configs.fetch_add(num_configs, Ordering::SeqCst) + num_configs;
+
+            let _ = update_tx.send(WorkerUpdate::MultiStrategySweepProgress {
+                completed_configs: new_count,
+                total_configs,
+                current_strategy: strategy_config.strategy_type,
+                current_symbol: symbol.clone(),
+            });
+
+            // Store result - add_result expects SweepResult (which contains config_results)
+            result.add_result(symbol.clone(), strategy_config.strategy_type, sweep_result);
+        }
+    }
+
+    // Compute aggregations
+    result.started_at = started_at;
+    result.compute_aggregations();
+
+    let _ = update_tx.send(WorkerUpdate::MultiStrategySweepComplete { result });
 }
 
 /// Handle symbol search operation (async).

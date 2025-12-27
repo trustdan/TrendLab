@@ -109,10 +109,10 @@ pub fn parse_yahoo_csv(
 
             Bar::new(
                 ts,
-                row.open * adj_factor,  // Adjusted open
-                row.high * adj_factor,  // Adjusted high
-                row.low * adj_factor,   // Adjusted low
-                row.adj_close,          // Already adjusted close
+                row.open * adj_factor, // Adjusted open
+                row.high * adj_factor, // Adjusted high
+                row.low * adj_factor,  // Adjusted low
+                row.adj_close,         // Already adjusted close
                 row.volume,
                 symbol,
                 timeframe,
@@ -264,8 +264,14 @@ pub fn parse_yahoo_chart_json(
     // Check for API errors
     if let Some(error) = json.get("chart").and_then(|c| c.get("error")) {
         if !error.is_null() {
-            let code = error.get("code").and_then(|c| c.as_str()).unwrap_or("unknown");
-            let desc = error.get("description").and_then(|d| d.as_str()).unwrap_or("unknown error");
+            let code = error
+                .get("code")
+                .and_then(|c| c.as_str())
+                .unwrap_or("unknown");
+            let desc = error
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or("unknown error");
             return Err(ProviderError::ParseError {
                 message: format!("Yahoo API error: {} - {}", code, desc),
             });
@@ -329,7 +335,10 @@ pub fn parse_yahoo_chart_json(
         let high = highs.and_then(|h| h.get(i)).and_then(|v| v.as_f64());
         let low = lows.and_then(|l| l.get(i)).and_then(|v| v.as_f64());
         let close = closes.and_then(|c| c.get(i)).and_then(|v| v.as_f64());
-        let volume = volumes.and_then(|v| v.get(i)).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let volume = volumes
+            .and_then(|v| v.get(i))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
         let adj_close = adjcloses.and_then(|a| a.get(i)).and_then(|v| v.as_f64());
 
         // Skip bars with null OHLC values
@@ -341,11 +350,12 @@ pub fn parse_yahoo_chart_json(
         // Calculate adjustment factor for OHLC consistency
         let adj_factor = if close != 0.0 { adj_close / close } else { 1.0 };
 
-        let ts = Utc.timestamp_opt(ts_unix, 0).single().ok_or_else(|| {
-            ProviderError::ParseError {
-                message: format!("Invalid timestamp: {}", ts_unix),
-            }
-        })?;
+        let ts =
+            Utc.timestamp_opt(ts_unix, 0)
+                .single()
+                .ok_or_else(|| ProviderError::ParseError {
+                    message: format!("Invalid timestamp: {}", ts_unix),
+                })?;
 
         bars.push(Bar::new(
             ts,
@@ -399,10 +409,10 @@ mod tests {
 
         // Adjustment factor = 50.50 / 101.00 = 0.5
         // All OHLC values should be adjusted by this factor
-        assert_eq!(bars[0].close, 50.50);          // Adj Close
-        assert_eq!(bars[0].open, 50.00);           // 100.00 * 0.5
-        assert_eq!(bars[0].high, 51.25);           // 102.50 * 0.5
-        assert_eq!(bars[0].low, 49.75);            // 99.50 * 0.5
+        assert_eq!(bars[0].close, 50.50); // Adj Close
+        assert_eq!(bars[0].open, 50.00); // 100.00 * 0.5
+        assert_eq!(bars[0].high, 51.25); // 102.50 * 0.5
+        assert_eq!(bars[0].low, 49.75); // 99.50 * 0.5
     }
 
     #[test]
@@ -542,10 +552,10 @@ mod tests {
         assert_eq!(bars.len(), 1);
 
         // Adjustment factor = 102.5 / 205.0 = 0.5
-        assert_eq!(bars[0].close, 102.5);  // adj_close
-        assert_eq!(bars[0].open, 100.0);   // 200.0 * 0.5
-        assert_eq!(bars[0].high, 105.0);   // 210.0 * 0.5
-        assert_eq!(bars[0].low, 97.5);     // 195.0 * 0.5
+        assert_eq!(bars[0].close, 102.5); // adj_close
+        assert_eq!(bars[0].open, 100.0); // 200.0 * 0.5
+        assert_eq!(bars[0].high, 105.0); // 210.0 * 0.5
+        assert_eq!(bars[0].low, 97.5); // 195.0 * 0.5
     }
 
     #[test]
@@ -573,7 +583,7 @@ mod tests {
         }"#;
 
         let bars = parse_yahoo_chart_json(json, "GAPS", "1d").unwrap();
-        assert_eq!(bars.len(), 2);  // Skipped the null bar
+        assert_eq!(bars.len(), 2); // Skipped the null bar
     }
 
     #[test]
