@@ -588,6 +588,20 @@ impl DataState {
         }
     }
 
+    /// Select all tickers across all sectors (for YOLO mode).
+    pub fn select_all(&mut self) {
+        for sector in &self.universe.sectors {
+            for ticker in &sector.tickers {
+                self.selected_tickers.insert(ticker.clone());
+            }
+        }
+    }
+
+    /// Deselect all tickers globally.
+    pub fn deselect_all(&mut self) {
+        self.selected_tickers.clear();
+    }
+
     /// Get count of selected tickers in a sector by sector ID.
     pub fn selected_count_in_sector(&self, sector_id: &str) -> usize {
         self.universe
@@ -1167,7 +1181,9 @@ impl Default for YoloState {
             iteration: 0,
             leaderboard: Leaderboard::new(4),
             cross_symbol_leaderboard: None,
-            randomization_pct: 0.15,
+            // Default exploration strength for YOLO mode. Kept moderate so it explores meaningfully
+            // without completely thrashing parameter space each iteration.
+            randomization_pct: 0.30,
             total_configs_tested: 0,
             started_at: None,
         }
@@ -1601,6 +1617,8 @@ impl App {
             ..Default::default()
         };
         data_state.load_universe_from_config();
+        // Auto-select all tickers by default for YOLO mode
+        data_state.select_all();
 
         // Randomize initial UI defaults.
         // Default: enabled (can be disabled).
@@ -2667,11 +2685,6 @@ impl App {
             return;
         }
 
-        if !self.results.has_multi_sweep() {
-            self.status_message = "Run a multi-symbol sweep first.".to_string();
-            return;
-        }
-
         self.results.cycle_view_mode();
         self.status_message = format!("View: {}", self.results.view_mode_name());
     }
@@ -2828,13 +2841,27 @@ impl App {
         }
     }
 
-    /// Handle 'a' key to select all tickers in current sector.
+    /// Handle 'a' key to select all tickers.
+    /// In Sectors view: selects ALL tickers globally (YOLO mode).
+    /// In Tickers view: selects all tickers in current sector.
     pub fn handle_select_all(&mut self) {
         if self.active_panel != Panel::Data {
             return;
         }
 
-        if self.data.view_mode == DataViewMode::Tickers {
+        if self.data.view_mode == DataViewMode::Sectors {
+            // Global select all for YOLO mode
+            self.data.select_all();
+            let total: usize = self
+                .data
+                .universe
+                .sectors
+                .iter()
+                .map(|s| s.tickers.len())
+                .sum();
+            self.status_message = format!("Selected all {} tickers (YOLO mode)", total);
+        } else {
+            // Select all in current sector
             self.data.select_all_in_sector();
             if let Some(sector) = self.data.selected_sector() {
                 let count = sector.len();
@@ -2843,13 +2870,20 @@ impl App {
         }
     }
 
-    /// Handle 'n' key to deselect all tickers in current sector.
+    /// Handle 'n' key to deselect all tickers.
+    /// In Sectors view: deselects ALL tickers globally.
+    /// In Tickers view: deselects all tickers in current sector.
     pub fn handle_select_none(&mut self) {
         if self.active_panel != Panel::Data {
             return;
         }
 
-        if self.data.view_mode == DataViewMode::Tickers {
+        if self.data.view_mode == DataViewMode::Sectors {
+            // Global deselect
+            self.data.deselect_all();
+            self.status_message = "Deselected all tickers".to_string();
+        } else {
+            // Deselect in current sector
             self.data.deselect_all_in_sector();
             if let Some(sector) = self.data.selected_sector() {
                 self.status_message = format!("Deselected all tickers in {}", sector.name);

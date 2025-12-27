@@ -3,3 +3,4 @@ export { MetricHeader } from './MetricHeader';
 export { ViewModeToggle } from './ViewModeToggle';
 export { ResultDetail } from './ResultDetail';
 export { ExportButton } from './ExportButton';
+export { Leaderboard } from './Leaderboard';

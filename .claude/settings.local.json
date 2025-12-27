@@ -52,7 +52,12 @@
       "Bash(cargo install:*)",
       "Bash(npx tsc:*)",
       "Bash(npm run build:*)",
-      "Bash(npm ls:*)"
+      "Bash(npm ls:*)",
+      "Bash(powershell -Command \"Test-Path ''c:\\\\Users\\\\Dan\\\\TrendLab\\\\apps\\\\trendlab-gui\\\\ui\\\\dist''\")",
+      "Bash(cargo tauri build:*)",
+      "Bash(where:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(npm run:*)"
     ]
   }
 }

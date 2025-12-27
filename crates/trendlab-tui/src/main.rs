@@ -248,7 +248,7 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
 
         KeyCode::Char('y') | KeyCode::Char('Y') => {
             // 'y' for YOLO mode - continuous auto-optimization
-            if app.active_panel == app::Panel::Sweep && !app.yolo.enabled && !app.sweep.is_running {
+            if !app.yolo.enabled && !app.sweep.is_running {
                 app.start_yolo_mode(channels);
             } else if app.yolo.enabled {
                 app.status_message = "YOLO mode running. Press ESC to stop.".to_string();
@@ -1031,6 +1031,15 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             app.chart.strategy_curves = strategy_curves;
             app.chart.view_mode = app::ChartViewMode::StrategyComparison;
 
+            // Set winning config from best entry for display in Statistics panel
+            if let Some(best) = cross_symbol_leaderboard.entries.first() {
+                app.chart.winning_config = Some(app::WinningConfig {
+                    strategy_name: best.strategy_type.name().to_string(),
+                    config_display: best.config_id.display(),
+                    symbol: Some(format!("{} symbols", best.symbols.len())),
+                });
+            }
+
             // Log best this round if available
             if let Some(best) = best_aggregate {
                 app.status_message = format!(
@@ -1101,6 +1110,15 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                 });
             }
             app.chart.strategy_curves = strategy_curves;
+
+            // Set winning config from best entry for display in Statistics panel
+            if let Some(best) = cross_symbol_leaderboard.entries.first() {
+                app.chart.winning_config = Some(app::WinningConfig {
+                    strategy_name: best.strategy_type.name().to_string(),
+                    config_display: best.config_id.display(),
+                    symbol: Some(format!("{} symbols", best.symbols.len())),
+                });
+            }
         }
     }
 }

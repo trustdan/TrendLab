@@ -1,13 +1,16 @@
-import { useEffect, useCallback } from 'react';
-import { VscTable, VscRefresh, VscTrash, VscLoading } from 'react-icons/vsc';
+import { useState, useEffect, useCallback } from 'react';
+import { VscTable, VscRefresh, VscTrash, VscLoading, VscStarFull } from 'react-icons/vsc';
 import { useAppStore } from '../../store';
 import {
   ResultsTable,
   ViewModeToggle,
   ResultDetail,
   ExportButton,
+  Leaderboard,
 } from './results';
 import { useKeyboardNavigation, type KeyboardAction } from '../../hooks';
+
+type ResultsView = 'results' | 'leaderboard';
 
 export function ResultsPanel() {
   const {
@@ -26,7 +29,17 @@ export function ResultsPanel() {
     cycleSortMetric,
     setActivePanel,
     setChartMode,
+    // YOLO leaderboard
+    crossSymbolLeaderboard,
+    leaderboard,
   } = useAppStore();
+
+  const [currentView, setCurrentView] = useState<ResultsView>('results');
+
+  // Check if we have leaderboard data
+  const hasLeaderboardData =
+    (crossSymbolLeaderboard?.entries?.length ?? 0) > 0 ||
+    (leaderboard?.entries?.length ?? 0) > 0;
 
   // Handle keyboard actions for Results panel
   const handleAction = useCallback(
@@ -76,18 +89,43 @@ export function ResultsPanel() {
     loadResults();
   }, [loadResults]);
 
-  const showResults = hasResults() && !isLoading;
-  const showEmpty = !hasResults() && !isLoading && !resultsError;
+  const showResults = hasResults() && !isLoading && currentView === 'results';
+  const showLeaderboard = currentView === 'leaderboard' && !isLoading;
+  const showEmpty = !hasResults() && !isLoading && !resultsError && currentView === 'results';
   const showError = resultsError !== null && !isLoading;
 
   return (
     <div className="panel results-panel">
       <div className="panel-header">
-        <h1 className="panel-title">Results</h1>
+        <div className="header-left">
+          <h1 className="panel-title">Results</h1>
+
+          {/* View toggle: Results vs Leaderboard */}
+          {hasLeaderboardData && (
+            <div className="view-toggle">
+              <button
+                className={`toggle-btn ${currentView === 'results' ? 'active' : ''}`}
+                onClick={() => setCurrentView('results')}
+                title="View sweep results"
+              >
+                <VscTable size={14} />
+                <span>Results</span>
+              </button>
+              <button
+                className={`toggle-btn ${currentView === 'leaderboard' ? 'active' : ''}`}
+                onClick={() => setCurrentView('leaderboard')}
+                title="View YOLO leaderboard"
+              >
+                <VscStarFull size={14} />
+                <span>Leaderboard</span>
+              </button>
+            </div>
+          )}
+        </div>
 
         <div className="panel-actions">
-          <ViewModeToggle isActive={false} />
-          <ExportButton />
+          {currentView === 'results' && <ViewModeToggle isActive={false} />}
+          {currentView === 'results' && <ExportButton />}
           <button
             className="icon-button"
             onClick={() => refreshResults()}
@@ -96,14 +134,16 @@ export function ResultsPanel() {
           >
             <VscRefresh className={isLoading ? 'spin' : ''} size={16} />
           </button>
-          <button
-            className="icon-button danger"
-            onClick={() => clearResults()}
-            disabled={isLoading || !hasResults()}
-            title="Clear all results"
-          >
-            <VscTrash size={16} />
-          </button>
+          {currentView === 'results' && (
+            <button
+              className="icon-button danger"
+              onClick={() => clearResults()}
+              disabled={isLoading || !hasResults()}
+              title="Clear all results"
+            >
+              <VscTrash size={16} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -148,6 +188,12 @@ export function ResultsPanel() {
         </div>
       )}
 
+      {showLeaderboard && (
+        <div className="leaderboard-content">
+          <Leaderboard isActive={activePanel === 'results'} />
+        </div>
+      )}
+
       <style>{`
         .results-panel {
           display: flex;
@@ -162,6 +208,46 @@ export function ResultsPanel() {
           margin-bottom: var(--space-md);
           padding-bottom: var(--space-sm);
           border-bottom: 1px solid var(--border);
+        }
+
+        .header-left {
+          display: flex;
+          align-items: center;
+          gap: var(--space-md);
+        }
+
+        .view-toggle {
+          display: flex;
+          gap: 2px;
+          padding: 2px;
+          background: var(--bg-secondary);
+          border-radius: var(--radius-sm);
+          border: 1px solid var(--border);
+        }
+
+        .toggle-btn {
+          display: flex;
+          align-items: center;
+          gap: var(--space-xs);
+          padding: var(--space-xs) var(--space-sm);
+          font-size: var(--font-size-xs);
+          background: transparent;
+          border: none;
+          color: var(--muted);
+          cursor: pointer;
+          border-radius: var(--radius-xs);
+          transition: all 0.15s;
+        }
+
+        .toggle-btn:hover {
+          color: var(--fg);
+          background: var(--bg-hover);
+        }
+
+        .toggle-btn.active {
+          background: var(--cyan);
+          color: var(--bg);
+          font-weight: 600;
         }
 
         .panel-actions {
@@ -302,6 +388,12 @@ export function ResultsPanel() {
         .results-sidebar {
           overflow: auto;
           min-height: 0;
+        }
+
+        .leaderboard-content {
+          flex: 1;
+          min-height: 0;
+          overflow: hidden;
         }
 
         @keyframes spin {

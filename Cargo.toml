@@ -5,6 +5,7 @@ members = [
     "crates/trendlab-cli",
     "crates/trendlab-bdd",
     "crates/trendlab-tui",
+    "crates/trendlab-launcher",
     "apps/trendlab-gui/src-tauri",
 ]
 

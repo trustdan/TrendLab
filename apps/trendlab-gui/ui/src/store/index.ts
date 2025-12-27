@@ -8,6 +8,7 @@ import { createStrategySlice } from './slices/strategy';
 import { createSweepSlice } from './slices/sweep';
 import { createResultsSlice } from './slices/results';
 import { createChartSlice } from './slices/chart';
+import { createYoloSlice } from './slices/yolo';
 import type { AppStore } from './types';
 
 /** Main app store */
@@ -22,6 +23,7 @@ export const useAppStore = create<AppStore>()(
       ...createSweepSlice(...a),
       ...createResultsSlice(...a),
       ...createChartSlice(...a),
+      ...createYoloSlice(...a),
     }),
     { name: 'TrendLab' }
   )
@@ -39,3 +41,4 @@ export * from './slices/strategy';
 export * from './slices/sweep';
 export * from './slices/results';
 export * from './slices/chart';
+export * from './slices/yolo';

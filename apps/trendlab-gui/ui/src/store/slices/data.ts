@@ -38,8 +38,10 @@ export interface DataSlice {
 
   // Selection actions
   toggleTicker: (ticker: string) => void;
+  selectAll: () => void;
   selectAllInSector: () => void;
   selectNone: () => void;
+  selectNoneGlobal: () => void;
   setSelectedTickers: (tickers: string[]) => void;
 
   // Navigation actions
@@ -109,6 +111,17 @@ export const createDataSlice: SliceCreator<DataSlice> = (set, get) => ({
       return { selectedTickers: newSelected };
     }),
 
+  selectAll: () =>
+    set((state) => {
+      const { universe } = state;
+      if (!universe) return state;
+      const allTickers = new Set<string>();
+      universe.sectors.forEach((sector) => {
+        sector.tickers.forEach((t) => allTickers.add(t));
+      });
+      return { selectedTickers: allTickers };
+    }),
+
   selectAllInSector: () =>
     set((state) => {
       const sector = get().getCurrentSector();
@@ -126,6 +139,8 @@ export const createDataSlice: SliceCreator<DataSlice> = (set, get) => ({
       sector.tickers.forEach((t) => newSelected.delete(t));
       return { selectedTickers: newSelected };
     }),
+
+  selectNoneGlobal: () => set({ selectedTickers: new Set() }),
 
   setSelectedTickers: (tickers) => set({ selectedTickers: new Set(tickers) }),
 

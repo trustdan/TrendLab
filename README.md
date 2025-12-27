@@ -452,6 +452,19 @@ Press `Tab` or `→` to switch to parameter editing:
 
 A polished desktop GUI built with **Tauri v2** + **React** + **TypeScript**, featuring **TradingView Lightweight Charts** for professional financial visualization.
 
+### Quick Start (GUI)
+
+```bash
+# Install frontend dependencies (first time only)
+cd apps/trendlab-gui/ui && npm install && cd ../../..
+
+# Run in development mode
+cargo tauri dev -c apps/trendlab-gui/src-tauri
+
+# Build for production
+cargo tauri build -c apps/trendlab-gui/src-tauri
+```
+
 ### Why Tauri?
 
 | Feature            | Benefit                                              |
@@ -461,17 +474,63 @@ A polished desktop GUI built with **Tauri v2** + **React** + **TypeScript**, fea
 | **Small bundle**   | ~5MB binaries using system WebView                   |
 | **Cross-platform** | Windows, macOS, Linux from single codebase           |
 
-### GUI Features (Planned)
+### GUI Features
 
 The GUI mirrors the TUI experience with enhanced visuals:
 
 | Panel        | TUI                           | GUI Enhancement                    |
 | ------------ | ----------------------------- | ---------------------------------- |
-| **Data**     | Sector list, ticker selection | Autocomplete search, drag-select   |
+| **Data**     | Sector list, ticker selection | Autocomplete search, virtualized lists |
 | **Strategy** | Category accordion, params    | Interactive parameter sliders      |
 | **Sweep**    | Progress bar                  | Real-time streaming progress       |
-| **Results**  | ASCII table                   | Sortable data grid with filtering  |
+| **Results**  | ASCII table                   | Sortable data grid with virtualization |
 | **Chart**    | Unicode candlesticks          | TradingView professional charts    |
+
+### GUI Keyboard Shortcuts
+
+The GUI uses the same keyboard shortcuts as the TUI for muscle-memory consistency.
+
+#### Global Navigation
+
+| Key | Action |
+|-----|--------|
+| `1-5` | Direct panel access (Data, Strategy, Sweep, Results, Chart) |
+| `Tab` | Next panel |
+| `Shift+Tab` | Previous panel |
+| `Esc` | Cancel current operation / close modal |
+| `?` | Show keyboard shortcuts help |
+
+#### Vim-Style List Navigation
+
+| Key | Action |
+|-----|--------|
+| `j` / `Down` | Move down in list |
+| `k` / `Up` | Move up in list |
+| `h` / `Left` | Collapse / navigate left |
+| `l` / `Right` | Expand / navigate right |
+| `Enter` | Confirm / expand / collapse |
+
+#### Selection
+
+| Key | Action |
+|-----|--------|
+| `Space` | Toggle item selection |
+| `a` | Select all in current context |
+| `n` | Deselect all (select none) |
+
+#### Panel-Specific Actions
+
+| Key | Panel | Action |
+|-----|-------|--------|
+| `f` | Data | Fetch data for selected tickers |
+| `s` | Data | Enter search mode |
+| `s` | Results | Cycle sort column |
+| `v` | Results | Cycle view mode |
+| `e` | Strategy | Toggle ensemble mode |
+| `d` | Chart | Toggle drawdown overlay |
+| `m` | Chart | Cycle chart mode |
+| `v` | Chart | Toggle volume subplot |
+| `c` | Chart | Toggle crosshair |
 
 ### Chart Capabilities
 
@@ -508,17 +567,22 @@ Using TradingView Lightweight Charts:
 └─────────────────────────────────────────────────────────┘
 ```
 
+### Accessibility Features
+
+- **ARIA labels** on all interactive elements
+- **Focus management** with roving tabindex for lists
+- **Screen reader announcements** for status updates
+- **Keyboard-only navigation** fully supported
+- **Virtualized lists** for performance with large datasets
+
 ### Roadmap
 
-See [docs/roadmap-tauri-gui.md](docs/roadmap-tauri-gui.md) for the detailed implementation plan with checkboxes:
+See [docs/roadmap-tauri-gui.md](docs/roadmap-tauri-gui.md) for the detailed implementation plan:
 
-- **Phase 1**: Foundation (crate setup, React scaffolding, navigation)
-- **Phase 2**: Data Panel + BDD tests
-- **Phase 3**: Strategy Panel + BDD tests
-- **Phase 4**: Sweep Panel + BDD tests
-- **Phase 5**: Results Panel + BDD tests
-- **Phase 6**: Chart Panel + TradingView integration
-- **Phase 7**: Polish (keyboard nav, accessibility, performance)
+- **Phase 1-6**: Core panels implemented (Data, Strategy, Sweep, Results, Chart)
+- **Phase 7**: Polish (keyboard nav, accessibility, performance) - Complete
+- **Phase 8**: Unified Launcher + Companion Mode - Complete
+- **YOLO Mode**: Auto-optimization with leaderboard - Planned
 
 ## Backtest Architecture
 

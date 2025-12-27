@@ -5,6 +5,7 @@ import type {
   SweepProgressPayload,
   SweepCompletePayload,
 } from './sweep';
+import type { Leaderboard, CrossSymbolLeaderboard } from './yolo';
 
 /** Event envelope wrapping all events */
 export interface EventEnvelope<T = unknown> {
@@ -52,6 +53,42 @@ export interface DataCompletePayload {
 // Note: SweepProgressPayload and SweepCompletePayload are defined in sweep.ts
 // They are imported above for use in EventPayloadMap but not re-exported here
 
+// ============================================================================
+// YOLO Event Payloads
+// ============================================================================
+
+/** YOLO started event payload */
+export interface YoloStartedPayload {
+  jobId: string;
+  totalSymbols: number;
+  totalStrategies: number;
+  randomizationPct: number;
+}
+
+/** YOLO progress event payload */
+export interface YoloProgressPayload {
+  iteration: number;
+  phase: string;
+  completedConfigs: number;
+  totalConfigs: number;
+}
+
+/** YOLO iteration complete event payload */
+export interface YoloIterationCompletePayload {
+  iteration: number;
+  crossSymbolLeaderboard: CrossSymbolLeaderboard;
+  perSymbolLeaderboard: Leaderboard;
+  configsTestedThisRound: number;
+}
+
+/** YOLO stopped event payload */
+export interface YoloStoppedPayload {
+  crossSymbolLeaderboard: CrossSymbolLeaderboard;
+  perSymbolLeaderboard: Leaderboard;
+  totalIterations: number;
+  totalConfigsTested: number;
+}
+
 /** All event types */
 export type EventType =
   | 'job:progress'
@@ -65,7 +102,11 @@ export type EventType =
   | 'sweep:progress'
   | 'sweep:complete'
   | 'sweep:failed'
-  | 'sweep:cancelled';
+  | 'sweep:cancelled'
+  | 'yolo:started'
+  | 'yolo:progress'
+  | 'yolo:iteration_complete'
+  | 'yolo:stopped';
 
 /** Map event type to payload type */
 export interface EventPayloadMap {
@@ -81,4 +122,8 @@ export interface EventPayloadMap {
   'sweep:complete': SweepCompletePayload;
   'sweep:failed': JobFailedPayload;
   'sweep:cancelled': JobCompletePayload;
+  'yolo:started': YoloStartedPayload;
+  'yolo:progress': YoloProgressPayload;
+  'yolo:iteration_complete': YoloIterationCompletePayload;
+  'yolo:stopped': YoloStoppedPayload;
 }

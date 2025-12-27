@@ -2,11 +2,13 @@ use crate::commands::chart::{ChartMode, ChartState};
 use crate::commands::results::{ResultRow, ResultsState, SortMetric, ViewMode};
 use crate::commands::strategy::{EnsembleConfig, StrategyParamValues};
 use crate::commands::sweep::SweepState;
+use crate::commands::yolo::YoloState;
 use crate::jobs::Jobs;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::RwLock;
 use trendlab_core::{Sector, Universe};
+use trendlab_launcher::ipc::{CompanionClient, CompanionEvent, JobType};
 
 /// Configuration for the data layer paths.
 #[derive(Debug, Clone)]
@@ -76,7 +78,6 @@ impl From<&Universe> for UniverseInfo {
     }
 }
 
-#[derive(Debug)]
 pub struct AppState {
     /// Job lifecycle tracking
     pub jobs: Jobs,
@@ -100,6 +101,10 @@ pub struct AppState {
     pub results: RwLock<ResultsState>,
     /// Chart panel state
     pub chart: RwLock<ChartState>,
+    /// YOLO mode state
+    pub yolo: RwLock<YoloState>,
+    /// Companion client for IPC (if launched from unified launcher)
+    pub companion: RwLock<CompanionClient>,
 }
 
 impl Default for AppState {
@@ -122,7 +127,102 @@ impl AppState {
             sweep: RwLock::new(SweepState::default()),
             results: RwLock::new(ResultsState::default()),
             chart: RwLock::new(ChartState::default()),
+            yolo: RwLock::new(YoloState::default()),
+            companion: RwLock::new(CompanionClient::noop()),
         }
+    }
+
+    /// Initialize companion client if launched from unified launcher.
+    /// This should be called from an async context.
+    pub async fn init_companion(&self) {
+        if let Some(client) = CompanionClient::try_connect().await {
+            client.send_started().await;
+            let mut companion = self.companion.write().unwrap();
+            *companion = client;
+        }
+    }
+
+    /// Emit an event to the companion terminal.
+    pub async fn emit_to_companion(&self, event: CompanionEvent) {
+        let client = self.companion.read().unwrap().clone();
+        client.emit(event).await;
+    }
+
+    /// Send shutdown signal to companion.
+    pub async fn shutdown_companion(&self) {
+        let client = self.companion.read().unwrap().clone();
+        client.send_shutdown().await;
+    }
+
+    // ========================================================================
+    // Companion Event Helpers
+    // ========================================================================
+
+    /// Emit job started event to companion.
+    pub async fn companion_job_started(&self, job_id: &str, job_type: JobType, description: &str) {
+        self.emit_to_companion(CompanionEvent::JobStarted {
+            job_id: job_id.to_string(),
+            job_type,
+            description: description.to_string(),
+        })
+        .await;
+    }
+
+    /// Emit job progress event to companion.
+    pub async fn companion_job_progress(
+        &self,
+        job_id: &str,
+        current: u64,
+        total: u64,
+        message: &str,
+    ) {
+        self.emit_to_companion(CompanionEvent::JobProgress {
+            job_id: job_id.to_string(),
+            current,
+            total,
+            message: message.to_string(),
+        })
+        .await;
+    }
+
+    /// Emit job complete event to companion.
+    pub async fn companion_job_complete(&self, job_id: &str, summary: &str, elapsed_ms: u64) {
+        self.emit_to_companion(CompanionEvent::JobComplete {
+            job_id: job_id.to_string(),
+            summary: summary.to_string(),
+            elapsed_ms,
+        })
+        .await;
+    }
+
+    /// Emit job failed event to companion.
+    pub async fn companion_job_failed(&self, job_id: &str, error: &str) {
+        self.emit_to_companion(CompanionEvent::JobFailed {
+            job_id: job_id.to_string(),
+            error: error.to_string(),
+        })
+        .await;
+    }
+
+    /// Emit sweep result event to companion.
+    pub async fn companion_sweep_result(
+        &self,
+        ticker: &str,
+        strategy: &str,
+        config_id: &str,
+        sharpe: f64,
+        cagr: f64,
+        max_dd: f64,
+    ) {
+        self.emit_to_companion(CompanionEvent::SweepResult {
+            ticker: ticker.to_string(),
+            strategy: strategy.to_string(),
+            config_id: config_id.to_string(),
+            sharpe,
+            cagr,
+            max_dd,
+        })
+        .await;
     }
 
     /// Initialize cached symbols by scanning the parquet directory.

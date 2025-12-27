@@ -1,0 +1,47 @@
+[package]
+name = "trendlab-launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Unified launcher for TrendLab (TUI/GUI selector + companion mode)"
+
+[dependencies]
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+
+# Terminal UI
+crossterm.workspace = true
+ratatui.workspace = true
+
+# Async runtime for IPC
+tokio = { version = "1", features = ["full", "net", "sync", "rt-multi-thread", "process"] }
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Date/time for timestamps
+chrono.workspace = true
+
+# Error handling
+anyhow.workspace = true
+thiserror.workspace = true
+
+# For colored console output (prompt)
+colored.workspace = true
+
+# Platform-specific dependencies
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
+[[bin]]
+name = "trendlab"
+path = "src/main.rs"
+
+[lib]
+name = "trendlab_launcher"
+path = "src/lib.rs"

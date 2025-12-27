@@ -24,8 +24,10 @@ export function DataPanel() {
   const expandToTickers = useAppStore((s) => s.expandToTickers);
   const collapseToSectors = useAppStore((s) => s.collapseToSectors);
   const toggleTicker = useAppStore((s) => s.toggleTicker);
+  const selectAll = useAppStore((s) => s.selectAll);
   const selectAllInSector = useAppStore((s) => s.selectAllInSector);
   const selectNone = useAppStore((s) => s.selectNone);
+  const selectNoneGlobal = useAppStore((s) => s.selectNoneGlobal);
   const enterSearchMode = useAppStore((s) => s.enterSearchMode);
   const exitSearchMode = useAppStore((s) => s.exitSearchMode);
   const getTickersForCurrentSector = useAppStore((s) => s.getTickersForCurrentSector);
@@ -85,11 +87,21 @@ export function DataPanel() {
           break;
 
         case 'select_all':
-          selectAllInSector();
+          // In sectors view, select ALL tickers globally; in tickers view, select all in current sector
+          if (viewMode === 'sectors') {
+            selectAll();
+          } else {
+            selectAllInSector();
+          }
           break;
 
         case 'select_none':
-          selectNone();
+          // In sectors view, deselect ALL; in tickers view, deselect current sector only
+          if (viewMode === 'sectors') {
+            selectNoneGlobal();
+          } else {
+            selectNone();
+          }
           break;
 
         case 'search':
@@ -143,8 +155,10 @@ export function DataPanel() {
       expandToTickers,
       collapseToSectors,
       toggleTicker,
+      selectAll,
       selectAllInSector,
       selectNone,
+      selectNoneGlobal,
       enterSearchMode,
       exitSearchMode,
       getTickersForCurrentSector,
@@ -156,7 +170,7 @@ export function DataPanel() {
 
   useKeyboardNavigation(handleAction);
 
-  // Load universe and cached symbols on mount
+  // Load universe and cached symbols on mount, then select all tickers by default
   useEffect(() => {
     const loadData = async () => {
       try {
@@ -166,12 +180,28 @@ export function DataPanel() {
         ]);
         setUniverse(universeData);
         setCachedSymbols(cachedData);
+        // Auto-select all tickers by default for YOLO mode
+        // Use setTimeout to ensure universe is set in store first
+        setTimeout(() => selectAll(), 0);
       } catch (err) {
         console.error('Failed to load data:', err);
       }
     };
     loadData();
-  }, [setUniverse, setCachedSymbols]);
+  }, [setUniverse, setCachedSymbols, selectAll]);
+
+  // Sync selected tickers to backend whenever selection changes
+  useEffect(() => {
+    const syncSelection = async () => {
+      try {
+        const tickers = Array.from(selectedTickers);
+        await invoke('update_selection', { tickers });
+      } catch (err) {
+        console.error('Failed to sync selection to backend:', err);
+      }
+    };
+    syncSelection();
+  }, [selectedTickers]);
 
   if (!universe) {
     return (
@@ -252,6 +282,8 @@ function SectorSummary() {
   const universe = useAppStore((s) => s.universe);
   const selectedTickers = useAppStore((s) => s.selectedTickers);
   const cachedSymbols = useAppStore((s) => s.cachedSymbols);
+  const selectAll = useAppStore((s) => s.selectAll);
+  const selectNoneGlobal = useAppStore((s) => s.selectNoneGlobal);
 
   if (!universe) return null;
 
@@ -267,15 +299,35 @@ function SectorSummary() {
     };
   });
 
+  const totalTickers = universe.sectors.reduce((sum, s) => sum + s.tickers.length, 0);
   const totalSelected = selectedTickers.size;
   const totalCached = [...selectedTickers].filter((t) =>
     cachedSymbols.has(t)
   ).length;
+  const allSelected = totalSelected === totalTickers;
 
   return (
     <div className="sector-summary-content">
       <div className="summary-header">
-        <h3>Selection Summary</h3>
+        <div className="summary-title-row">
+          <h3>Selection Summary</h3>
+          <div className="selection-buttons">
+            <button
+              className={`selection-btn ${allSelected ? 'active' : ''}`}
+              onClick={selectAll}
+              title="Select all tickers (A)"
+            >
+              All ({totalTickers})
+            </button>
+            <button
+              className={`selection-btn ${totalSelected === 0 ? 'active' : ''}`}
+              onClick={selectNoneGlobal}
+              title="Deselect all (N)"
+            >
+              None
+            </button>
+          </div>
+        </div>
         <div className="summary-totals">
           <span className="total-selected">{totalSelected} selected</span>
           <span className="total-cached">{totalCached} cached</span>
@@ -307,10 +359,41 @@ function SectorSummary() {
           padding-bottom: var(--space-sm);
           border-bottom: 1px solid var(--border);
         }
+        .summary-title-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: var(--space-xs);
+        }
         .summary-header h3 {
-          margin: 0 0 var(--space-xs) 0;
+          margin: 0;
           color: var(--fg);
           font-size: var(--font-size-md);
+        }
+        .selection-buttons {
+          display: flex;
+          gap: var(--space-xs);
+        }
+        .selection-btn {
+          background: var(--bg-secondary);
+          border: 1px solid var(--border);
+          color: var(--muted);
+          padding: var(--space-xs) var(--space-sm);
+          border-radius: var(--radius-sm);
+          cursor: pointer;
+          font-family: var(--font-mono);
+          font-size: var(--font-size-xs);
+          transition: all 0.15s ease;
+        }
+        .selection-btn:hover {
+          background: var(--bg);
+          color: var(--fg);
+          border-color: var(--blue);
+        }
+        .selection-btn.active {
+          background: var(--blue-bg);
+          color: var(--blue);
+          border-color: var(--blue);
         }
         .summary-totals {
           display: flex;

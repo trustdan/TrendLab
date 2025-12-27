@@ -4,3 +4,4 @@ export { CostModelEditor } from './CostModelEditor';
 export { DateRangeEditor } from './DateRangeEditor';
 export { SweepControls } from './SweepControls';
 export { ProgressBar } from './ProgressBar';
+export { YoloControls } from './YoloControls';

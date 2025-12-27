@@ -8,12 +8,19 @@ import {
   DateRangeEditor,
   SweepControls,
   ProgressBar,
+  YoloControls,
 } from './sweep';
 import type { SweepProgressPayload, SweepCompletePayload } from '../../types/sweep';
+import type {
+  YoloStartedPayload,
+  YoloProgressPayload,
+  YoloIterationCompletePayload,
+  YoloStoppedPayload,
+} from '../../types/events';
 
 export function SweepPanel() {
   const {
-    // State
+    // Sweep State
     selectionSummary,
     depthOptions,
     depth,
@@ -25,7 +32,10 @@ export function SweepPanel() {
     focusedDepthIndex,
     error,
 
-    // Actions
+    // Navigation
+    activePanel,
+
+    // Sweep Actions
     loadSweepState,
     loadSelectionSummary,
     loadDepthOptions,
@@ -40,6 +50,18 @@ export function SweepPanel() {
     setSweepFocus,
     moveFocus,
     selectFocusedDepth,
+
+    // YOLO State
+    yoloEnabled,
+    yoloPhase,
+    startYolo,
+    stopYolo,
+
+    // YOLO Actions (event handlers)
+    handleYoloStarted,
+    handleYoloProgress,
+    handleYoloIterationComplete,
+    handleYoloStopped,
   } = useAppStore();
 
   // Load initial data
@@ -48,6 +70,14 @@ export function SweepPanel() {
     loadSelectionSummary();
     loadDepthOptions();
   }, [loadSweepState, loadSelectionSummary, loadDepthOptions]);
+
+  // Reload selection summary when panel becomes active (in case selection changed elsewhere)
+  useEffect(() => {
+    if (activePanel === 'sweep') {
+      loadSelectionSummary();
+      loadDepthOptions();
+    }
+  }, [activePanel, loadSelectionSummary, loadDepthOptions]);
 
   // Listen for sweep events
   useEffect(() => {
@@ -67,10 +97,36 @@ export function SweepPanel() {
       handleCancelled();
     }).then((unsub) => unsubscribers.push(unsub));
 
+    // YOLO events
+    listen<{ payload: YoloStartedPayload }>('yolo:started', (event) => {
+      handleYoloStarted(event.payload.payload);
+    }).then((unsub) => unsubscribers.push(unsub));
+
+    listen<{ payload: YoloProgressPayload }>('yolo:progress', (event) => {
+      handleYoloProgress(event.payload.payload);
+    }).then((unsub) => unsubscribers.push(unsub));
+
+    listen<{ payload: YoloIterationCompletePayload }>('yolo:iteration_complete', (event) => {
+      handleYoloIterationComplete(event.payload.payload);
+    }).then((unsub) => unsubscribers.push(unsub));
+
+    listen<{ payload: YoloStoppedPayload }>('yolo:stopped', (event) => {
+      handleYoloStopped(event.payload.payload);
+    }).then((unsub) => unsubscribers.push(unsub));
+
     return () => {
       unsubscribers.forEach((unsub) => unsub());
     };
-  }, [updateProgress, handleComplete, handleCancelled, loadSelectionSummary]);
+  }, [
+    updateProgress,
+    handleComplete,
+    handleCancelled,
+    loadSelectionSummary,
+    handleYoloStarted,
+    handleYoloProgress,
+    handleYoloIterationComplete,
+    handleYoloStopped,
+  ]);
 
   // Keyboard navigation
   const handleKeyDown = useCallback(
@@ -110,11 +166,23 @@ export function SweepPanel() {
           if (isRunning) {
             e.preventDefault();
             cancelSweep();
+          } else if (yoloEnabled && yoloPhase === 'sweeping') {
+            e.preventDefault();
+            stopYolo();
+          }
+          break;
+        case 'y':
+        case 'Y':
+          e.preventDefault();
+          if (yoloEnabled && yoloPhase === 'sweeping') {
+            stopYolo();
+          } else if (!isRunning) {
+            startYolo();
           }
           break;
       }
     },
-    [sweepFocus, isRunning, moveFocus, selectFocusedDepth, startSweep, cancelSweep]
+    [sweepFocus, isRunning, moveFocus, selectFocusedDepth, startSweep, cancelSweep, yoloEnabled, yoloPhase, startYolo, stopYolo]
   );
 
   useEffect(() => {
@@ -184,6 +252,8 @@ export function SweepPanel() {
           onStart={startSweep}
           onCancel={cancelSweep}
         />
+
+        <YoloControls />
       </div>
 
       <style>{`

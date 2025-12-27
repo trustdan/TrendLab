@@ -1578,6 +1578,16 @@ fn handle_yolo_mode(
     let enabled_strategies = base_grid.enabled_strategies();
     let total_strategies = enabled_strategies.len();
 
+    // Ensure the cross-symbol leaderboard has enough capacity to represent strategies.
+    // In YOLO mode we care about "which strategies are attractive", so we keep the best
+    // aggregated config PER strategy (rather than multiple configs of the same strategy).
+    if cross_symbol_leaderboard.max_entries < total_strategies.max(4) {
+        cross_symbol_leaderboard.max_entries = total_strategies.max(4);
+    }
+    // If the leaderboard was created by an older build, it may contain multiple entries of the
+    // same strategy type. Compact it so we start from a clean "best-per-strategy" state.
+    yolo_compact_to_best_per_strategy(&mut cross_symbol_leaderboard);
+
     // Signal YOLO mode started
     let _ = update_tx.send(WorkerUpdate::YoloModeStarted {
         total_symbols,
@@ -1632,13 +1642,24 @@ fn handle_yolo_mode(
         per_symbol_leaderboard.total_iterations = iteration;
         cross_symbol_leaderboard.total_iterations = iteration;
 
-        // 1. Jitter the grid parameters
-        let jittered_grid = jitter_multi_strategy_grid(base_grid, randomization_pct, &mut rng);
+        // 1. Jitter the grid parameters (with occasional "wide" exploration iterations)
+        let wide = rng.gen_bool(0.20);
+        let iter_pct = if wide {
+            (randomization_pct * 3.0).min(0.90)
+        } else {
+            randomization_pct
+        };
+        let jittered_grid = jitter_multi_strategy_grid(base_grid, iter_pct, &mut rng);
 
-        // Send progress update
+        // Send progress update (include current jitter strength for visibility)
+        let phase = if wide {
+            format!("sweeping (wide ±{:.0}%)", iter_pct * 100.0)
+        } else {
+            format!("sweeping (±{:.0}%)", iter_pct * 100.0)
+        };
         let _ = update_tx.send(WorkerUpdate::YoloProgress {
             iteration,
-            phase: "sweeping".to_string(),
+            phase,
             completed_configs: 0,
             total_configs: jittered_grid.total_configs() * loaded_symbols.len(),
         });
@@ -1777,8 +1798,8 @@ fn handle_yolo_mode(
                     best_aggregate_this_round = Some(aggregated_result.clone());
                 }
 
-                // Try to insert into cross-symbol leaderboard
-                cross_symbol_leaderboard.try_insert(aggregated_result);
+                // Try to insert into cross-symbol leaderboard (best per strategy)
+                yolo_try_insert_best_per_strategy(&mut cross_symbol_leaderboard, aggregated_result);
             }
         }
 
@@ -1831,6 +1852,91 @@ fn handle_yolo_mode(
             configs_tested_this_round,
         });
     }
+}
+
+/// YOLO-specific insertion: keep only the best aggregated config per strategy type.
+///
+/// This makes the leaderboard answer "which strategies are attractive?" rather than
+/// "which configs are attractive?" (which can be dominated by many configs of one strategy).
+fn yolo_try_insert_best_per_strategy(
+    lb: &mut CrossSymbolLeaderboard,
+    entry: AggregatedConfigResult,
+) -> bool {
+    let rank_by = lb.rank_by;
+    let new_value = entry.aggregate_metrics.rank_value(rank_by);
+
+    // If strategy already present, replace only if better.
+    if let Some(pos) = lb.entries.iter().position(|e| e.strategy_type == entry.strategy_type) {
+        let existing_value = lb.entries[pos].aggregate_metrics.rank_value(rank_by);
+        if new_value > existing_value {
+            lb.entries[pos] = entry;
+            yolo_sort_and_rerank(lb);
+            lb.last_updated = Utc::now();
+            return true;
+        }
+        return false;
+    }
+
+    // New strategy
+    if lb.entries.len() < lb.max_entries {
+        lb.entries.push(entry);
+        yolo_sort_and_rerank(lb);
+        lb.last_updated = Utc::now();
+        return true;
+    }
+
+    // Full - check if better than worst and replace worst.
+    if let Some(worst) = lb.entries.last() {
+        let worst_value = worst.aggregate_metrics.rank_value(rank_by);
+        if new_value > worst_value {
+            lb.entries.pop();
+            lb.entries.push(entry);
+            yolo_sort_and_rerank(lb);
+            lb.last_updated = Utc::now();
+            return true;
+        }
+    }
+
+    false
+}
+
+fn yolo_sort_and_rerank(lb: &mut CrossSymbolLeaderboard) {
+    let rank_by = lb.rank_by;
+    lb.entries.sort_by(|a, b| {
+        let va = a.aggregate_metrics.rank_value(rank_by);
+        let vb = b.aggregate_metrics.rank_value(rank_by);
+        vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    for (i, entry) in lb.entries.iter_mut().enumerate() {
+        entry.rank = i + 1;
+    }
+}
+
+fn yolo_compact_to_best_per_strategy(lb: &mut CrossSymbolLeaderboard) {
+    use std::collections::HashMap;
+    let rank_by = lb.rank_by;
+    let mut best: HashMap<trendlab_core::StrategyTypeId, AggregatedConfigResult> = HashMap::new();
+
+    for entry in lb.entries.drain(..) {
+        best.entry(entry.strategy_type)
+            .and_modify(|cur| {
+                let cur_v = cur.aggregate_metrics.rank_value(rank_by);
+                let new_v = entry.aggregate_metrics.rank_value(rank_by);
+                if new_v > cur_v {
+                    *cur = entry.clone();
+                }
+            })
+            .or_insert(entry);
+    }
+
+    lb.entries = best.into_values().collect();
+    if lb.entries.len() > lb.max_entries {
+        // If max_entries is smaller than the number of strategies (shouldn't happen after resize),
+        // truncate after sorting.
+        yolo_sort_and_rerank(lb);
+        lb.entries.truncate(lb.max_entries);
+    }
+    yolo_sort_and_rerank(lb);
 }
 
 /// Generate all config IDs for a strategy's parameter grid.

@@ -7,6 +7,7 @@ import type { StrategySlice } from './slices/strategy';
 import type { SweepSlice } from './slices/sweep';
 import type { ResultsSlice } from './slices/results';
 import type { ChartSlice } from './slices/chart';
+import type { YoloSlice } from './slices/yolo';
 
 /** Combined app store type */
 export type AppStore = NavigationSlice &
@@ -16,7 +17,8 @@ export type AppStore = NavigationSlice &
   StrategySlice &
   SweepSlice &
   ResultsSlice &
-  ChartSlice;
+  ChartSlice &
+  YoloSlice;
 
 /** Slice creator type for Zustand v5 */
 export type SliceCreator<T> = StateCreator<AppStore, [], [], T>;

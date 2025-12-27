@@ -24,7 +24,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     match app.results.view_mode {
         ResultsViewMode::SingleSymbol => {
             if app.results.results.is_empty() {
-                draw_empty_state(f, chunks[0], is_active);
+                draw_empty_state(f, app, chunks[0], is_active);
             } else {
                 draw_single_symbol_table(f, app, chunks[0], is_active);
             }
@@ -48,19 +48,49 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     draw_help(f, app, chunks[1], is_active);
 }
 
-fn draw_empty_state(f: &mut Frame, area: Rect, is_active: bool) {
-    let lines = vec![
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "No results yet.",
-            Style::default().fg(colors::FG_DARK),
-        )]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Run a sweep in the Sweep panel (Tab to switch, Enter to start)",
-            Style::default().fg(colors::FG_DARK),
-        )]),
-    ];
+fn draw_empty_state(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
+    let has_yolo_results = !app.yolo.leaderboard.entries.is_empty()
+        || app
+            .yolo
+            .cross_symbol_leaderboard
+            .as_ref()
+            .is_some_and(|lb| !lb.entries.is_empty());
+
+    let lines = if has_yolo_results {
+        vec![
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "No single-symbol results in this view.",
+                Style::default().fg(colors::FG_DARK),
+            )]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled(
+                    "YOLO results available! ",
+                    Style::default().fg(colors::GREEN),
+                ),
+                Span::styled("Press ", Style::default().fg(colors::FG_DARK)),
+                Span::styled("'v'", Style::default().fg(colors::CYAN)),
+                Span::styled(
+                    " to switch to Leaderboard view.",
+                    Style::default().fg(colors::FG_DARK),
+                ),
+            ]),
+        ]
+    } else {
+        vec![
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "No results yet.",
+                Style::default().fg(colors::FG_DARK),
+            )]),
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "Run a sweep in the Sweep panel (Tab to switch, Enter to start)",
+                Style::default().fg(colors::FG_DARK),
+            )]),
+        ]
+    };
 
     let para = Paragraph::new(lines).block(panel_block("Results", is_active));
 

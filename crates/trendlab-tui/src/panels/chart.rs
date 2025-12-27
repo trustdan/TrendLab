@@ -291,7 +291,6 @@ fn draw_single_equity_chart(f: &mut Frame, app: &App, area: Rect, is_active: boo
         .block(panel_block(&title, is_active))
         .x_axis(
             Axis::default()
-                .title(Span::styled("Days", Style::default().fg(colors::FG_DARK)))
                 .style(Style::default().fg(colors::FG_DARK))
                 .bounds([0.0, x_max])
                 .labels(x_labels),
@@ -383,7 +382,6 @@ fn draw_multi_ticker_chart(f: &mut Frame, app: &App, area: Rect, is_active: bool
         .legend_position(Some(LegendPosition::TopRight))
         .x_axis(
             Axis::default()
-                .title(Span::styled("Days", Style::default().fg(colors::FG_DARK)))
                 .style(Style::default().fg(colors::FG_DARK))
                 .bounds([0.0, x_max])
                 .labels(x_labels),
@@ -459,7 +457,6 @@ fn draw_portfolio_chart(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
         .block(panel_block(&title, is_active))
         .x_axis(
             Axis::default()
-                .title(Span::styled("Days", Style::default().fg(colors::FG_DARK)))
                 .style(Style::default().fg(colors::FG_DARK))
                 .bounds([0.0, x_max])
                 .labels(x_labels),
@@ -499,18 +496,26 @@ fn strategy_color(strategy_type: StrategyTypeId) -> Color {
     }
 }
 
-/// Create legend line for strategy comparison view
-fn strategy_legend_line(curves: &[StrategyCurve]) -> Line<'static> {
+/// Maximum strategies to show in comparison chart (top N by Sharpe)
+const MAX_STRATEGY_CURVES: usize = 5;
+
+/// Create legend line for strategy comparison view with Sharpe ratios
+fn strategy_legend_line(curves: &[&StrategyCurve]) -> Line<'static> {
     let mut spans = vec![];
     for (i, curve) in curves.iter().enumerate() {
         if i > 0 {
-            spans.push(Span::raw(" "));
+            spans.push(Span::raw("  ")); // More spacing between entries
         }
         let color = strategy_color(curve.strategy_type);
-        spans.push(Span::styled("■ ", Style::default().fg(color)));
+        spans.push(Span::styled("■", Style::default().fg(color)));
         spans.push(Span::styled(
-            curve.strategy_type.name().to_string(),
+            format!("{} ", curve.strategy_type.name()),
             Style::default().fg(colors::FG),
+        ));
+        // Show Sharpe ratio for clarity
+        spans.push(Span::styled(
+            format!("({:.2})", curve.metrics.sharpe),
+            Style::default().fg(colors::FG_DARK),
         ));
     }
     Line::from(spans)
@@ -533,12 +538,20 @@ fn ticker_best_legend_line(tickers: &[TickerBestStrategy]) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Draw strategy comparison chart - overlay best config per strategy
+/// Draw strategy comparison chart - overlay best config per strategy (top 5 only)
 fn draw_strategy_comparison_chart(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
     if app.chart.strategy_curves.is_empty() {
         draw_no_strategy_data(f, area, is_active);
         return;
     }
+
+    // Take only top N strategies by Sharpe (curves are already sorted by Sharpe desc)
+    let top_curves: Vec<&StrategyCurve> = app
+        .chart
+        .strategy_curves
+        .iter()
+        .take(MAX_STRATEGY_CURVES)
+        .collect();
 
     // Split area: legend line at top, chart below
     let chunks = Layout::default()
@@ -546,18 +559,18 @@ fn draw_strategy_comparison_chart(f: &mut Frame, app: &App, area: Rect, is_activ
         .constraints([Constraint::Length(1), Constraint::Min(5)])
         .split(area);
 
-    // Render legend
-    let legend = Paragraph::new(strategy_legend_line(&app.chart.strategy_curves))
+    // Render legend with strategy names and Sharpe ratios
+    let legend = Paragraph::new(strategy_legend_line(&top_curves))
         .style(Style::default().bg(colors::BG));
     f.render_widget(legend, chunks[0]);
 
-    // Prepare all curve data
+    // Prepare curve data for top strategies only
     let mut all_data: Vec<Vec<(f64, f64)>> = Vec::new();
     let mut y_min = f64::MAX;
     let mut y_max = f64::MIN;
     let mut x_max = 0.0_f64;
 
-    for curve in &app.chart.strategy_curves {
+    for curve in &top_curves {
         let data: Vec<(f64, f64)> = curve
             .equity
             .iter()
@@ -579,14 +592,16 @@ fn draw_strategy_comparison_chart(f: &mut Frame, app: &App, area: Rect, is_activ
     y_min *= 0.95;
     y_max *= 1.05;
 
-    // Create datasets for each strategy
+    // Create datasets for each top strategy
     let datasets: Vec<Dataset> = all_data
         .iter()
-        .zip(app.chart.strategy_curves.iter())
+        .zip(top_curves.iter())
         .map(|(data, curve)| {
             let color = strategy_color(curve.strategy_type);
+            // Concise name with Sharpe for chart legend
+            let name = format!("{} ({:.2})", curve.strategy_type.name(), curve.metrics.sharpe);
             Dataset::default()
-                .name(curve.strategy_type.name())
+                .name(name)
                 .marker(Marker::Braille)
                 .graph_type(GraphType::Line)
                 .style(Style::default().fg(color))
@@ -595,9 +610,7 @@ fn draw_strategy_comparison_chart(f: &mut Frame, app: &App, area: Rect, is_activ
         .collect();
 
     // Use dates from first strategy curve if available
-    let x_labels: Vec<Span> = app
-        .chart
-        .strategy_curves
+    let x_labels: Vec<Span> = top_curves
         .first()
         .filter(|c| !c.dates.is_empty())
         .map(|c| generate_date_labels(&c.dates))
@@ -609,16 +622,14 @@ fn draw_strategy_comparison_chart(f: &mut Frame, app: &App, area: Rect, is_activ
         Span::from(format!("${:.0}k", y_max / 1000.0)),
     ];
 
-    let title = format!(
-        "Strategy Comparison ({} strategies)",
-        app.chart.strategy_curves.len()
-    );
+    let total = app.chart.strategy_curves.len();
+    let shown = top_curves.len();
+    let title = format!("Top {} Strategies by Sharpe (of {})", shown, total);
 
     let chart = Chart::new(datasets)
         .block(panel_block(&title, is_active))
         .x_axis(
             Axis::default()
-                .title(Span::styled("Days", Style::default().fg(colors::FG_DARK)))
                 .style(Style::default().fg(colors::FG_DARK))
                 .bounds([0.0, x_max])
                 .labels(x_labels),
@@ -725,7 +736,6 @@ fn draw_per_ticker_best_chart(f: &mut Frame, app: &App, area: Rect, is_active: b
         .block(panel_block(&title, is_active))
         .x_axis(
             Axis::default()
-                .title(Span::styled("Days", Style::default().fg(colors::FG_DARK)))
                 .style(Style::default().fg(colors::FG_DARK))
                 .bounds([0.0, x_max])
                 .labels(x_labels),
@@ -1355,6 +1365,19 @@ fn draw_chart_info(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
                 0.0
             };
             (cagr, 0.0, max_dd, final_val, 0, 0.0)
+        } else if !app.chart.strategy_curves.is_empty() {
+            // Use best (first) strategy curve metrics from YOLO mode
+            let best = &app.chart.strategy_curves[0];
+            let m = &best.metrics;
+            let final_val = best.equity.last().copied().unwrap_or(100_000.0);
+            (
+                m.cagr * 100.0,
+                m.sharpe,
+                m.max_drawdown * 100.0,
+                final_val,
+                m.num_trades,
+                m.win_rate * 100.0,
+            )
         } else {
             (0.0, 0.0, 0.0, 0.0, 0, 0.0)
         };
@@ -1364,6 +1387,7 @@ fn draw_chart_info(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
     let lines = if app.chart.equity_curve.is_empty()
         && app.chart.ticker_curves.is_empty()
         && app.chart.portfolio_curve.is_empty()
+        && app.chart.strategy_curves.is_empty()
     {
         vec![
             Line::from(vec![Span::styled(

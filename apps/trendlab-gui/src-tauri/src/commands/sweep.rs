@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio;
+use trendlab_launcher::ipc::JobType;
 
 use crate::error::GuiError;
 use crate::events::EventEnvelope;
@@ -355,6 +356,19 @@ pub async fn start_sweep(
         ),
     );
 
+    // Emit to companion terminal (if connected)
+    state
+        .companion_job_started(
+            &job_id,
+            JobType::Sweep,
+            &format!(
+                "Sweep: {} symbols × {} strategies",
+                symbols.len(),
+                strategies.len()
+            ),
+        )
+        .await;
+
     // Clone what we need for the async task
     let job_id_clone = job_id.clone();
     let app_clone = app.clone();
@@ -390,6 +404,12 @@ pub async fn start_sweep(
                             }),
                         ),
                     );
+
+                    // Emit to companion terminal
+                    state_handle
+                        .companion_job_failed(&job_id_clone, "Cancelled by user")
+                        .await;
+
                     return;
                 }
 
@@ -421,6 +441,16 @@ pub async fn start_sweep(
                                 },
                             ),
                         );
+
+                        // Emit to companion terminal
+                        state_handle
+                            .companion_job_progress(
+                                &job_id_clone,
+                                current as u64,
+                                total_configs as u64,
+                                &format!("{} × {}", symbol, strategy),
+                            )
+                            .await;
                     }
 
                     // Tiny delay to simulate work
@@ -454,6 +484,18 @@ pub async fn start_sweep(
                 },
             ),
         );
+
+        // Emit to companion terminal
+        state_handle
+            .companion_job_complete(
+                &job_id_clone,
+                &format!(
+                    "Completed {} configs, {} successful, {} failed",
+                    total_configs, completed, failed
+                ),
+                elapsed.as_millis() as u64,
+            )
+            .await;
     });
 
     Ok(StartSweepResponse {

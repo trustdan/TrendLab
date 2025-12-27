@@ -31,7 +31,7 @@ function shouldShowStartupModal(): boolean {
 }
 
 export function App() {
-  const { activePanel, setStatus, setActivePanel } = useAppStore();
+  const { activePanel, setStatus, setActivePanel, loadYoloState, loadLeaderboards } = useAppStore();
   const [showStartupModal, setShowStartupModal] = useState(shouldShowStartupModal);
   const [appMode, setAppMode] = useState<StartupMode>(null);
 
@@ -47,6 +47,12 @@ export function App() {
       // localStorage not available
     }
   }, []);
+
+  // Load YOLO state and leaderboards on startup
+  useEffect(() => {
+    loadYoloState();
+    loadLeaderboards();
+  }, [loadYoloState, loadLeaderboards]);
 
   // Handle mode selection from startup modal
   const handleModeSelect = useCallback((mode: 'manual' | 'full-auto') => {

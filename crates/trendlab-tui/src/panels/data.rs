@@ -357,7 +357,11 @@ fn draw_sector_summary(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
         Style::default().fg(colors::FG_DARK),
     )]));
     lines.push(Line::from(vec![Span::styled(
-        "  f: Fetch selected  s: Search symbols",
+        "  a: Select ALL  n: Deselect ALL  f: Fetch",
+        Style::default().fg(colors::FG_DARK),
+    )]));
+    lines.push(Line::from(vec![Span::styled(
+        "  s: Search symbols",
         Style::default().fg(colors::FG_DARK),
     )]));
 

@@ -6114,6 +6114,25 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "trendlab-core",
+ "trendlab-launcher",
+]
+
+[[package]]
+name = "trendlab-launcher"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "colored",
+ "crossterm 0.28.1",
+ "libc",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

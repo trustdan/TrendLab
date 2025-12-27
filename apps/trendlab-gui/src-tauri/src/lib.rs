@@ -5,6 +5,7 @@ pub mod jobs;
 pub mod state;
 
 use state::AppState;
+use tauri::Manager;
 
 pub fn run() {
     let app_state = AppState::new();
@@ -13,6 +14,24 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(app_state)
+        .setup(|app| {
+            // Initialize companion client in async context
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = app_handle.state::<AppState>();
+                state.init_companion().await;
+            });
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                // Send shutdown to companion on window close
+                let state = window.state::<AppState>();
+                tauri::async_runtime::block_on(async move {
+                    state.shutdown_companion().await;
+                });
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             // System
             commands::system::ping_job,
@@ -72,7 +91,12 @@ pub fn run() {
             commands::chart::get_portfolio_curve,
             commands::chart::get_strategy_curves,
             commands::chart::get_trades,
-            commands::chart::get_chart_data
+            commands::chart::get_chart_data,
+            // YOLO
+            commands::yolo::get_yolo_state,
+            commands::yolo::get_leaderboard,
+            commands::yolo::start_yolo_mode,
+            commands::yolo::stop_yolo_mode
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
