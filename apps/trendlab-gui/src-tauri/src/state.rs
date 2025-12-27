@@ -1,5 +1,9 @@
+use crate::commands::chart::{ChartMode, ChartState};
+use crate::commands::results::{ResultRow, ResultsState, SortMetric, ViewMode};
+use crate::commands::strategy::{EnsembleConfig, StrategyParamValues};
+use crate::commands::sweep::SweepState;
 use crate::jobs::Jobs;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::RwLock;
 use trendlab_core::{Sector, Universe};
@@ -84,6 +88,18 @@ pub struct AppState {
     pub cached_symbols: RwLock<HashSet<String>>,
     /// Data directory configuration
     pub data_config: DataConfig,
+    /// Currently selected strategies
+    pub selected_strategies: RwLock<HashSet<String>>,
+    /// Strategy parameter values (strategy_id -> params)
+    pub strategy_params: RwLock<HashMap<String, StrategyParamValues>>,
+    /// Ensemble configuration
+    pub ensemble_config: RwLock<EnsembleConfig>,
+    /// Sweep panel state
+    pub sweep: RwLock<SweepState>,
+    /// Results panel state
+    pub results: RwLock<ResultsState>,
+    /// Chart panel state
+    pub chart: RwLock<ChartState>,
 }
 
 impl Default for AppState {
@@ -100,6 +116,12 @@ impl AppState {
             selected_tickers: RwLock::new(HashSet::new()),
             cached_symbols: RwLock::new(HashSet::new()),
             data_config: DataConfig::default(),
+            selected_strategies: RwLock::new(HashSet::new()),
+            strategy_params: RwLock::new(HashMap::new()),
+            ensemble_config: RwLock::new(EnsembleConfig::default()),
+            sweep: RwLock::new(SweepState::default()),
+            results: RwLock::new(ResultsState::default()),
+            chart: RwLock::new(ChartState::default()),
         }
     }
 
@@ -154,5 +176,138 @@ impl AppState {
     pub fn set_selected_tickers(&self, tickers: Vec<String>) {
         let mut selected = self.selected_tickers.write().unwrap();
         *selected = tickers.into_iter().collect();
+    }
+
+    // ========================================================================
+    // Strategy State Methods
+    // ========================================================================
+
+    /// Get selected strategies.
+    pub fn get_selected_strategies(&self) -> Vec<String> {
+        let selected = self.selected_strategies.read().unwrap();
+        let mut strategies: Vec<_> = selected.iter().cloned().collect();
+        strategies.sort();
+        strategies
+    }
+
+    /// Set selected strategies.
+    pub fn set_selected_strategies(&self, strategies: Vec<String>) {
+        let mut selected = self.selected_strategies.write().unwrap();
+        *selected = strategies.into_iter().collect();
+    }
+
+    /// Get parameter values for a strategy.
+    pub fn get_strategy_params(&self, strategy_id: &str) -> StrategyParamValues {
+        let params = self.strategy_params.read().unwrap();
+        params
+            .get(strategy_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Set parameter values for a strategy.
+    pub fn set_strategy_params(&self, strategy_id: &str, values: StrategyParamValues) {
+        let mut params = self.strategy_params.write().unwrap();
+        params.insert(strategy_id.to_string(), values);
+    }
+
+    /// Get ensemble configuration.
+    pub fn get_ensemble_config(&self) -> EnsembleConfig {
+        let config = self.ensemble_config.read().unwrap();
+        config.clone()
+    }
+
+    /// Set ensemble enabled state.
+    pub fn set_ensemble_enabled(&self, enabled: bool) {
+        let mut config = self.ensemble_config.write().unwrap();
+        config.enabled = enabled;
+    }
+
+    // ========================================================================
+    // Results State Methods
+    // ========================================================================
+
+    /// Get results state.
+    pub fn get_results_state(&self) -> ResultsState {
+        self.results.read().unwrap().clone()
+    }
+
+    /// Set results from a sweep.
+    pub fn set_results(&self, sweep_id: String, results: Vec<ResultRow>) {
+        let mut state = self.results.write().unwrap();
+        state.sweep_id = Some(sweep_id);
+        state.results = results;
+        state.selected_id = None;
+    }
+
+    /// Add a single result (for streaming during sweep).
+    pub fn add_result(&self, result: ResultRow) {
+        let mut state = self.results.write().unwrap();
+        state.results.push(result);
+    }
+
+    /// Set selected result ID.
+    pub fn set_selected_result(&self, result_id: Option<String>) {
+        let mut state = self.results.write().unwrap();
+        state.selected_id = result_id;
+    }
+
+    /// Set view mode.
+    pub fn set_view_mode(&self, view_mode: ViewMode) {
+        let mut state = self.results.write().unwrap();
+        state.view_mode = view_mode;
+    }
+
+    /// Set sort configuration.
+    pub fn set_sort_config(&self, sort_by: SortMetric, ascending: bool) {
+        let mut state = self.results.write().unwrap();
+        state.sort_by = sort_by;
+        state.ascending = ascending;
+    }
+
+    /// Clear results.
+    pub fn clear_results(&self) {
+        let mut state = self.results.write().unwrap();
+        *state = ResultsState::default();
+    }
+
+    // ========================================================================
+    // Chart State Methods
+    // ========================================================================
+
+    /// Get chart state.
+    pub fn get_chart_state(&self) -> ChartState {
+        self.chart.read().unwrap().clone()
+    }
+
+    /// Set chart mode.
+    pub fn set_chart_mode(&self, mode: ChartMode) {
+        let mut state = self.chart.write().unwrap();
+        state.mode = mode;
+    }
+
+    /// Set chart selection (symbol/strategy/config).
+    pub fn set_chart_selection(
+        &self,
+        symbol: Option<String>,
+        strategy: Option<String>,
+        config_id: Option<String>,
+    ) {
+        let mut state = self.chart.write().unwrap();
+        state.symbol = symbol;
+        state.strategy = strategy;
+        state.config_id = config_id;
+    }
+
+    /// Toggle chart overlay.
+    pub fn toggle_chart_overlay(&self, overlay: &str, enabled: bool) {
+        let mut state = self.chart.write().unwrap();
+        match overlay {
+            "drawdown" => state.overlays.drawdown = enabled,
+            "volume" => state.overlays.volume = enabled,
+            "trades" => state.overlays.trades = enabled,
+            "crosshair" => state.overlays.crosshair = enabled,
+            _ => {}
+        }
     }
 }

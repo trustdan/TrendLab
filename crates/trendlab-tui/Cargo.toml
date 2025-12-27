@@ -17,6 +17,7 @@ tokio.workspace = true
 reqwest.workspace = true
 rayon.workspace = true
 rand.workspace = true
+rand_chacha = "0.3"
 urlencoding = "2.1"
 
 [[bin]]

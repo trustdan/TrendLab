@@ -13,6 +13,12 @@ pub enum GuiError {
     #[error("{message}")]
     InvalidInput { message: String },
 
+    #[error("{0}")]
+    InvalidState(String),
+
+    #[error("Not found: {resource}")]
+    NotFound { resource: String },
+
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -23,6 +29,18 @@ impl GuiError {
             GuiError::InvalidInput { message } => ErrorEnvelope {
                 code: "InvalidInput",
                 message: message.clone(),
+                details: None,
+                retryable: false,
+            },
+            GuiError::InvalidState(message) => ErrorEnvelope {
+                code: "InvalidState",
+                message: message.clone(),
+                details: None,
+                retryable: false,
+            },
+            GuiError::NotFound { resource } => ErrorEnvelope {
+                code: "NotFound",
+                message: format!("Not found: {}", resource),
                 details: None,
                 retryable: false,
             },

@@ -167,7 +167,26 @@ fn draw_progress(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
 }
 
 fn draw_controls(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
-    let action = if app.sweep.is_running {
+    let action = if app.yolo.enabled {
+        // YOLO mode running
+        vec![
+            Span::styled("🔥 YOLO Mode iter ", Style::default().fg(colors::MAGENTA)),
+            Span::styled(
+                format!("{}", app.yolo.iteration),
+                Style::default()
+                    .fg(colors::YELLOW)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" | Press ", Style::default().fg(colors::FG_DARK)),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(colors::RED)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" to stop", Style::default().fg(colors::FG_DARK)),
+        ]
+    } else if app.sweep.is_running {
         vec![
             Span::styled("Press ", Style::default().fg(colors::FG_DARK)),
             Span::styled(
@@ -187,13 +206,39 @@ fn draw_controls(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
                     .fg(colors::GREEN)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" to start sweep", Style::default().fg(colors::FG_DARK)),
+            Span::styled(" to sweep, ", Style::default().fg(colors::FG_DARK)),
+            Span::styled(
+                "Y",
+                Style::default()
+                    .fg(colors::MAGENTA)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" for YOLO Mode", Style::default().fg(colors::FG_DARK)),
         ]
     };
 
-    let lines = vec![
-        Line::from(action),
-        Line::from(vec![
+    let mut lines = vec![Line::from(action)];
+
+    // Show YOLO leaderboard summary if running or has entries
+    if app.yolo.enabled || !app.yolo.leaderboard.entries.is_empty() {
+        let best_sharpe = app.yolo.leaderboard.best_sharpe().unwrap_or(0.0);
+        let entry_count = app.yolo.leaderboard.entries.len();
+        lines.push(Line::from(vec![
+            Span::styled("Leaderboard: ", Style::default().fg(colors::FG_DARK)),
+            Span::styled(
+                format!("{} entries", entry_count),
+                Style::default().fg(colors::CYAN),
+            ),
+            Span::styled(" | Best Sharpe: ", Style::default().fg(colors::FG_DARK)),
+            Span::styled(
+                format!("{:.3}", best_sharpe),
+                Style::default()
+                    .fg(colors::GREEN)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
             Span::styled("Use ", Style::default().fg(colors::FG_DARK)),
             Span::styled("↑↓", Style::default().fg(colors::CYAN)),
             Span::styled(
@@ -202,8 +247,8 @@ fn draw_controls(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
             ),
             Span::styled("←→", Style::default().fg(colors::CYAN)),
             Span::styled(" to adjust grid", Style::default().fg(colors::FG_DARK)),
-        ]),
-    ];
+        ]));
+    }
 
     let para = Paragraph::new(lines).block(panel_block("Controls", is_active));
 

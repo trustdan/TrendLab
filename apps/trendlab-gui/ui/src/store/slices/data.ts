@@ -1,4 +1,4 @@
-import type { StateCreator } from 'zustand';
+import type { SliceCreator } from '../types';
 import type {
   Universe,
   Sector,
@@ -29,6 +29,7 @@ export interface DataSlice {
   // Fetch state
   fetchProgress: FetchProgress | null;
   isFetching: boolean;
+  fetchJobId: string | null;
 
   // Actions
   setUniverse: (universe: Universe) => void;
@@ -60,6 +61,7 @@ export interface DataSlice {
   // Fetch actions
   setFetchProgress: (progress: FetchProgress | null) => void;
   setIsFetching: (fetching: boolean) => void;
+  setFetchJobId: (jobId: string | null) => void;
 
   // Helpers
   getCurrentSector: () => Sector | null;
@@ -68,7 +70,7 @@ export interface DataSlice {
 }
 
 /** Create data slice */
-export const createDataSlice: StateCreator<DataSlice> = (set, get) => ({
+export const createDataSlice: SliceCreator<DataSlice> = (set, get) => ({
   // Initial state
   universe: null,
   cachedSymbols: new Set(),
@@ -83,6 +85,7 @@ export const createDataSlice: StateCreator<DataSlice> = (set, get) => ({
   searchSelectedIndex: 0,
   fetchProgress: null,
   isFetching: false,
+  fetchJobId: null,
 
   // Universe and cache actions
   setUniverse: (universe) => set({ universe }),
@@ -202,6 +205,7 @@ export const createDataSlice: StateCreator<DataSlice> = (set, get) => ({
   // Fetch actions
   setFetchProgress: (progress) => set({ fetchProgress: progress }),
   setIsFetching: (fetching) => set({ isFetching: fetching }),
+  setFetchJobId: (jobId) => set({ fetchJobId: jobId }),
 
   // Helper methods
   getCurrentSector: () => {

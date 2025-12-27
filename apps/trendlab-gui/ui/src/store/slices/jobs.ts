@@ -1,4 +1,4 @@
-import type { StateCreator } from 'zustand';
+import type { SliceCreator } from '../types';
 import type { ErrorEnvelope } from '../../types/error';
 import type { JobStatus } from '../../types/events';
 
@@ -36,7 +36,7 @@ export interface JobsSlice {
 }
 
 /** Create jobs slice */
-export const createJobsSlice: StateCreator<JobsSlice> = (set) => ({
+export const createJobsSlice: SliceCreator<JobsSlice> = (set) => ({
   jobs: {},
   activeJobId: null,
   lastError: null,

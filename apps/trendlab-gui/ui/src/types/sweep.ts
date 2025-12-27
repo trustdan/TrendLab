@@ -1,7 +1,108 @@
+// ============================================================================
+// Sweep Types - Mirrors Rust backend types (commands/sweep.rs)
+// ============================================================================
+
 import type { MetricsSummary } from './metrics';
-import type { StrategyConfigId, StrategyTypeId, SweepDepth } from './strategy';
+import type { StrategyConfigId, StrategyTypeId } from './strategy';
+
+// Import DateRange from bar.ts (canonical source)
+import type { DateRange } from './bar';
+
+// ============================================================================
+// Sweep Depth
+// ============================================================================
+
+/** Sweep depth level (controls parameter grid density) */
+export type SweepDepth = 'quick' | 'normal' | 'deep' | 'exhaustive';
+
+/** Depth option for selector (from backend) */
+export interface DepthOption {
+  id: SweepDepth;
+  name: string;
+  description: string;
+  estimated_configs: number;
+}
+
+// ============================================================================
+// Cost Model
+// ============================================================================
+
+/** Cost model configuration */
+export interface CostModel {
+  fees_bps: number;
+  slippage_bps: number;
+}
+
+/** Default cost model */
+export const DEFAULT_COST_MODEL: CostModel = {
+  fees_bps: 5.0,
+  slippage_bps: 5.0,
+};
+
+// ============================================================================
+// Sweep State & Config
+// ============================================================================
+
+/** Sweep state from backend */
+export interface SweepState {
+  depth: SweepDepth;
+  cost_model: CostModel;
+  date_range: DateRange;
+  is_running: boolean;
+  current_job_id: string | null;
+}
+
+/** Selection summary for display */
+export interface SelectionSummary {
+  symbols: string[];
+  strategies: string[];
+  symbol_count: number;
+  strategy_count: number;
+  estimated_configs: number;
+  has_cached_data: boolean;
+}
+
+/** Start sweep response */
+export interface StartSweepResponse {
+  job_id: string;
+  total_configs: number;
+}
+
+// ============================================================================
+// Sweep Events
+// ============================================================================
 
 /** Sweep progress event payload */
+export interface SweepProgressPayload {
+  job_id: string;
+  current: number;
+  total: number;
+  symbol: string;
+  strategy: string;
+  config_id: string;
+  message: string;
+}
+
+/** Sweep complete event payload */
+export interface SweepCompletePayload {
+  job_id: string;
+  total_configs: number;
+  successful: number;
+  failed: number;
+  elapsed_ms: number;
+}
+
+/** Sweep cancelled event payload */
+export interface SweepCancelledPayload {
+  job_id: string;
+  completed: number;
+}
+
+// ============================================================================
+// Sweep Results (for Results panel - kept from original)
+// ============================================================================
+
+/** Sweep progress event payload (legacy format) */
 export interface SweepProgress {
   current: number;
   total: number;
@@ -63,12 +164,6 @@ export interface SweepJobConfig {
   symbols: string[];
   strategies: StrategyTypeId[];
   depth: SweepDepth;
-  dateRange: {
-    start: string;
-    end: string;
-  };
-  costModel: {
-    feesBps: number;
-    slippageBps: number;
-  };
+  dateRange: DateRange;
+  costModel: CostModel;
 }

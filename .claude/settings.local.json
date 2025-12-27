@@ -50,7 +50,9 @@
       "Bash(npx tsc --noEmit)",
       "Bash(cargo deny check:*)",
       "Bash(cargo install:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm ls:*)"
     ]
   }
 }

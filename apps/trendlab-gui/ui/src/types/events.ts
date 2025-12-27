@@ -1,5 +1,10 @@
 import type { ErrorEnvelope } from './error';
-import type { SweepProgress } from './sweep';
+// Import sweep types directly - they are the authoritative source
+import type {
+  SweepProgress,
+  SweepProgressPayload,
+  SweepCompletePayload,
+} from './sweep';
 
 /** Event envelope wrapping all events */
 export interface EventEnvelope<T = unknown> {
@@ -31,7 +36,7 @@ export interface JobFailedPayload {
 
 /** Data fetch progress payload */
 export interface DataProgressPayload {
-  ticker: string;
+  symbol: string;
   current: number;
   total: number;
   message: string;
@@ -44,19 +49,8 @@ export interface DataCompletePayload {
   message: string;
 }
 
-/** Sweep progress event payload (alias for domain type) */
-export type SweepProgressPayload = SweepProgress;
-
-/** Sweep complete payload */
-export interface SweepCompletePayload {
-  totalConfigs: number;
-  bestResult?: {
-    ticker: string;
-    strategy: string;
-    sharpe: number;
-  };
-  message: string;
-}
+// Note: SweepProgressPayload and SweepCompletePayload are defined in sweep.ts
+// They are imported above for use in EventPayloadMap but not re-exported here
 
 /** All event types */
 export type EventType =

@@ -7,44 +7,53 @@ import type { FetchProgress as FetchProgressType, FetchComplete } from '../../..
 export function FetchProgress() {
   const fetchProgress = useAppStore((s) => s.fetchProgress);
   const isFetching = useAppStore((s) => s.isFetching);
+  const fetchJobId = useAppStore((s) => s.fetchJobId);
   const setFetchProgress = useAppStore((s) => s.setFetchProgress);
   const setIsFetching = useAppStore((s) => s.setIsFetching);
-  const addCachedSymbol = useAppStore((s) => s.addCachedSymbol);
+  const setFetchJobId = useAppStore((s) => s.setFetchJobId);
+  const setCachedSymbols = useAppStore((s) => s.setCachedSymbols);
 
   // Listen to fetch events
   useEffect(() => {
-    const unlistenProgress = listen<FetchProgressType>('data:progress', (event) => {
-      setFetchProgress(event.payload);
-    });
+    const unsubscribers: Array<() => void> = [];
 
-    const unlistenComplete = listen<FetchComplete>('data:complete', (event) => {
+    // Progress events - extract payload from EventEnvelope wrapper
+    listen<{ payload: FetchProgressType }>('data:progress', (event) => {
+      setFetchProgress(event.payload.payload);
+    }).then((unsub) => unsubscribers.push(unsub));
+
+    // Complete event - refresh cached symbols list
+    listen<{ payload: FetchComplete }>('data:complete', async (event) => {
       setIsFetching(false);
       setFetchProgress(null);
-      console.log('Fetch complete:', event.payload);
-    });
+      setFetchJobId(null);
+      console.log('Fetch complete:', event.payload.payload);
 
-    const unlistenCancelled = listen<{ symbols_completed: number }>('data:cancelled', (event) => {
+      // Refresh cached symbols from backend
+      try {
+        const cachedData = await invoke<string[]>('get_cached_symbols');
+        setCachedSymbols(cachedData);
+      } catch (err) {
+        console.error('Failed to refresh cached symbols:', err);
+      }
+    }).then((unsub) => unsubscribers.push(unsub));
+
+    // Cancelled event
+    listen('data:cancelled', () => {
       setIsFetching(false);
       setFetchProgress(null);
-      console.log('Fetch cancelled:', event.payload);
-    });
-
-    const unlistenCached = listen<{ symbol: string }>('data:cached', (event) => {
-      addCachedSymbol(event.payload.symbol);
-    });
+      setFetchJobId(null);
+    }).then((unsub) => unsubscribers.push(unsub));
 
     return () => {
-      unlistenProgress.then((f) => f());
-      unlistenComplete.then((f) => f());
-      unlistenCancelled.then((f) => f());
-      unlistenCached.then((f) => f());
+      unsubscribers.forEach((unsub) => unsub());
     };
-  }, [setFetchProgress, setIsFetching, addCachedSymbol]);
+  }, [setFetchProgress, setIsFetching, setFetchJobId, setCachedSymbols]);
 
   const handleCancel = async () => {
+    if (!fetchJobId) return;
     try {
-      // Find the active fetch job and cancel it
-      await invoke('cancel_job', { jobId: 'fetch' });
+      await invoke('cancel_job', { jobId: fetchJobId });
     } catch (err) {
       console.error('Failed to cancel fetch:', err);
     }

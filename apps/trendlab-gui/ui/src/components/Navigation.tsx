@@ -13,27 +13,35 @@ export function Navigation() {
   const { activePanel, setActivePanel } = useAppStore();
 
   return (
-    <nav className="app-nav">
+    <nav className="app-nav" aria-label="Main panels">
       <div className="nav-header">
-        <span className="nav-title">Panels</span>
+        <span className="nav-title" id="nav-title">Panels</span>
       </div>
-      {PANELS.map((panel) => {
-        const Icon = PANEL_ICONS[panel.id];
-        const isActive = activePanel === panel.id;
+      <div role="tablist" aria-labelledby="nav-title" aria-orientation="vertical">
+        {PANELS.map((panel) => {
+          const Icon = PANEL_ICONS[panel.id];
+          const isActive = activePanel === panel.id;
 
-        return (
-          <button
-            key={panel.id}
-            className={`nav-item ${isActive ? 'active' : ''}`}
-            onClick={() => setActivePanel(panel.id)}
-            aria-current={isActive ? 'page' : undefined}
-          >
-            <Icon size={18} />
-            <span className="nav-label">{panel.label}</span>
-            <span className="nav-key">{panel.shortcut}</span>
-          </button>
-        );
-      })}
+          return (
+            <button
+              key={panel.id}
+              role="tab"
+              id={`tab-${panel.id}`}
+              aria-selected={isActive}
+              aria-controls={`panel-${panel.id}`}
+              tabIndex={isActive ? 0 : -1}
+              className={`nav-item ${isActive ? 'active' : ''}`}
+              onClick={() => setActivePanel(panel.id)}
+            >
+              <Icon size={18} aria-hidden="true" />
+              <span className="nav-label">{panel.label}</span>
+              <span className="nav-key" aria-label={`Keyboard shortcut: ${panel.shortcut}`}>
+                {panel.shortcut}
+              </span>
+            </button>
+          );
+        })}
+      </div>
       <style>{`
         .nav-header {
           padding: var(--space-md);

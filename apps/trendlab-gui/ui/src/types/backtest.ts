@@ -54,14 +54,7 @@ export interface BacktestResult {
   equityCurve: EquityPoint[];
 }
 
-/** Cost model configuration */
-export interface CostModel {
-  feesBps: number;
-  slippageBps: number;
-}
-
-/** Default cost model */
-export const DEFAULT_COST_MODEL: CostModel = {
-  feesBps: 10,
-  slippageBps: 5,
-};
+// CostModel is defined in sweep.ts
+// Re-export for backward compatibility
+export type { CostModel } from './sweep';
+export { DEFAULT_COST_MODEL } from './sweep';

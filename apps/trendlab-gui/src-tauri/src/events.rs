@@ -8,6 +8,20 @@ pub struct EventEnvelope<T: Serialize> {
     pub payload: T,
 }
 
+impl<T: Serialize> EventEnvelope<T> {
+    pub fn new(event: &'static str, job_id: &str, payload: T) -> Self {
+        Self {
+            event,
+            job_id: job_id.to_string(),
+            ts_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+            payload,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct JobProgressPayload {
     pub message: String,

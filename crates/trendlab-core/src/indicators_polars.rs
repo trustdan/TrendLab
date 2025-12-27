@@ -360,61 +360,72 @@ pub fn aroon_down_expr(period: usize) -> Expr {
         .alias("aroon_down")
 }
 
-/// Helper: Compute bars since period high using rolling analysis.
+/// Compute bars_since_high and bars_since_low columns eagerly.
 ///
-/// This computes how many bars ago the highest high in the period occurred.
-/// We iterate through each offset in the lookback window and find the minimum
-/// distance where the shifted high equals the rolling max.
-/// Ties prefer the most recent bar (offset 0 checked first).
-fn bars_since_high_expr(period: usize) -> Expr {
-    // For each offset 0..period, check if high[t-offset] == rolling_max_high[t]
-    // Find the minimum offset where this is true (most recent max)
-    let mut min_distance: Option<Expr> = None;
+/// This replaces the deeply nested when/then/otherwise expression chains
+/// that caused Polars to hang. Instead, we materialize the data and compute
+/// the values using efficient Rust iteration.
+///
+/// For each row, finds how many bars ago the highest high (or lowest low)
+/// in the period occurred. Ties prefer the most recent bar (offset 0).
+fn compute_bars_since_columns(df: DataFrame, period: usize) -> PolarsResult<DataFrame> {
+    let n = df.height();
 
-    for offset in 0..period {
-        let shifted_high = col("high").shift(lit(offset as i64));
-        let is_max_at_offset = shifted_high.eq(col("rolling_max_high"));
+    let high_col = df.column("high")?.f64()?;
+    let low_col = df.column("low")?.f64()?;
+    let rolling_max = df.column("rolling_max_high")?.f64()?;
+    let rolling_min = df.column("rolling_min_low")?.f64()?;
 
-        let distance_at_offset = when(is_max_at_offset)
-            .then(lit(offset as f64))
-            .otherwise(lit(f64::INFINITY));
+    let mut bars_since_high: Vec<Option<f64>> = vec![None; n];
+    let mut bars_since_low: Vec<Option<f64>> = vec![None; n];
 
-        min_distance = Some(match min_distance {
-            None => distance_at_offset,
-            Some(prev) => when(distance_at_offset.clone().lt(prev.clone()))
-                .then(distance_at_offset)
-                .otherwise(prev),
-        });
+    for i in 0..n {
+        // Skip warmup period (rolling_max/min are null)
+        let max_val = match rolling_max.get(i) {
+            Some(v) => v,
+            None => continue,
+        };
+        let min_val = match rolling_min.get(i) {
+            Some(v) => v,
+            None => continue,
+        };
+
+        // Find bars since high (most recent occurrence of max)
+        for offset in 0..period {
+            if i < offset {
+                break;
+            }
+            if let Some(h) = high_col.get(i - offset) {
+                // Use approximate equality for floating point comparison
+                if (h - max_val).abs() < 1e-10 {
+                    bars_since_high[i] = Some(offset as f64);
+                    break;
+                }
+            }
+        }
+
+        // Find bars since low (most recent occurrence of min)
+        for offset in 0..period {
+            if i < offset {
+                break;
+            }
+            if let Some(l) = low_col.get(i - offset) {
+                if (l - min_val).abs() < 1e-10 {
+                    bars_since_low[i] = Some(offset as f64);
+                    break;
+                }
+            }
+        }
     }
 
-    min_distance
-        .unwrap_or(lit(NULL))
-        .alias("aroon_bars_since_high")
-}
+    // Add computed columns to dataframe
+    let bars_since_high_series = Series::new("aroon_bars_since_high".into(), bars_since_high);
+    let bars_since_low_series = Series::new("aroon_bars_since_low".into(), bars_since_low);
 
-/// Helper: Compute bars since period low using rolling analysis.
-fn bars_since_low_expr(period: usize) -> Expr {
-    let mut min_distance: Option<Expr> = None;
-
-    for offset in 0..period {
-        let shifted_low = col("low").shift(lit(offset as i64));
-        let is_min_at_offset = shifted_low.clone().eq(col("rolling_min_low"));
-
-        let distance_at_offset = when(is_min_at_offset)
-            .then(lit(offset as f64))
-            .otherwise(lit(f64::INFINITY));
-
-        min_distance = Some(match min_distance {
-            None => distance_at_offset,
-            Some(prev) => when(distance_at_offset.clone().lt(prev.clone()))
-                .then(distance_at_offset)
-                .otherwise(prev),
-        });
-    }
-
-    min_distance
-        .unwrap_or(lit(NULL))
-        .alias("aroon_bars_since_low")
+    let mut df = df;
+    df.with_column(bars_since_high_series)?;
+    df.with_column(bars_since_low_series)?;
+    Ok(df)
 }
 
 /// Aroon Oscillator expression.
@@ -429,6 +440,10 @@ pub fn aroon_oscillator_expr() -> Expr {
 ///
 /// Adds columns: rolling_max_high, rolling_min_low, aroon_bars_since_high,
 /// aroon_bars_since_low, aroon_up, aroon_down, aroon_oscillator
+///
+/// Note: This function materializes the DataFrame internally to compute
+/// the bars_since columns efficiently. This avoids deeply nested expression
+/// trees that can cause Polars to hang.
 pub fn apply_aroon_exprs(lf: LazyFrame, period: usize) -> LazyFrame {
     // Step 1: Add rolling max/min columns needed for bars_since calculations
     let rolling_max_high = col("high")
@@ -451,14 +466,29 @@ pub fn apply_aroon_exprs(lf: LazyFrame, period: usize) -> LazyFrame {
         })
         .alias("rolling_min_low");
 
-    // Step 2: Add the rolling max/min columns
+    // Step 2: Add the rolling max/min columns and collect
     let lf = lf.with_columns([rolling_max_high, rolling_min_low]);
 
-    // Step 3: Add bars_since calculations (depend on rolling max/min)
-    let lf = lf.with_columns([bars_since_high_expr(period), bars_since_low_expr(period)]);
+    // Step 3: Materialize and compute bars_since columns efficiently
+    // This avoids deeply nested when/then/otherwise chains that hang Polars
+    let df = match lf.collect() {
+        Ok(df) => df,
+        Err(_) => {
+            // If collection fails, return an empty LazyFrame
+            // This shouldn't happen in practice
+            return DataFrame::empty().lazy();
+        }
+    };
 
-    // Step 4: Add aroon up/down (depend on bars_since)
-    let lf = lf.with_columns([aroon_up_expr(period), aroon_down_expr(period)]);
+    let df = match compute_bars_since_columns(df, period) {
+        Ok(df) => df,
+        Err(_) => return DataFrame::empty().lazy(),
+    };
+
+    // Step 4: Continue lazily - add aroon up/down (depend on bars_since)
+    let lf = df
+        .lazy()
+        .with_columns([aroon_up_expr(period), aroon_down_expr(period)]);
 
     // Step 5: Add oscillator (depends on aroon up/down)
     lf.with_column(aroon_oscillator_expr())

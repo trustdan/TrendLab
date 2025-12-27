@@ -62,7 +62,14 @@ pub fn draw(f: &mut Frame, app: &App) {
         Panel::Data => panels::data::draw(f, app, content_area),
         Panel::Strategy => panels::strategy::draw(f, app, content_area),
         Panel::Sweep => panels::sweep::draw(f, app, content_area),
-        Panel::Results => panels::results::draw(f, app, content_area),
+        Panel::Results => {
+            // Show analysis panel if toggled, otherwise show normal results
+            if app.results.show_analysis {
+                panels::analysis::draw(f, app, content_area);
+            } else {
+                panels::results::draw(f, app, content_area);
+            }
+        }
         Panel::Chart => panels::chart::draw(f, app, content_area),
     }
 

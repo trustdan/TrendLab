@@ -141,9 +141,11 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
         KeyCode::Char('q') => KeyResult::Quit,
 
         KeyCode::Esc => {
-            // Signal cancellation to worker
+            // Signal cancellation to worker (stops YOLO mode and any running sweep)
             channels.cancel_flag.store(true, Ordering::SeqCst);
             let _ = channels.command_tx.send(WorkerCommand::Cancel);
+            // If YOLO mode is running, it will send YoloStopped update
+            // which will set yolo.enabled = false
             app.handle_escape();
             KeyResult::Continue
         }
@@ -244,6 +246,18 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
             KeyResult::Continue
         }
 
+        KeyCode::Char('y') | KeyCode::Char('Y') => {
+            // 'y' for YOLO mode - continuous auto-optimization
+            if app.active_panel == app::Panel::Sweep && !app.yolo.enabled && !app.sweep.is_running {
+                app.start_yolo_mode(channels);
+            } else if app.yolo.enabled {
+                app.status_message = "YOLO mode running. Press ESC to stop.".to_string();
+            } else if app.sweep.is_running {
+                app.status_message = "Sweep already running. Press ESC to cancel first.".to_string();
+            }
+            KeyResult::Continue
+        }
+
         KeyCode::Char('d') => {
             // 'd' for toggle drawdown (in chart panel)
             app.handle_toggle_drawdown();
@@ -293,8 +307,11 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
         }
 
         KeyCode::Char('a') => {
-            // 'a' to select all in current context
-            if app.active_panel == app::Panel::Strategy
+            // 'a' to select all in current context, or toggle analysis in Results panel
+            if app.active_panel == app::Panel::Results {
+                // Toggle analysis view
+                app.handle_toggle_analysis(channels);
+            } else if app.active_panel == app::Panel::Strategy
                 && app.strategy.focus == app::StrategyFocus::Selection
             {
                 app.handle_strategy_select_all();
@@ -782,9 +799,16 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                         .iter()
                         .map(|p| p.equity)
                         .collect();
+                    let dates: Vec<chrono::DateTime<chrono::Utc>> = best
+                        .backtest_result
+                        .equity
+                        .iter()
+                        .map(|p| p.ts)
+                        .collect();
                     curves.push(app::TickerCurve {
                         symbol: symbol.clone(),
                         equity,
+                        dates,
                     });
                 }
             }
@@ -873,6 +897,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                         strategy_type: entry.strategy_type,
                         config_display: best.config_id.display(),
                         equity: best.equity_curve.clone(),
+                        dates: vec![], // TODO: Add dates to StrategyBestResult
                         metrics: best.metrics.clone(),
                     });
                 }
@@ -887,6 +912,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                     strategy_type: best.strategy_type,
                     config_display: best.config_id.display(),
                     equity: best.equity_curve.clone(),
+                    dates: vec![], // TODO: Add dates to StrategyBestResult
                     metrics: best.metrics.clone(),
                 });
             }
@@ -915,6 +941,166 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             );
             app.sweep.is_running = false;
             app.operation = app::OperationState::Idle;
+        }
+
+        // Statistical analysis updates
+        WorkerUpdate::AnalysisStarted { analysis_id } => {
+            app.status_message = format!("Computing analysis for {}...", analysis_id);
+        }
+
+        WorkerUpdate::AnalysisComplete {
+            analysis_id,
+            analysis,
+        } => {
+            app.status_message = format!(
+                "Analysis complete for {}: VaR95={:.2}%, Skew={:.2}",
+                analysis_id,
+                analysis.return_distribution.var_95 * 100.0,
+                analysis.return_distribution.skewness
+            );
+            // Store analysis in cache
+            app.results
+                .analysis_cache
+                .insert(analysis_id.clone(), analysis.clone());
+            // If this matches the currently selected config, update selected_analysis
+            if app.results.selected_analysis_id.as_ref() == Some(&analysis_id) {
+                app.results.selected_analysis = Some(analysis);
+            }
+        }
+
+        WorkerUpdate::AnalysisError { analysis_id, error } => {
+            app.status_message = format!("Analysis failed for {}: {}", analysis_id, error);
+        }
+
+        // YOLO Mode updates
+        WorkerUpdate::YoloModeStarted {
+            total_symbols,
+            total_strategies,
+        } => {
+            app.status_message = format!(
+                "YOLO Mode started: {} symbols x {} strategies (press ESC to stop)",
+                total_symbols, total_strategies
+            );
+            app.sweep.is_running = true;
+            app.yolo.enabled = true;
+            app.yolo.started_at = Some(chrono::Utc::now());
+        }
+
+        WorkerUpdate::YoloIterationComplete {
+            iteration,
+            best_aggregate,
+            best_per_symbol: _,
+            cross_symbol_leaderboard,
+            per_symbol_leaderboard,
+            configs_tested_this_round,
+        } => {
+            app.yolo.iteration = iteration;
+            app.yolo.leaderboard = per_symbol_leaderboard.clone();
+            app.yolo.cross_symbol_leaderboard = Some(cross_symbol_leaderboard.clone());
+            app.yolo.total_configs_tested += configs_tested_this_round as u64;
+
+            // Update status message with cross-symbol best
+            let best_avg_sharpe = cross_symbol_leaderboard.best_avg_sharpe().unwrap_or(0.0);
+            app.status_message = format!(
+                "YOLO iter {}: {} configs | Best Avg Sharpe: {:.3} | ESC to stop",
+                iteration, configs_tested_this_round, best_avg_sharpe
+            );
+
+            // Update chart with top 4 equity curves from cross-symbol leaderboard
+            let mut strategy_curves: Vec<app::StrategyCurve> = Vec::new();
+            for entry in &cross_symbol_leaderboard.entries {
+                strategy_curves.push(app::StrategyCurve {
+                    strategy_type: entry.strategy_type,
+                    config_display: entry.config_id.display(),
+                    equity: entry.combined_equity_curve.clone(),
+                    dates: entry.dates.clone(),
+                    metrics: trendlab_core::Metrics {
+                        total_return: entry.aggregate_metrics.avg_cagr,
+                        cagr: entry.aggregate_metrics.avg_cagr,
+                        sharpe: entry.aggregate_metrics.avg_sharpe,
+                        sortino: 0.0, // Not aggregated
+                        max_drawdown: entry.aggregate_metrics.worst_max_drawdown,
+                        calmar: 0.0, // Not aggregated
+                        win_rate: entry.aggregate_metrics.hit_rate,
+                        profit_factor: 0.0, // Not aggregated
+                        num_trades: 0,
+                        turnover: 0.0,
+                    },
+                });
+            }
+            app.chart.strategy_curves = strategy_curves;
+            app.chart.view_mode = app::ChartViewMode::StrategyComparison;
+
+            // Log best this round if available
+            if let Some(best) = best_aggregate {
+                app.status_message = format!(
+                    "YOLO iter {}: NEW {} (avg Sharpe {:.3} across {} symbols) | ESC to stop",
+                    iteration,
+                    best.strategy_type.name(),
+                    best.aggregate_metrics.avg_sharpe,
+                    best.symbols.len()
+                );
+            }
+        }
+
+        WorkerUpdate::YoloProgress {
+            iteration,
+            phase,
+            completed_configs,
+            total_configs,
+        } => {
+            let pct = if total_configs > 0 {
+                (completed_configs as f64 / total_configs as f64 * 100.0) as usize
+            } else {
+                0
+            };
+            app.status_message = format!(
+                "YOLO iter {} [{}]: {}% ({}/{}) | ESC to stop",
+                iteration, phase, pct, completed_configs, total_configs
+            );
+        }
+
+        WorkerUpdate::YoloStopped {
+            cross_symbol_leaderboard,
+            per_symbol_leaderboard,
+            total_iterations,
+            total_configs_tested,
+        } => {
+            app.yolo.enabled = false;
+            app.yolo.leaderboard = per_symbol_leaderboard.clone();
+            app.yolo.cross_symbol_leaderboard = Some(cross_symbol_leaderboard.clone());
+            app.sweep.is_running = false;
+            app.operation = app::OperationState::Idle;
+
+            let best_avg_sharpe = cross_symbol_leaderboard.best_avg_sharpe().unwrap_or(0.0);
+            app.status_message = format!(
+                "YOLO stopped: {} iterations, {} configs, best avg Sharpe: {:.3}",
+                total_iterations, total_configs_tested, best_avg_sharpe
+            );
+
+            // Keep the final cross-symbol leaderboard curves on chart
+            let mut strategy_curves: Vec<app::StrategyCurve> = Vec::new();
+            for entry in &cross_symbol_leaderboard.entries {
+                strategy_curves.push(app::StrategyCurve {
+                    strategy_type: entry.strategy_type,
+                    config_display: entry.config_id.display(),
+                    equity: entry.combined_equity_curve.clone(),
+                    dates: entry.dates.clone(),
+                    metrics: trendlab_core::Metrics {
+                        total_return: entry.aggregate_metrics.avg_cagr,
+                        cagr: entry.aggregate_metrics.avg_cagr,
+                        sharpe: entry.aggregate_metrics.avg_sharpe,
+                        sortino: 0.0,
+                        max_drawdown: entry.aggregate_metrics.worst_max_drawdown,
+                        calmar: 0.0,
+                        win_rate: entry.aggregate_metrics.hit_rate,
+                        profit_factor: 0.0,
+                        num_trades: 0,
+                        turnover: 0.0,
+                    },
+                });
+            }
+            app.chart.strategy_curves = strategy_curves;
         }
     }
 }

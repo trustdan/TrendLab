@@ -7,7 +7,11 @@ interface SectorItemProps {
   selectedCount: number;
 }
 
-function SectorItem({ sector, isSelected, selectedCount }: SectorItemProps) {
+interface SectorItemExtendedProps extends SectorItemProps {
+  index: number;
+}
+
+function SectorItem({ sector, isSelected, selectedCount, index }: SectorItemExtendedProps) {
   const setViewMode = useAppStore((s) => s.setViewMode);
   const { selectedSectorIndex } = useAppStore();
   const universe = useAppStore((s) => s.universe);
@@ -27,12 +31,25 @@ function SectorItem({ sector, isSelected, selectedCount }: SectorItemProps) {
 
   return (
     <div
+      role="option"
+      id={`sector-${index}`}
+      aria-selected={isSelected}
+      tabIndex={isSelected ? 0 : -1}
       className={`sector-item ${isSelected ? 'selected' : ''}`}
       onClick={handleClick}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          handleClick();
+        }
+      }}
     >
-      <span className="sector-indicator">{isSelected ? '▸' : ' '}</span>
+      <span className="sector-indicator" aria-hidden="true">{isSelected ? '▸' : ' '}</span>
       <span className="sector-name">{sector.name}</span>
-      <span className={`sector-count ${hasSelection ? 'has-selection' : ''}`}>
+      <span
+        className={`sector-count ${hasSelection ? 'has-selection' : ''}`}
+        aria-label={`${selectedCount} of ${totalCount} selected`}
+      >
         [{selectedCount}/{totalCount}]
       </span>
     </div>
@@ -54,14 +71,20 @@ export function SectorList() {
 
   return (
     <div className="sector-list">
-      <div className="sector-list-header">Sectors</div>
-      <div className="sector-items">
+      <div className="sector-list-header" id="sector-list-label">Sectors</div>
+      <div
+        className="sector-items"
+        role="listbox"
+        aria-labelledby="sector-list-label"
+        aria-activedescendant={`sector-${selectedSectorIndex}`}
+      >
         {universe.sectors.map((sector, index) => (
           <SectorItem
             key={sector.id}
             sector={sector}
             isSelected={index === selectedSectorIndex}
             selectedCount={getSelectedCountForSector(sector.id)}
+            index={index}
           />
         ))}
       </div>

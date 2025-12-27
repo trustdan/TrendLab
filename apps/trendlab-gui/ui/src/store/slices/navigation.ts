@@ -1,4 +1,4 @@
-import type { StateCreator } from 'zustand';
+import type { SliceCreator } from '../types';
 
 /** Panel identifiers */
 export type PanelId = 'data' | 'strategy' | 'sweep' | 'results' | 'chart';
@@ -31,7 +31,7 @@ export interface NavigationSlice {
 }
 
 /** Create navigation slice */
-export const createNavigationSlice: StateCreator<NavigationSlice> = (set, get) => ({
+export const createNavigationSlice: SliceCreator<NavigationSlice> = (set, get) => ({
   activePanel: 'data',
   previousPanel: null,
 

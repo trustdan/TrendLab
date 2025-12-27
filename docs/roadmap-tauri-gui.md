@@ -596,6 +596,59 @@ trendlab-ipc = { path = "../trendlab-ipc" }  # Optional: shared event types
 
 ---
 
+## Future: YOLO Mode (Auto-Optimization)
+
+YOLO Mode is a continuous auto-optimization loop that runs multi-strategy sweeps indefinitely, applying parameter randomization each iteration and maintaining a top-4 leaderboard ranked by Sharpe ratio. This feature is already implemented in the TUI and should be ported to the GUI.
+
+### TUI Implementation Reference
+
+The TUI implementation lives in:
+- `crates/trendlab-core/src/leaderboard.rs` - Leaderboard and LeaderboardEntry types
+- `crates/trendlab-tui/src/worker.rs` - handle_yolo_mode handler, jitter functions
+- `crates/trendlab-tui/src/app.rs` - YoloState, start_yolo_mode method
+
+### GUI Implementation Tasks
+
+#### Rust Commands
+- [ ] Create `src-tauri/src/commands/yolo.rs`
+- [ ] Implement `start_yolo_mode(symbols, strategies, config, randomization_pct)` returning `job_id`
+- [ ] Implement `stop_yolo_mode(job_id)` command
+- [ ] Implement `get_leaderboard()` command
+- [ ] Emit `yolo:started`, `yolo:iteration_complete`, `yolo:progress`, `yolo:stopped` events
+- [ ] Register commands in `src-tauri/src/lib.rs`
+
+#### State Updates
+- [ ] Add `Leaderboard`, `YoloState` to `AppState`
+- [ ] Create `ui/src/store/slices/yolo.ts`
+
+#### React Components
+- [ ] Create `ui/src/components/panels/sweep/YoloControls.tsx`
+  - [ ] Start/Stop YOLO mode button
+  - [ ] Randomization percentage slider (±5% to ±25%)
+  - [ ] Current iteration counter
+  - [ ] Total configs tested display
+- [ ] Create `ui/src/components/panels/sweep/Leaderboard.tsx`
+  - [ ] Top 4 strategies table
+  - [ ] Strategy type, config display, Sharpe, CAGR, Max DD columns
+  - [ ] Click to view equity curve
+  - [ ] Visual rank indicators (🥇🥈🥉)
+- [ ] Create `ui/src/components/charts/LeaderboardChart.tsx`
+  - [ ] Overlay top 4 equity curves with different colors
+  - [ ] Legend with strategy names and metrics
+  - [ ] Animated updates as new leaders discovered
+- [ ] Wire into SweepPanel and ChartPanel
+
+#### Keyboard Shortcuts
+- [ ] `Y` key to toggle YOLO mode (when in Sweep panel)
+- [ ] Update keyboard navigation hook
+
+#### Persistence
+- [ ] Load existing `artifacts/leaderboard.json` on startup
+- [ ] Save after each iteration (handled by Rust backend)
+- [ ] Show load/save status in UI
+
+---
+
 ## BDD Test Infrastructure
 
 ### Setup

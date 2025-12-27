@@ -19,6 +19,7 @@ export interface SearchResult {
   type_disp: string;
 }
 
+/** Progress update for data fetch operations */
 export interface FetchProgress {
   symbol: string;
   current: number;

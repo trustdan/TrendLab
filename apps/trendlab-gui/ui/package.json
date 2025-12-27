@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.13.13",
     "@tauri-apps/api": "^2.0.0",
     "lightweight-charts": "^5.1.0",
     "react": "^18.3.1",

@@ -5,6 +5,7 @@ interface TickerItemProps {
   isSelected: boolean;
   isCached: boolean;
   isFocused: boolean;
+  index: number;
   onToggle: () => void;
 }
 
@@ -13,19 +14,35 @@ function TickerItem({
   isSelected,
   isCached,
   isFocused,
+  index,
   onToggle,
 }: TickerItemProps) {
   return (
     <div
+      role="option"
+      id={`ticker-${index}`}
+      aria-selected={isFocused}
+      aria-checked={isSelected}
+      tabIndex={isFocused ? 0 : -1}
       className={`ticker-item ${isFocused ? 'focused' : ''}`}
       onClick={onToggle}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onToggle();
+        }
+      }}
     >
-      <span className="ticker-indicator">{isFocused ? '▸' : ' '}</span>
-      <span className={`ticker-checkbox ${isSelected ? 'checked' : ''}`}>
+      <span className="ticker-indicator" aria-hidden="true">{isFocused ? '▸' : ' '}</span>
+      <span className={`ticker-checkbox ${isSelected ? 'checked' : ''}`} aria-hidden="true">
         [{isSelected ? '✓' : ' '}]
       </span>
       <span className="ticker-symbol">{ticker}</span>
-      <span className={`ticker-cache ${isCached ? 'cached' : ''}`}>
+      <span
+        className={`ticker-cache ${isCached ? 'cached' : ''}`}
+        aria-label={isCached ? 'Data cached' : 'Data not cached'}
+        title={isCached ? 'Cached' : 'Not cached'}
+      >
         {isCached ? '●' : '○'}
       </span>
     </div>
@@ -55,13 +72,23 @@ export function TickerList() {
   return (
     <div className="ticker-list">
       <div className="ticker-list-header">
-        <button className="back-button" onClick={collapseToSectors}>
+        <button
+          className="back-button"
+          onClick={collapseToSectors}
+          aria-label="Go back to sectors"
+        >
           ←
         </button>
-        <span className="sector-title">{sector.name}</span>
-        <span className="ticker-count">{tickers.length} tickers</span>
+        <span className="sector-title" id="ticker-list-label">{sector.name}</span>
+        <span className="ticker-count" aria-live="polite">{tickers.length} tickers</span>
       </div>
-      <div className="ticker-items">
+      <div
+        className="ticker-items"
+        role="listbox"
+        aria-labelledby="ticker-list-label"
+        aria-activedescendant={`ticker-${selectedTickerIndex}`}
+        aria-multiselectable="true"
+      >
         {tickers.map((ticker, index) => (
           <TickerItem
             key={ticker}
@@ -69,6 +96,7 @@ export function TickerList() {
             isSelected={selectedTickers.has(ticker)}
             isCached={cachedSymbols.has(ticker)}
             isFocused={index === selectedTickerIndex}
+            index={index}
             onToggle={() => toggleTicker(ticker)}
           />
         ))}

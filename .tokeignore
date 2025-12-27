@@ -1,6 +1,8 @@
 # Dependencies and build artifacts
 target/
 .cargo/
+**/node_modules/
+**/dist/
 
 # Data directories (not code)
 data/
@@ -14,6 +16,9 @@ docs/
 # Generated files
 artifacts/
 reports/
+**/gen/
+tsconfig.tsbuildinfo
+*.tsbuildinfo
 
 # IDE and editor files
 .vscode/
@@ -23,6 +28,9 @@ reports/
 
 # Lock files
 Cargo.lock
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
 
 # Schema files (JSON)
 schemas/
@@ -36,3 +44,15 @@ configs/
 
 # Claude/AI tool files
 .claude/
+
+# Scripts
+scripts/
+
+# Assets and icons
+*.ico
+*.icns
+*.png
+*.svg
+
+# GitHub
+.github/

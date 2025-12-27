@@ -14,6 +14,7 @@
 # OS
 .DS_Store
 Thumbs.db
+nul
 
 # Environment and secrets
 .env
@@ -49,3 +50,15 @@ criterion/
 # Editor backups
 *~
 \#*\#
+
+# Node.js (Tauri frontend)
+**/node_modules/
+**/dist/
+*.tsbuildinfo
+.npm/
+.pnpm-store/
+
+# Package manager lock files (keep package-lock.json if using npm)
+# Uncomment to ignore: package-lock.json
+pnpm-lock.yaml
+yarn.lock

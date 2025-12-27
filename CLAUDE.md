@@ -19,11 +19,30 @@ TrendLab/
 │   ├── agents/           # Subagent definitions (10 agents)
 │   ├── commands/         # Slash command skills (9 skills)
 │   └── rules.md          # Operational rules for Claude
+├── apps/
+│   └── trendlab-gui/     # Desktop GUI (Tauri v2 + React)
+│       ├── src-tauri/    # Rust backend
+│       │   ├── src/
+│       │   │   ├── commands/  # Tauri command handlers
+│       │   │   ├── state.rs   # AppState with RwLock wrappers
+│       │   │   ├── events.rs  # Event emission helpers
+│       │   │   ├── error.rs   # GUI error types
+│       │   │   └── jobs.rs    # Job lifecycle management
+│       │   └── Cargo.toml
+│       └── ui/           # React frontend
+│           ├── src/
+│           │   ├── components/    # React components
+│           │   │   ├── panels/    # Panel components (Data, Strategy, Sweep, Results, Chart)
+│           │   │   ├── charts/    # TradingView Lightweight Charts wrappers
+│           │   │   └── *.tsx      # Navigation, StatusBar, StartupModal
+│           │   ├── hooks/         # Custom hooks (useTauriCommand, useKeyboardNavigation)
+│           │   ├── store/         # Zustand store with slices
+│           │   └── types/         # TypeScript type definitions
+│           └── package.json
 ├── crates/
 │   ├── trendlab-core/    # Domain types, strategies, metrics
 │   ├── trendlab-cli/     # CLI interface
 │   ├── trendlab-tui/     # Terminal UI (ratatui)
-│   ├── trendlab-gui/     # Desktop GUI (Tauri + React)
 │   └── trendlab-bdd/     # Cucumber-rs runner + step definitions
 │       └── tests/
 │           ├── bdd.rs    # Runner (harness=false)
@@ -179,7 +198,52 @@ cargo test                                           # Run all tests (including 
 cargo fmt                                            # Format code
 cargo clippy --all-targets --all-features -D warnings # Lint
 cargo run -p trendlab-cli -- --help                  # CLI help
+cargo tauri dev -c apps/trendlab-gui/src-tauri       # Run GUI in dev mode
 ```
+
+---
+
+## GUI Keyboard Shortcuts
+
+The GUI mirrors TUI keyboard navigation for muscle-memory consistency.
+
+### Global Navigation
+| Key | Action |
+|-----|--------|
+| `1-5` | Direct panel access (Data, Strategy, Sweep, Results, Chart) |
+| `Tab` | Next panel |
+| `Shift+Tab` | Previous panel |
+| `Esc` | Cancel current operation / close modal |
+| `?` | Show keyboard shortcuts help |
+
+### Vim-Style List Navigation
+| Key | Action |
+|-----|--------|
+| `j` / `Down` | Move down in list |
+| `k` / `Up` | Move up in list |
+| `h` / `Left` | Collapse / navigate left |
+| `l` / `Right` | Expand / navigate right |
+| `Enter` | Confirm / expand / collapse |
+
+### Selection
+| Key | Action |
+|-----|--------|
+| `Space` | Toggle item selection |
+| `a` | Select all in current context |
+| `n` | Deselect all (select none) |
+
+### Panel-Specific Actions
+| Key | Panel | Action |
+|-----|-------|--------|
+| `f` | Data | Fetch data for selected tickers |
+| `s` | Data | Enter search mode |
+| `s` | Results | Cycle sort column |
+| `v` | Results | Cycle view mode |
+| `e` | Strategy | Toggle ensemble mode |
+| `d` | Chart | Toggle drawdown overlay |
+| `m` | Chart | Cycle chart mode |
+| `v` | Chart | Toggle volume subplot |
+| `c` | Chart | Toggle crosshair |
 
 ---
 

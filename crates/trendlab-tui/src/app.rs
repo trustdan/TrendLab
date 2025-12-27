@@ -9,14 +9,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use ratatui::layout::Rect;
 use trendlab_core::{
-    BacktestConfig, Bar, CostModel, FillModel, Metrics, MultiStrategyGrid,
-    MultiStrategySweepResult, MultiSweepResult, PyramidConfig, Sector, StrategyTypeId,
-    SweepConfigResult, SweepDepth, SweepGrid, Universe,
+    BacktestConfig, Bar, CostModel, CrossSymbolLeaderboard, FillModel, Leaderboard, Metrics,
+    MultiStrategyGrid, MultiStrategySweepResult, MultiSweepResult, PyramidConfig, Sector,
+    StrategyTypeId, SweepConfigResult, SweepDepth, SweepGrid, Universe,
 };
 
 use crate::worker::{WorkerChannels, WorkerCommand};
@@ -1141,6 +1141,39 @@ impl SweepState {
     }
 }
 
+/// YOLO Mode state - continuous auto-optimization
+#[derive(Debug, Clone)]
+pub struct YoloState {
+    /// Whether YOLO mode is currently running
+    pub enabled: bool,
+    /// Current iteration number
+    pub iteration: u32,
+    /// Per-symbol top performers leaderboard
+    pub leaderboard: Leaderboard,
+    /// Cross-symbol aggregated leaderboard (primary for multi-symbol runs)
+    pub cross_symbol_leaderboard: Option<CrossSymbolLeaderboard>,
+    /// Randomization percentage (e.g., 0.15 = ±15%)
+    pub randomization_pct: f64,
+    /// Total configs tested across all iterations
+    pub total_configs_tested: u64,
+    /// When YOLO mode was started
+    pub started_at: Option<DateTime<Utc>>,
+}
+
+impl Default for YoloState {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            iteration: 0,
+            leaderboard: Leaderboard::new(4),
+            cross_symbol_leaderboard: None,
+            randomization_pct: 0.15,
+            total_configs_tested: 0,
+            started_at: None,
+        }
+    }
+}
+
 /// View mode for the Results panel (per-ticker vs aggregated portfolio)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ResultsViewMode {
@@ -1151,6 +1184,8 @@ pub enum ResultsViewMode {
     PerTicker,
     /// Viewing aggregated portfolio results
     Aggregated,
+    /// Viewing YOLO leaderboard (cross-symbol aggregated results)
+    Leaderboard,
 }
 
 /// Per-ticker summary for multi-sweep display
@@ -1181,6 +1216,16 @@ pub struct ResultsState {
     pub ticker_summaries: Vec<TickerSummary>,
     /// Selected ticker index (in PerTicker view)
     pub selected_ticker_index: usize,
+    /// Selected leaderboard index (in Leaderboard view)
+    pub selected_leaderboard_index: usize,
+    /// Statistical analysis for the currently selected config
+    pub selected_analysis: Option<trendlab_core::StatisticalAnalysis>,
+    /// ID of the config for which analysis is being shown
+    pub selected_analysis_id: Option<String>,
+    /// Cache of computed analyses (config_id -> analysis)
+    pub analysis_cache: std::collections::HashMap<String, trendlab_core::StatisticalAnalysis>,
+    /// Whether analysis panel is visible
+    pub show_analysis: bool,
 }
 
 impl ResultsState {
@@ -1225,13 +1270,15 @@ impl ResultsState {
                 if self.has_multi_sweep() {
                     ResultsViewMode::PerTicker
                 } else {
-                    ResultsViewMode::SingleSymbol
+                    ResultsViewMode::Leaderboard
                 }
             }
             ResultsViewMode::PerTicker => ResultsViewMode::Aggregated,
-            ResultsViewMode::Aggregated => ResultsViewMode::PerTicker,
+            ResultsViewMode::Aggregated => ResultsViewMode::Leaderboard,
+            ResultsViewMode::Leaderboard => ResultsViewMode::SingleSymbol,
         };
         self.selected_ticker_index = 0;
+        self.selected_leaderboard_index = 0;
     }
 
     /// Get the current view mode name
@@ -1240,6 +1287,7 @@ impl ResultsState {
             ResultsViewMode::SingleSymbol => "Single Symbol",
             ResultsViewMode::PerTicker => "Per-Ticker",
             ResultsViewMode::Aggregated => "Portfolio",
+            ResultsViewMode::Leaderboard => "YOLO Leaderboard",
         }
     }
 }
@@ -1339,6 +1387,7 @@ impl Default for AnimationState {
 pub struct TickerCurve {
     pub symbol: String,
     pub equity: Vec<f64>,
+    pub dates: Vec<DateTime<Utc>>,
 }
 
 /// Per-strategy equity curve for strategy comparison view
@@ -1348,6 +1397,7 @@ pub struct StrategyCurve {
     pub strategy_type: StrategyTypeId,
     pub config_display: String,
     pub equity: Vec<f64>,
+    pub dates: Vec<DateTime<Utc>>,
     pub metrics: Metrics,
 }
 
@@ -1359,6 +1409,7 @@ pub struct TickerBestStrategy {
     pub strategy_type: StrategyTypeId,
     pub config_display: String,
     pub equity: Vec<f64>,
+    pub dates: Vec<DateTime<Utc>>,
     pub metrics: Metrics,
 }
 
@@ -1366,6 +1417,7 @@ pub struct TickerBestStrategy {
 #[derive(Debug, Default)]
 pub struct ChartState {
     pub equity_curve: Vec<f64>,
+    pub equity_dates: Vec<DateTime<Utc>>,
     pub drawdown_curve: Vec<f64>,
     pub selected_result_index: Option<usize>,
     pub zoom_level: f64,
@@ -1530,6 +1582,7 @@ pub struct App {
     pub operation: OperationState,
     pub startup: StartupState,
     pub auto: AutoRunState,
+    pub yolo: YoloState,
     pub random_defaults: RandomDefaults,
     /// Default date range used for data fetches in the TUI.
     pub fetch_range: (NaiveDate, NaiveDate),
@@ -1821,6 +1874,19 @@ impl App {
             operation: OperationState::Idle,
             startup: StartupState::default(),
             auto: AutoRunState::default(),
+            yolo: {
+                // Load existing leaderboards on startup for persistence
+                let per_symbol = Leaderboard::load(std::path::Path::new("artifacts/leaderboard.json"))
+                    .ok()
+                    .unwrap_or_else(|| Leaderboard::new(4));
+                let cross_symbol = CrossSymbolLeaderboard::load(std::path::Path::new("artifacts/cross_symbol_leaderboard.json"))
+                    .ok();
+                YoloState {
+                    leaderboard: per_symbol,
+                    cross_symbol_leaderboard: cross_symbol,
+                    ..Default::default()
+                }
+            },
             random_defaults: RandomDefaults {
                 enabled: random_enabled,
                 seed,
@@ -2791,6 +2857,63 @@ impl App {
         }
     }
 
+    /// Handle 'a' key in Results panel to toggle analysis view.
+    pub fn handle_toggle_analysis(&mut self, channels: &WorkerChannels) {
+        if self.active_panel != Panel::Results {
+            return;
+        }
+
+        // Toggle show_analysis
+        self.results.show_analysis = !self.results.show_analysis;
+
+        if self.results.show_analysis {
+            // Check if we have a selected result to analyze
+            if let Some(result) = self.results.results.get(self.results.selected_index) {
+                // Create an analysis_id based on the config
+                let analysis_id = format!(
+                    "entry{}exit{}",
+                    result.config_id.entry_lookback, result.config_id.exit_lookback
+                );
+
+                self.results.selected_analysis_id = Some(analysis_id.clone());
+
+                // Check if analysis is already cached
+                if let Some(cached) = self.results.analysis_cache.get(&analysis_id) {
+                    self.results.selected_analysis = Some(cached.clone());
+                    self.status_message = format!("Showing analysis for {}", analysis_id);
+                } else {
+                    // Need to compute analysis - find the bars for the symbol
+                    if let Some(symbol) = self.data.selected_symbol() {
+                        if let Some(bars) = self.data.bars_cache.get(symbol) {
+                            // Send compute command to worker
+                            let _ = channels.command_tx.send(WorkerCommand::ComputeAnalysis {
+                                analysis_id: analysis_id.clone(),
+                                backtest_result: result.backtest_result.clone(),
+                                bars: Arc::new(bars.clone()),
+                                config: trendlab_core::AnalysisConfig::default(),
+                            });
+                            self.status_message = format!("Computing analysis for {}...", analysis_id);
+                        } else {
+                            self.status_message =
+                                "Cannot compute analysis: no bars loaded for symbol".to_string();
+                            self.results.show_analysis = false;
+                        }
+                    } else {
+                        self.status_message = "Cannot compute analysis: no symbol selected".to_string();
+                        self.results.show_analysis = false;
+                    }
+                }
+            } else {
+                self.status_message = "No result selected for analysis".to_string();
+                self.results.show_analysis = false;
+            }
+        } else {
+            self.results.selected_analysis = None;
+            self.results.selected_analysis_id = None;
+            self.status_message = "Analysis view closed".to_string();
+        }
+    }
+
     /// Load bars for a symbol from Parquet cache
     fn load_bars_for_symbol(&mut self, symbol: &str) {
         use trendlab_core::read_parquet;
@@ -3078,6 +3201,85 @@ impl App {
         } else {
             self.status_message = "Full-Auto: failed to start cache load.".to_string();
             self.auto.stage = AutoStage::Idle;
+        }
+    }
+
+    /// Start YOLO Mode: continuous auto-optimization loop
+    ///
+    /// Runs multi-strategy sweeps in a loop, applying parameter randomization each iteration,
+    /// maintaining a top-4 leaderboard ranked by Sharpe, and persisting to JSON.
+    /// Press Escape to stop.
+    pub fn start_yolo_mode(&mut self, channels: &WorkerChannels) {
+        let selected = self.data.selected_tickers_sorted();
+        if selected.is_empty() {
+            self.status_message = "YOLO Mode: No tickers selected.".to_string();
+            return;
+        }
+
+        // Build symbol->bars map from cache
+        let mut symbol_bars: HashMap<String, Arc<Vec<Bar>>> = HashMap::new();
+        let mut missing: Vec<String> = Vec::new();
+        for sym in &selected {
+            if let Some(bars) = self.data.bars_cache.get(sym) {
+                if !bars.is_empty() {
+                    symbol_bars.insert(sym.clone(), Arc::new(bars.clone()));
+                } else {
+                    missing.push(sym.clone());
+                }
+            } else {
+                missing.push(sym.clone());
+            }
+        }
+
+        if symbol_bars.is_empty() {
+            self.status_message = format!(
+                "YOLO Mode: No bars loaded for selected tickers. Missing: {}",
+                missing.join(", ")
+            );
+            return;
+        }
+
+        // Build strategy grid (use Quick depth for faster iterations)
+        let strategy_grid = MultiStrategyGrid::with_depth(SweepDepth::Quick);
+
+        let backtest_config = BacktestConfig {
+            initial_cash: 100_000.0,
+            fill_model: FillModel::NextOpen,
+            cost_model: CostModel {
+                fees_bps_per_side: 10.0,
+                slippage_bps: 5.0,
+            },
+            qty: 100.0,
+            pyramid_config: PyramidConfig::default(),
+        };
+
+        // Try to load existing leaderboards
+        let existing_per_symbol_leaderboard =
+            Leaderboard::load(std::path::Path::new("artifacts/leaderboard.json")).ok();
+        let existing_cross_symbol_leaderboard =
+            CrossSymbolLeaderboard::load(std::path::Path::new("artifacts/cross_symbol_leaderboard.json")).ok();
+
+        let cmd = WorkerCommand::StartYoloMode {
+            symbols: selected.clone(),
+            start: self.fetch_range.0,
+            end: self.fetch_range.1,
+            strategy_grid,
+            backtest_config,
+            randomization_pct: self.yolo.randomization_pct,
+            existing_per_symbol_leaderboard,
+            existing_cross_symbol_leaderboard,
+        };
+
+        if channels.command_tx.send(cmd).is_ok() {
+            self.yolo.enabled = true;
+            self.yolo.started_at = Some(Utc::now());
+            self.sweep.is_running = true;
+            self.status_message = format!(
+                "YOLO Mode starting: {} symbols (press ESC to stop)...",
+                selected.len()
+            );
+        } else {
+            self.status_message = "Failed to start YOLO Mode.".to_string();
         }
     }
 }

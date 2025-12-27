@@ -1,5 +1,6 @@
 //! Chart panel - visualize equity curves, candlesticks, and drawdowns with multi-curve support
 
+use chrono::{DateTime, Utc};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -64,6 +65,46 @@ fn generate_y_labels(y_min: f64, y_max: f64, count: usize) -> Vec<Span<'static>>
             let value = y_min + (y_max - y_min) * i as f64 / (count - 1).max(1) as f64;
             Span::styled(format_value(value), Style::default().fg(colors::FG_DARK))
         })
+        .collect()
+}
+
+/// Determine date format string based on date span
+fn date_format_for_span(start: &DateTime<Utc>, end: &DateTime<Utc>) -> &'static str {
+    let days = (*end - *start).num_days();
+    if days < 90 {
+        "%m-%d" // < 3 months: MM-DD
+    } else if days < 730 {
+        "%Y-%m" // 3-24 months: YYYY-MM
+    } else {
+        "%Y" // > 2 years: YYYY
+    }
+}
+
+/// Generate X-axis date labels from dates vector (5 labels across the span)
+fn generate_date_labels(dates: &[DateTime<Utc>]) -> Vec<Span<'static>> {
+    if dates.is_empty() {
+        return vec![Span::raw(""), Span::raw(""), Span::raw(""), Span::raw(""), Span::raw("")];
+    }
+
+    let format = date_format_for_span(dates.first().unwrap(), dates.last().unwrap());
+    let len = dates.len();
+
+    (0..=4)
+        .map(|i| {
+            let idx = (i * len / 4).min(len.saturating_sub(1));
+            let date = &dates[idx];
+            Span::styled(
+                date.format(format).to_string(),
+                Style::default().fg(colors::FG_DARK),
+            )
+        })
+        .collect()
+}
+
+/// Generate X-axis index labels (fallback when no dates available)
+fn generate_index_labels(x_max: f64) -> Vec<Span<'static>> {
+    (0..=4)
+        .map(|i| Span::from(format!("{}", (i as f64 * x_max / 4.0) as i32)))
         .collect()
 }
 
@@ -218,9 +259,12 @@ fn draw_single_equity_chart(f: &mut Frame, app: &App, area: Rect, is_active: boo
         );
     }
 
-    let x_labels: Vec<Span> = (0..=4)
-        .map(|i| Span::from(format!("{}", (i as f64 * x_max / 4.0) as i32)))
-        .collect();
+    // Use dates if available, otherwise fall back to day indices
+    let x_labels: Vec<Span> = if !app.chart.equity_dates.is_empty() {
+        generate_date_labels(&app.chart.equity_dates)
+    } else {
+        generate_index_labels(x_max)
+    };
 
     // Format y-axis labels as currency
     let y_labels = vec![
@@ -314,9 +358,14 @@ fn draw_multi_ticker_chart(f: &mut Frame, app: &App, area: Rect, is_active: bool
         })
         .collect();
 
-    let x_labels: Vec<Span> = (0..=4)
-        .map(|i| Span::from(format!("{}", (i as f64 * x_max / 4.0) as i32)))
-        .collect();
+    // Use dates from first curve if available, otherwise fall back to indices
+    let x_labels: Vec<Span> = app
+        .chart
+        .ticker_curves
+        .first()
+        .filter(|c| !c.dates.is_empty())
+        .map(|c| generate_date_labels(&c.dates))
+        .unwrap_or_else(|| generate_index_labels(x_max));
 
     let y_labels = vec![
         Span::from(format!("${:.0}k", y_min / 1000.0)),
@@ -388,9 +437,14 @@ fn draw_portfolio_chart(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
         .style(Style::default().fg(colors::CYAN))
         .data(&portfolio_data)];
 
-    let x_labels: Vec<Span> = (0..=4)
-        .map(|i| Span::from(format!("{}", (i as f64 * x_max / 4.0) as i32)))
-        .collect();
+    // Use dates from first ticker curve if available (portfolio uses same dates)
+    let x_labels: Vec<Span> = app
+        .chart
+        .ticker_curves
+        .first()
+        .filter(|c| !c.dates.is_empty())
+        .map(|c| generate_date_labels(&c.dates))
+        .unwrap_or_else(|| generate_index_labels(x_max));
 
     let y_labels = vec![
         Span::from(format!("${:.0}k", y_min / 1000.0)),
@@ -540,9 +594,14 @@ fn draw_strategy_comparison_chart(f: &mut Frame, app: &App, area: Rect, is_activ
         })
         .collect();
 
-    let x_labels: Vec<Span> = (0..=4)
-        .map(|i| Span::from(format!("{}", (i as f64 * x_max / 4.0) as i32)))
-        .collect();
+    // Use dates from first strategy curve if available
+    let x_labels: Vec<Span> = app
+        .chart
+        .strategy_curves
+        .first()
+        .filter(|c| !c.dates.is_empty())
+        .map(|c| generate_date_labels(&c.dates))
+        .unwrap_or_else(|| generate_index_labels(x_max));
 
     let y_labels = vec![
         Span::from(format!("${:.0}k", y_min / 1000.0)),
@@ -642,9 +701,14 @@ fn draw_per_ticker_best_chart(f: &mut Frame, app: &App, area: Rect, is_active: b
         })
         .collect();
 
-    let x_labels: Vec<Span> = (0..=4)
-        .map(|i| Span::from(format!("{}", (i as f64 * x_max / 4.0) as i32)))
-        .collect();
+    // Use dates from first ticker's best strategy if available
+    let x_labels: Vec<Span> = app
+        .chart
+        .ticker_best_strategies
+        .first()
+        .filter(|t| !t.dates.is_empty())
+        .map(|t| generate_date_labels(&t.dates))
+        .unwrap_or_else(|| generate_index_labels(x_max));
 
     let y_labels = vec![
         Span::from(format!("${:.0}k", y_min / 1000.0)),

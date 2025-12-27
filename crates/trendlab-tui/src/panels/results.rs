@@ -39,6 +39,9 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         ResultsViewMode::Aggregated => {
             draw_aggregated_view(f, app, chunks[0], is_active);
         }
+        ResultsViewMode::Leaderboard => {
+            draw_leaderboard_table(f, app, chunks[0], is_active);
+        }
     }
 
     // Help text
@@ -496,6 +499,216 @@ fn draw_aggregated_view(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
     let para = Paragraph::new(lines).block(panel_block("Portfolio Summary", is_active));
 
     f.render_widget(para, area);
+}
+
+/// Draw YOLO leaderboard table (cross-symbol aggregated results)
+fn draw_leaderboard_table(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
+    // Check if we have cross-symbol leaderboard data
+    let cross_symbol = match &app.yolo.cross_symbol_leaderboard {
+        Some(lb) if !lb.entries.is_empty() => lb,
+        _ => {
+            // Fallback: show per-symbol leaderboard if no cross-symbol data
+            if app.yolo.leaderboard.entries.is_empty() {
+                draw_empty_leaderboard(f, area, is_active);
+                return;
+            }
+            draw_per_symbol_leaderboard(f, app, area, is_active);
+            return;
+        }
+    };
+
+    let header_style = Style::default()
+        .fg(colors::MAGENTA)
+        .add_modifier(Modifier::BOLD);
+
+    let header = Row::new(vec![
+        Cell::from("#").style(header_style),
+        Cell::from("Strategy").style(header_style),
+        Cell::from("Config").style(header_style),
+        Cell::from("Syms").style(header_style),
+        Cell::from("Avg Sharpe").style(header_style),
+        Cell::from("Min Sharpe").style(header_style),
+        Cell::from("Hit Rate").style(header_style),
+        Cell::from("Avg CAGR%").style(header_style),
+    ]);
+
+    let rows: Vec<Row> = cross_symbol
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| {
+            let is_selected = i == app.results.selected_leaderboard_index;
+            let base_style = if is_selected && is_active {
+                Style::default()
+                    .fg(colors::BLUE)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(colors::FG)
+            };
+
+            // Rank indicator for top 3
+            let rank_cell = match entry.rank {
+                1 => Cell::from("\u{1f947}").style(base_style),
+                2 => Cell::from("\u{1f948}").style(base_style),
+                3 => Cell::from("\u{1f949}").style(base_style),
+                r => Cell::from(format!("{}", r)).style(base_style),
+            };
+
+            let sharpe_style = if entry.aggregate_metrics.avg_sharpe > 1.0 {
+                Style::default().fg(colors::GREEN)
+            } else if entry.aggregate_metrics.avg_sharpe < 0.5 {
+                Style::default().fg(colors::ORANGE)
+            } else {
+                base_style
+            };
+
+            let hit_style = if entry.aggregate_metrics.hit_rate > 0.7 {
+                Style::default().fg(colors::GREEN)
+            } else if entry.aggregate_metrics.hit_rate < 0.5 {
+                Style::default().fg(colors::RED)
+            } else {
+                base_style
+            };
+
+            Row::new(vec![
+                rank_cell,
+                Cell::from(entry.strategy_type.name()).style(base_style),
+                Cell::from(truncate_config(&entry.config_id.display(), 20)).style(base_style),
+                Cell::from(format!("{}", entry.symbols.len())).style(base_style),
+                Cell::from(format!("{:.3}", entry.aggregate_metrics.avg_sharpe)).style(sharpe_style),
+                Cell::from(format!("{:.3}", entry.aggregate_metrics.min_sharpe)).style(base_style),
+                Cell::from(format!("{:.1}%", entry.aggregate_metrics.hit_rate * 100.0)).style(hit_style),
+                Cell::from(format!("{:.1}%", entry.aggregate_metrics.avg_cagr * 100.0)).style(base_style),
+            ])
+        })
+        .collect();
+
+    let widths = [
+        Constraint::Length(3),  // Rank
+        Constraint::Length(14), // Strategy
+        Constraint::Length(22), // Config
+        Constraint::Length(5),  // Symbols
+        Constraint::Length(10), // Avg Sharpe
+        Constraint::Length(10), // Min Sharpe
+        Constraint::Length(9),  // Hit Rate
+        Constraint::Length(10), // Avg CAGR
+    ];
+
+    let title = format!(
+        "YOLO Leaderboard ({} configs tested)",
+        cross_symbol.total_configs_tested
+    );
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(panel_block(&title, is_active));
+
+    f.render_widget(table, area);
+}
+
+/// Draw empty leaderboard state
+fn draw_empty_leaderboard(f: &mut Frame, area: Rect, is_active: bool) {
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "No YOLO results yet.",
+            Style::default().fg(colors::FG_DARK),
+        )]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Start YOLO mode in the Sweep panel to discover best configs.",
+            Style::default().fg(colors::FG_DARK),
+        )]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Press 'Y' with multiple symbols selected to start YOLO mode.",
+            Style::default().fg(colors::FG_DARK),
+        )]),
+    ];
+
+    let para = Paragraph::new(lines).block(panel_block("YOLO Leaderboard", is_active));
+    f.render_widget(para, area);
+}
+
+/// Draw per-symbol leaderboard (fallback when no cross-symbol data)
+fn draw_per_symbol_leaderboard(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
+    let leaderboard = &app.yolo.leaderboard;
+
+    let header_style = Style::default()
+        .fg(colors::MAGENTA)
+        .add_modifier(Modifier::BOLD);
+
+    let header = Row::new(vec![
+        Cell::from("#").style(header_style),
+        Cell::from("Strategy").style(header_style),
+        Cell::from("Symbol").style(header_style),
+        Cell::from("Sharpe").style(header_style),
+        Cell::from("CAGR%").style(header_style),
+        Cell::from("MaxDD%").style(header_style),
+        Cell::from("Win%").style(header_style),
+    ]);
+
+    let rows: Vec<Row> = leaderboard
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| {
+            let is_selected = i == app.results.selected_leaderboard_index;
+            let base_style = if is_selected && is_active {
+                Style::default()
+                    .fg(colors::BLUE)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(colors::FG)
+            };
+
+            let rank_cell = match entry.rank {
+                1 => Cell::from("\u{1f947}").style(base_style),
+                2 => Cell::from("\u{1f948}").style(base_style),
+                3 => Cell::from("\u{1f949}").style(base_style),
+                r => Cell::from(format!("{}", r)).style(base_style),
+            };
+
+            let symbol = entry.symbol.as_deref().unwrap_or("-");
+            Row::new(vec![
+                rank_cell,
+                Cell::from(entry.strategy_type.name()).style(base_style),
+                Cell::from(symbol).style(base_style),
+                Cell::from(format!("{:.3}", entry.metrics.sharpe)).style(base_style),
+                Cell::from(format!("{:.1}%", entry.metrics.cagr * 100.0)).style(base_style),
+                Cell::from(format!("{:.1}%", entry.metrics.max_drawdown * 100.0)).style(base_style),
+                Cell::from(format!("{:.1}%", entry.metrics.win_rate * 100.0)).style(base_style),
+            ])
+        })
+        .collect();
+
+    let widths = [
+        Constraint::Length(3),  // Rank
+        Constraint::Length(14), // Strategy
+        Constraint::Length(8),  // Symbol
+        Constraint::Length(8),  // Sharpe
+        Constraint::Length(8),  // CAGR
+        Constraint::Length(8),  // MaxDD
+        Constraint::Length(6),  // Win%
+    ];
+
+    let title = format!(
+        "Per-Symbol Leaderboard ({} configs)",
+        leaderboard.total_configs_tested
+    );
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(panel_block(&title, is_active));
+
+    f.render_widget(table, area);
+}
+
+/// Truncate a config string to fit in limited space
+fn truncate_config(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len - 3])
+    }
 }
 
 fn draw_help(f: &mut Frame, app: &App, area: Rect, is_active: bool) {

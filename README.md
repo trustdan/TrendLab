@@ -144,12 +144,13 @@ See [Backtest Architecture](#backtest-architecture) below for details on the dua
 
 See [Strategy Roadmap](#strategy-roadmap) and [docs/roadmap-v2-strategies.md](docs/roadmap-v2-strategies.md) for details.
 
-**Milestone 6 ("Desktop GUI")** 🚧 Planned:
+**Milestone 6 ("Desktop GUI")** 🚧 In Progress:
 
 - Tauri v2 desktop application with React + TypeScript frontend
 - TradingView Lightweight Charts for professional candlestick visualization
 - Same 5-panel workflow as TUI with polished web aesthetics
-- BDD-first development with GUI feature files
+- Full keyboard navigation matching TUI shortcuts
+- Phases 1-7 substantially complete (Foundation through Polish)
 
 See [Desktop GUI](#desktop-gui) and [docs/roadmap-tauri-gui.md](docs/roadmap-tauri-gui.md) for details.
 
@@ -356,6 +357,7 @@ Complete reference of all keyboard shortcuts in the TUI:
 |-----|--------|
 | `↑/↓` | Navigate results list |
 | `Enter` | View selected result in Chart panel |
+| `a` | Toggle statistical analysis view (VaR, MAE/MFE, regime analysis) |
 | `v` | Cycle results view mode (Single/Multi-Ticker/Best-Per-Ticker) |
 | `s` | Sort by next metric |
 | `r` | Reverse sort order |
@@ -779,6 +781,55 @@ Full performance metrics computed for every backtest:
 | Profit Factor | Gross profit / gross loss |
 | Turnover | Annual trading volume as multiple of capital |
 
+## Statistical Analysis
+
+Press `a` in the Results panel to compute and view detailed statistical analysis for the selected backtest configuration. Analysis is computed asynchronously and cached for fast switching between configs.
+
+### Return Distribution
+
+Risk metrics from the daily return distribution:
+
+| Metric | Description |
+|--------|-------------|
+| VaR 95% / 99% | Value at Risk - worst expected daily loss at 95th/99th percentile |
+| CVaR 95% / 99% | Conditional VaR (Expected Shortfall) - average loss beyond VaR |
+| Skewness | Return asymmetry (negative = fat left tail, worse than Sharpe implies) |
+| Kurtosis | Tail fatness (high = more extreme moves than normal distribution) |
+| Daily Mean/Std | Mean and standard deviation of daily returns |
+| Min/Max | Best and worst single-day returns |
+
+### Trade Analysis (Swing Trading Focus)
+
+Trade-level statistics optimized for 2-10 week holding periods:
+
+| Metric | Description |
+|--------|-------------|
+| MAE (Max Adverse Excursion) | Worst drawdown during each trade - critical for stop placement |
+| MFE (Max Favorable Excursion) | Best unrealized gain during each trade |
+| Edge Ratio | MFE/MAE - quality of trade execution (>1.0 = favorable) |
+| Holding Period | Mean, median, and histogram of trade durations |
+
+Holding period buckets: 1-5 days, 6-10 days, 11-20 days, 21-50 days, 50+ days
+
+### Regime Analysis
+
+Performance breakdown by volatility regime (based on ATR):
+
+| Regime   | Classification         |
+|----------|------------------------|
+| High Vol | ATR > 1.5× median ATR  |
+| Neutral  | Normal volatility      |
+| Low Vol  | ATR < 0.75× median ATR |
+
+For each regime, shows:
+
+- Percentage of trading days in that regime
+- Number of trades entered
+- Win rate and average return per trade
+- Sharpe ratio during that regime
+
+This helps identify when the strategy works vs fails (e.g., trend-following often struggles in low-vol, range-bound markets).
+
 ## Position Sizing
 
 TrendLab supports multiple position sizing approaches:
@@ -935,11 +986,14 @@ trendlab artifact validate --path artifact.json
 
 ```text
 TrendLab/
+├── apps/
+│   └── trendlab-gui/     # Desktop GUI (Tauri v2 + React)
+│       ├── src-tauri/    # Rust backend (commands, state, events)
+│       └── ui/           # React frontend (TypeScript)
 ├── crates/
 │   ├── trendlab-core/    # Domain types, indicators, sim kernel, metrics (no IO)
 │   ├── trendlab-cli/     # CLI + orchestration + IO
 │   ├── trendlab-tui/     # Terminal UI (ratatui)
-│   ├── trendlab-gui/     # Desktop GUI (Tauri + React) [coming soon]
 │   └── trendlab-bdd/     # BDD runner + step defs + feature files
 ├── docs/                 # Assumptions, schemas, architecture, style
 ├── fixtures/             # Deterministic test datasets (tiny)

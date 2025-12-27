@@ -7,7 +7,10 @@
 //! - Data provider traits
 //! - Parameter sweep infrastructure
 //! - Strategy artifact export for Pine Script parity
+//! - Post-backtest statistical analysis
 
+pub mod analysis;
+pub mod analysis_polars;
 pub mod artifact;
 pub mod backtest;
 pub mod backtest_polars;
@@ -16,6 +19,7 @@ pub mod data;
 pub mod error;
 pub mod indicators;
 pub mod indicators_polars;
+pub mod leaderboard;
 pub mod metrics;
 pub mod sizing;
 pub mod strategy;
@@ -67,8 +71,20 @@ pub use indicators_polars::{
     plus_dm_smoothed_expr, rolling_std_expr, sma_close_expr, starc_bands_exprs,
     supertrend_basic_exprs, true_range_expr, IndicatorSet, IndicatorSpec,
 };
+pub use leaderboard::{
+    AggregatedConfigResult, AggregatedMetrics, CrossSymbolLeaderboard, CrossSymbolRankMetric,
+    Leaderboard, LeaderboardEntry,
+};
 pub use metrics::{compute_metrics, Metrics};
 pub use polars::prelude::IntoLazy;
+pub use analysis::{
+    AnalysisConfig, EdgeRatioStats, ExcursionStats, HoldingBucket, HoldingPeriodStats,
+    RegimeAnalysis, RegimeMetrics, ReturnDistribution, StatisticalAnalysis, TradeAnalysis,
+    TradeExcursion, VolAtEntryStats, VolRegime,
+};
+pub use analysis_polars::{
+    compute_analysis, compute_regime_analysis, compute_return_distribution, compute_trade_analysis,
+};
 pub use sizing::{
     turtle_sizer, FixedSizer, PositionSizer, SizeResult, SizingConfig, VolatilitySizer,
 };

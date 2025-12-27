@@ -1,4 +1,4 @@
-import type { StateCreator } from 'zustand';
+import type { SliceCreator } from '../types';
 
 /** Operation state */
 export type OperationState = 'idle' | 'loading' | 'success' | 'error';
@@ -22,7 +22,7 @@ export interface StatusSlice {
 }
 
 /** Create status slice */
-export const createStatusSlice: StateCreator<StatusSlice> = (set) => ({
+export const createStatusSlice: SliceCreator<StatusSlice> = (set) => ({
   operationState: 'idle',
   statusMessage: null,
   statusHistory: [],

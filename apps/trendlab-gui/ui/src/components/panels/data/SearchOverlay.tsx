@@ -1,10 +1,19 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../../store';
+import { useDebounce } from '../../../hooks';
 import type { SearchResult } from '../../../types';
+
+/** Debounce delay in milliseconds */
+const SEARCH_DEBOUNCE_MS = 300;
+
+/** Minimum query length to trigger search */
+const MIN_QUERY_LENGTH = 2;
 
 export function SearchOverlay() {
   const inputRef = useRef<HTMLInputElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   const searchQuery = useAppStore((s) => s.searchQuery);
   const searchResults = useAppStore((s) => s.searchResults);
   const searchLoading = useAppStore((s) => s.searchLoading);
@@ -16,33 +25,63 @@ export function SearchOverlay() {
   const navigateSearchResult = useAppStore((s) => s.navigateSearchResult);
   const selectSearchResult = useAppStore((s) => s.selectSearchResult);
 
+  // Debounce the search query for better performance
+  const debouncedQuery = useDebounce(searchQuery, SEARCH_DEBOUNCE_MS);
+
   // Focus input on mount
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
-  // Debounced search
+  // Show loading indicator immediately when typing (before debounce completes)
   useEffect(() => {
-    if (searchQuery.length < 2) {
+    if (searchQuery.length >= MIN_QUERY_LENGTH && searchQuery !== debouncedQuery) {
+      setSearchLoading(true);
+    }
+  }, [searchQuery, debouncedQuery, setSearchLoading]);
+
+  // Execute search when debounced query changes
+  useEffect(() => {
+    // Clear results if query is too short
+    if (debouncedQuery.length < MIN_QUERY_LENGTH) {
       setSearchResults([]);
+      setSearchLoading(false);
       return;
     }
 
-    const timeoutId = setTimeout(async () => {
+    // Cancel previous request to prevent race conditions
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    const executeSearch = async () => {
       setSearchLoading(true);
       try {
         const results = await invoke<SearchResult[]>('search_symbols', {
-          query: searchQuery,
+          query: debouncedQuery,
         });
-        setSearchResults(results);
+        if (!controller.signal.aborted) {
+          setSearchResults(results);
+          setSearchLoading(false);
+        }
       } catch (err) {
-        console.error('Search failed:', err);
-        setSearchResults([]);
+        if (!controller.signal.aborted) {
+          console.error('Search failed:', err);
+          setSearchResults([]);
+          setSearchLoading(false);
+        }
       }
-    }, 300);
+    };
 
-    return () => clearTimeout(timeoutId);
-  }, [searchQuery, setSearchLoading, setSearchResults]);
+    executeSearch();
+
+    return () => {
+      controller.abort();
+    };
+  }, [debouncedQuery, setSearchLoading, setSearchResults]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

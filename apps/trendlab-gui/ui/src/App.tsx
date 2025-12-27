@@ -1,5 +1,5 @@
-import { useCallback } from 'react';
-import { Navigation, StatusBar } from './components';
+import { useState, useCallback, useEffect } from 'react';
+import { Navigation, StatusBar, StartupModal, type StartupMode } from './components';
 import {
   DataPanel,
   StrategyPanel,
@@ -7,7 +7,7 @@ import {
   ResultsPanel,
   ChartPanel,
 } from './components/panels';
-import { useKeyboardNavigation, type KeyboardAction } from './hooks';
+import { useKeyboardNavigation, useFocusManagement, type KeyboardAction } from './hooks';
 import { useAppStore, type PanelId } from './store';
 
 /** Panel component map */
@@ -19,8 +19,48 @@ const PANEL_COMPONENTS: Record<PanelId, React.ComponentType> = {
   chart: ChartPanel,
 };
 
+/** Check if startup modal should be shown based on stored preference */
+function shouldShowStartupModal(): boolean {
+  try {
+    const stored = localStorage.getItem('trendlab-startup-mode');
+    // Only skip modal if user has explicitly remembered a choice
+    return stored !== 'manual' && stored !== 'full-auto';
+  } catch {
+    return true;
+  }
+}
+
 export function App() {
-  const { activePanel, setStatus } = useAppStore();
+  const { activePanel, setStatus, setActivePanel } = useAppStore();
+  const [showStartupModal, setShowStartupModal] = useState(shouldShowStartupModal);
+  const [appMode, setAppMode] = useState<StartupMode>(null);
+
+  // Auto-close modal and set mode if user remembered their choice
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('trendlab-startup-mode');
+      if (stored === 'manual' || stored === 'full-auto') {
+        setAppMode(stored);
+        setShowStartupModal(false);
+      }
+    } catch {
+      // localStorage not available
+    }
+  }, []);
+
+  // Handle mode selection from startup modal
+  const handleModeSelect = useCallback((mode: 'manual' | 'full-auto') => {
+    setAppMode(mode);
+    if (mode === 'full-auto') {
+      // Navigate to sweep panel for YOLO mode
+      setActivePanel('sweep');
+      setStatus('Full-Auto (YOLO) mode selected - configure your sweep', 'success');
+    } else {
+      // Stay on data panel for manual mode
+      setActivePanel('data');
+      setStatus('Manual mode - select symbols, configure strategies, then sweep', 'info');
+    }
+  }, [setActivePanel, setStatus]);
 
   // Handle keyboard actions (panel-specific actions will be wired in later phases)
   const handleAction = useCallback(
@@ -89,6 +129,9 @@ export function App() {
   // Use centralized keyboard navigation (TUI parity)
   useKeyboardNavigation(handleAction);
 
+  // Manage focus when switching panels
+  useFocusManagement();
+
   const ActivePanel = PANEL_COMPONENTS[activePanel];
 
   return (
@@ -97,6 +140,11 @@ export function App() {
         <span className="app-title">TrendLab</span>
         <span className="text-muted" style={{ fontSize: 'var(--font-size-sm)' }}>
           Trend-Following Backtest Lab
+          {appMode && (
+            <span className="mode-badge">
+              {appMode === 'full-auto' ? 'YOLO' : 'Manual'}
+            </span>
+          )}
         </span>
       </header>
 
@@ -108,6 +156,46 @@ export function App() {
       </main>
 
       <StatusBar />
+
+      <StartupModal
+        isOpen={showStartupModal}
+        onClose={() => setShowStartupModal(false)}
+        onSelectMode={handleModeSelect}
+      />
+
+      {/* Screen reader announcer for dynamic updates */}
+      <div
+        id="sr-announcer"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      />
+
+      <style>{`
+        /* Screen reader only - visually hidden but accessible */
+        .sr-only {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          padding: 0;
+          margin: -1px;
+          overflow: hidden;
+          clip: rect(0, 0, 0, 0);
+          white-space: nowrap;
+          border: 0;
+        }
+        .mode-badge {
+          margin-left: var(--space-sm);
+          padding: 2px 6px;
+          background: var(--purple);
+          color: var(--bg);
+          border-radius: var(--radius-xs);
+          font-size: var(--font-size-xs);
+          font-weight: 600;
+          text-transform: uppercase;
+        }
+      `}</style>
     </div>
   );
 }

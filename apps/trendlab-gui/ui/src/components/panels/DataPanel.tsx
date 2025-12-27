@@ -15,6 +15,8 @@ export function DataPanel() {
   const selectedTickers = useAppStore((s) => s.selectedTickers);
   const isFetching = useAppStore((s) => s.isFetching);
   const setIsFetching = useAppStore((s) => s.setIsFetching);
+  const fetchJobId = useAppStore((s) => s.fetchJobId);
+  const setFetchJobId = useAppStore((s) => s.setFetchJobId);
 
   // Data navigation actions
   const navigateSector = useAppStore((s) => s.navigateSector);
@@ -103,23 +105,25 @@ export function DataPanel() {
               const tenYearsAgo = new Date(today);
               tenYearsAgo.setFullYear(today.getFullYear() - 10);
 
-              await invoke<StartJobResponse>('fetch_data', {
+              const response = await invoke<StartJobResponse>('fetch_data', {
                 symbols,
                 start: tenYearsAgo.toISOString().split('T')[0],
                 end: today.toISOString().split('T')[0],
                 force: false,
               });
+              setFetchJobId(response.job_id);
             } catch (err) {
               console.error('Failed to start fetch:', err);
               setIsFetching(false);
+              setFetchJobId(null);
             }
           }
           break;
 
         case 'cancel':
-          if (isFetching) {
+          if (isFetching && fetchJobId) {
             try {
-              await invoke('cancel_job', { jobId: 'fetch' });
+              await invoke('cancel_job', { jobId: fetchJobId });
             } catch (err) {
               console.error('Failed to cancel fetch:', err);
             }
@@ -133,6 +137,7 @@ export function DataPanel() {
       viewMode,
       selectedTickers,
       isFetching,
+      fetchJobId,
       navigateSector,
       navigateTicker,
       expandToTickers,
@@ -145,6 +150,7 @@ export function DataPanel() {
       getTickersForCurrentSector,
       selectedTickerIndex,
       setIsFetching,
+      setFetchJobId,
     ]
   );
 

@@ -1,0 +1,126 @@
+/* ChartPanel styles */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background-color: var(--bg-primary, #1a1b26);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border, #3b4261);
+}
+
+.title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary, #c0caf5);
+}
+
+.metrics {
+  display: flex;
+  gap: 16px;
+}
+
+.metric {
+  font-size: 12px;
+  color: var(--text-secondary, #a9b1d6);
+}
+
+.metric strong {
+  color: var(--text-primary, #c0caf5);
+  font-weight: 600;
+}
+
+.chartContainer {
+  flex: 1;
+  min-height: 0;
+  padding: 8px;
+}
+
+.empty,
+.error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 12px;
+  color: var(--text-tertiary, #565f89);
+  font-size: 14px;
+  text-align: center;
+}
+
+.error {
+  color: var(--error, #f7768e);
+}
+
+.dismissBtn {
+  padding: 6px 12px;
+  background-color: var(--bg-secondary, #24283b);
+  border: 1px solid var(--border, #3b4261);
+  border-radius: 4px;
+  color: var(--text-secondary, #a9b1d6);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.dismissBtn:hover {
+  background-color: var(--bg-tertiary, #292e42);
+  color: var(--text-primary, #c0caf5);
+}
+
+.tradesPanel {
+  border-top: 1px solid var(--border, #3b4261);
+  max-height: 200px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.tradesPanelTitle {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary, #a9b1d6);
+  background-color: var(--bg-secondary, #24283b);
+  border-bottom: 1px solid var(--border, #3b4261);
+}
+
+.tradesTable {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.shortcuts {
+  display: flex;
+  gap: 16px;
+  padding: 8px 16px;
+  background-color: var(--bg-secondary, #24283b);
+  border-top: 1px solid var(--border, #3b4261);
+  font-size: 11px;
+  color: var(--text-tertiary, #565f89);
+}
+
+.shortcuts span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.shortcuts kbd {
+  padding: 2px 6px;
+  background-color: var(--bg-tertiary, #292e42);
+  border: 1px solid var(--border, #3b4261);
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text-secondary, #a9b1d6);
+}
