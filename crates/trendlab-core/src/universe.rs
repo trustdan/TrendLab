@@ -1,0 +1,329 @@
+//! Universe configuration for sector-based ticker organization.
+//!
+//! Provides:
+//! - Sector and Universe types for organizing tickers
+//! - TOML-based configuration loading
+//! - Utility methods for ticker lookups
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::path::Path;
+use thiserror::Error;
+
+/// Errors that can occur when loading universe configuration.
+#[derive(Debug, Error)]
+pub enum UniverseError {
+    #[error("Failed to read universe file: {0}")]
+    IoError(#[from] std::io::Error),
+
+    #[error("Failed to parse universe TOML: {0}")]
+    ParseError(#[from] toml::de::Error),
+
+    #[error("Sector not found: {0}")]
+    SectorNotFound(String),
+}
+
+/// A sector containing related tickers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Sector {
+    /// Unique identifier (e.g., "technology", "healthcare")
+    pub id: String,
+    /// Display name (e.g., "Technology", "Healthcare")
+    pub name: String,
+    /// List of ticker symbols in this sector
+    pub tickers: Vec<String>,
+}
+
+impl Sector {
+    /// Create a new sector with the given id, name, and tickers.
+    pub fn new(id: impl Into<String>, name: impl Into<String>, tickers: Vec<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            tickers,
+        }
+    }
+
+    /// Returns the number of tickers in this sector.
+    pub fn len(&self) -> usize {
+        self.tickers.len()
+    }
+
+    /// Returns true if this sector has no tickers.
+    pub fn is_empty(&self) -> bool {
+        self.tickers.is_empty()
+    }
+
+    /// Check if a ticker belongs to this sector.
+    pub fn contains(&self, ticker: &str) -> bool {
+        self.tickers.iter().any(|t| t == ticker)
+    }
+}
+
+/// Top-level universe configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UniverseConfig {
+    /// Universe metadata
+    pub universe: UniverseMetadata,
+    /// List of sectors
+    pub sectors: Vec<Sector>,
+}
+
+/// Universe metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UniverseMetadata {
+    /// Name of the universe
+    pub name: String,
+    /// Description
+    #[serde(default)]
+    pub description: String,
+}
+
+/// A universe of tickers organized by sector.
+#[derive(Debug, Clone)]
+pub struct Universe {
+    /// Name of the universe
+    pub name: String,
+    /// Description
+    pub description: String,
+    /// Sectors in this universe
+    pub sectors: Vec<Sector>,
+}
+
+impl Universe {
+    /// Load a universe from a TOML configuration file.
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, UniverseError> {
+        let content = std::fs::read_to_string(path)?;
+        Self::from_toml(&content)
+    }
+
+    /// Parse a universe from TOML string content.
+    pub fn from_toml(content: &str) -> Result<Self, UniverseError> {
+        let config: UniverseConfig = toml::from_str(content)?;
+        Ok(Self {
+            name: config.universe.name,
+            description: config.universe.description,
+            sectors: config.sectors,
+        })
+    }
+
+    /// Returns the number of sectors in this universe.
+    pub fn sector_count(&self) -> usize {
+        self.sectors.len()
+    }
+
+    /// Returns the total number of unique tickers across all sectors.
+    pub fn ticker_count(&self) -> usize {
+        self.all_tickers().len()
+    }
+
+    /// Get a sector by its ID.
+    pub fn get_sector(&self, id: &str) -> Option<&Sector> {
+        self.sectors.iter().find(|s| s.id == id)
+    }
+
+    /// Get a sector by index.
+    pub fn get_sector_by_index(&self, index: usize) -> Option<&Sector> {
+        self.sectors.get(index)
+    }
+
+    /// Returns all unique tickers across all sectors.
+    pub fn all_tickers(&self) -> HashSet<String> {
+        self.sectors
+            .iter()
+            .flat_map(|s| s.tickers.iter().cloned())
+            .collect()
+    }
+
+    /// Returns all tickers as a sorted vector.
+    pub fn all_tickers_sorted(&self) -> Vec<String> {
+        let mut tickers: Vec<String> = self.all_tickers().into_iter().collect();
+        tickers.sort();
+        tickers
+    }
+
+    /// Find which sector a ticker belongs to.
+    pub fn find_sector_for_ticker(&self, ticker: &str) -> Option<&Sector> {
+        self.sectors.iter().find(|s| s.contains(ticker))
+    }
+
+    /// Get tickers for a specific sector by ID.
+    pub fn tickers_for_sector(&self, sector_id: &str) -> Result<&[String], UniverseError> {
+        self.get_sector(sector_id)
+            .map(|s| s.tickers.as_slice())
+            .ok_or_else(|| UniverseError::SectorNotFound(sector_id.to_string()))
+    }
+
+    /// Create a default universe with the built-in sector/ticker mapping.
+    pub fn default_universe() -> Self {
+        Self {
+            name: "US Equities".to_string(),
+            description: "Default curated list of US equities by sector".to_string(),
+            sectors: vec![
+                Sector::new(
+                    "basic_materials",
+                    "Basic Materials",
+                    vec!["LIN", "SCCO", "NEM", "CF"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                Sector::new(
+                    "comms_services",
+                    "Communication Services",
+                    vec!["GOOG", "META", "RDDT", "NFLX"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                Sector::new(
+                    "consumer_cyclical",
+                    "Consumer Cyclical",
+                    vec!["AMZN", "TJX", "DASH", "HD", "BABA"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                Sector::new(
+                    "consumer_defensive",
+                    "Consumer Defensive",
+                    vec!["WMT", "PM", "UL", "COST", "PG", "MDLZ"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                Sector::new(
+                    "energy",
+                    "Energy",
+                    vec!["XOM", "CVX", "SHEL"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                Sector::new(
+                    "financial",
+                    "Financial",
+                    vec!["BRK-B", "JPM", "MS", "COIN", "PYPL", "IBKR"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                Sector::new(
+                    "healthcare",
+                    "Healthcare",
+                    vec!["LLY", "JNJ", "ABBV", "UNH"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                Sector::new(
+                    "industrials",
+                    "Industrials",
+                    vec!["GE", "RTX", "BA", "ETN", "MMM"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                Sector::new(
+                    "real_estate",
+                    "Real Estate",
+                    vec!["PLD", "AMT", "O"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                Sector::new(
+                    "technology",
+                    "Technology",
+                    vec!["NVDA", "AAPL", "PLTR", "CSCO", "MSFT", "AMD"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                Sector::new(
+                    "utilities",
+                    "Utilities",
+                    vec!["EIX", "NEE", "DUK", "AEP", "SO"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+            ],
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sector_creation() {
+        let sector = Sector::new(
+            "tech",
+            "Technology",
+            vec!["AAPL".to_string(), "MSFT".to_string()],
+        );
+        assert_eq!(sector.id, "tech");
+        assert_eq!(sector.name, "Technology");
+        assert_eq!(sector.len(), 2);
+        assert!(sector.contains("AAPL"));
+        assert!(!sector.contains("GOOG"));
+    }
+
+    #[test]
+    fn test_universe_from_toml() {
+        let toml = r#"
+[universe]
+name = "Test Universe"
+description = "A test"
+
+[[sectors]]
+id = "tech"
+name = "Technology"
+tickers = ["AAPL", "MSFT"]
+
+[[sectors]]
+id = "finance"
+name = "Finance"
+tickers = ["JPM", "GS"]
+"#;
+
+        let universe = Universe::from_toml(toml).unwrap();
+        assert_eq!(universe.name, "Test Universe");
+        assert_eq!(universe.sector_count(), 2);
+        assert_eq!(universe.ticker_count(), 4);
+
+        let tech = universe.get_sector("tech").unwrap();
+        assert_eq!(tech.name, "Technology");
+        assert_eq!(tech.tickers, vec!["AAPL", "MSFT"]);
+    }
+
+    #[test]
+    fn test_all_tickers() {
+        let universe = Universe::default_universe();
+        let all = universe.all_tickers();
+        assert!(all.contains("AAPL"));
+        assert!(all.contains("JPM"));
+        assert!(all.contains("XOM"));
+    }
+
+    #[test]
+    fn test_find_sector_for_ticker() {
+        let universe = Universe::default_universe();
+        let sector = universe.find_sector_for_ticker("AAPL").unwrap();
+        assert_eq!(sector.id, "technology");
+
+        let sector = universe.find_sector_for_ticker("JPM").unwrap();
+        assert_eq!(sector.id, "financial");
+
+        assert!(universe.find_sector_for_ticker("UNKNOWN").is_none());
+    }
+
+    #[test]
+    fn test_default_universe() {
+        let universe = Universe::default_universe();
+        assert_eq!(universe.sector_count(), 11);
+        assert!(universe.ticker_count() > 40);
+    }
+}

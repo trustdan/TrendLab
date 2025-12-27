@@ -4,10 +4,11 @@
 //! - Signals are computed on bar close.
 //! - Fills occur on the next bar open.
 //! - Long-only (flat or long).
-//! - Fixed quantity sizing (1.0 unit) for now.
+//! - Supports both fixed and dynamic (volatility-based) position sizing.
 
 use crate::bar::Bar;
 use crate::error::{Result, TrendLabError};
+use crate::sizing::{PositionSizer, SizeResult};
 use crate::strategy::{Position, Signal, Strategy};
 use serde::{Deserialize, Serialize};
 
@@ -34,13 +35,56 @@ impl Default for CostModel {
     }
 }
 
+/// Configuration for pyramiding (adding to winning positions).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PyramidConfig {
+    /// Whether pyramiding is enabled.
+    pub enabled: bool,
+    /// Maximum number of units (including initial entry).
+    pub max_units: usize,
+    /// Threshold for adding as a multiple of ATR (e.g., 0.5 = half ATR).
+    pub threshold_atr_multiple: f64,
+    /// ATR period for calculating pyramid threshold.
+    pub atr_period: usize,
+}
+
+impl Default for PyramidConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_units: 1,
+            threshold_atr_multiple: 0.5,
+            atr_period: 20,
+        }
+    }
+}
+
+impl PyramidConfig {
+    /// Turtle System 1 pyramid config: 4 units, 0.5 ATR threshold, 20-day ATR.
+    pub fn turtle_system_1() -> Self {
+        Self {
+            enabled: true,
+            max_units: 4,
+            threshold_atr_multiple: 0.5,
+            atr_period: 20,
+        }
+    }
+
+    /// Disabled pyramiding (single unit).
+    pub fn disabled() -> Self {
+        Self::default()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BacktestConfig {
     pub initial_cash: f64,
     pub fill_model: FillModel,
     pub cost_model: CostModel,
-    /// Fixed position quantity (Phase 1).
+    /// Fixed position quantity per unit.
     pub qty: f64,
+    /// Pyramiding configuration.
+    pub pyramid_config: PyramidConfig,
 }
 
 impl Default for BacktestConfig {
@@ -50,7 +94,16 @@ impl Default for BacktestConfig {
             fill_model: FillModel::NextOpen,
             cost_model: CostModel::default(),
             qty: 1.0,
+            pyramid_config: PyramidConfig::default(),
         }
+    }
+}
+
+impl BacktestConfig {
+    /// Create config with pyramiding enabled.
+    pub fn with_pyramid(mut self, pyramid_config: PyramidConfig) -> Self {
+        self.pyramid_config = pyramid_config;
+        self
     }
 }
 
@@ -62,6 +115,9 @@ pub struct Fill {
     pub price: f64,
     pub fees: f64,
     pub raw_price: f64,
+    /// ATR value at time of fill (for volatility sizing).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub atr_at_fill: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,6 +134,58 @@ pub struct Trade {
     pub net_pnl: f64,
 }
 
+/// A pyramided trade consisting of multiple entry fills and a single exit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PyramidTrade {
+    /// All entry fills (initial + pyramid adds).
+    pub entries: Vec<Fill>,
+    /// Single exit fill that closes all units.
+    pub exit: Fill,
+    /// Gross PnL (sum of per-unit PnL).
+    pub gross_pnl: f64,
+    /// Net PnL (after all fees).
+    pub net_pnl: f64,
+    /// Average entry price across all units.
+    pub avg_entry_price: f64,
+    /// Total units traded.
+    pub total_units: f64,
+}
+
+impl PyramidTrade {
+    /// Calculate average entry price from fills.
+    pub fn compute_avg_entry_price(entries: &[Fill]) -> f64 {
+        if entries.is_empty() {
+            return 0.0;
+        }
+        let total_cost: f64 = entries.iter().map(|f| f.price * f.qty).sum();
+        let total_qty: f64 = entries.iter().map(|f| f.qty).sum();
+        if total_qty == 0.0 {
+            0.0
+        } else {
+            total_cost / total_qty
+        }
+    }
+
+    /// Create a PyramidTrade from entries and exit.
+    pub fn from_fills(entries: Vec<Fill>, exit: Fill) -> Self {
+        let avg_entry_price = Self::compute_avg_entry_price(&entries);
+        let total_units: f64 = entries.iter().map(|f| f.qty).sum();
+        let total_entry_fees: f64 = entries.iter().map(|f| f.fees).sum();
+
+        let gross_pnl = (exit.price - avg_entry_price) * total_units;
+        let net_pnl = gross_pnl - total_entry_fees - exit.fees;
+
+        Self {
+            entries,
+            exit,
+            gross_pnl,
+            net_pnl,
+            avg_entry_price,
+            total_units,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EquityPoint {
     pub ts: chrono::DateTime<chrono::Utc>,
@@ -91,12 +199,19 @@ pub struct EquityPoint {
 pub struct BacktestResult {
     pub fills: Vec<Fill>,
     pub trades: Vec<Trade>,
+    /// Pyramid trades (when pyramiding is enabled).
+    pub pyramid_trades: Vec<PyramidTrade>,
     pub equity: Vec<EquityPoint>,
 }
 
 impl BacktestResult {
     pub fn last_equity(&self) -> Option<f64> {
         self.equity.last().map(|p| p.equity)
+    }
+
+    /// Get total number of units currently in position.
+    pub fn current_units(&self) -> f64 {
+        self.equity.last().map(|p| p.position_qty).unwrap_or(0.0)
     }
 }
 
@@ -110,6 +225,7 @@ pub fn run_backtest<S: Strategy>(
         return Ok(BacktestResult {
             fills: vec![],
             trades: vec![],
+            pyramid_trades: vec![],
             equity: vec![],
         });
     }
@@ -148,6 +264,7 @@ pub fn run_backtest<S: Strategy>(
                             config.qty,
                             raw_price,
                             &config.cost_model,
+                            None,
                         );
                         cash -= fill.qty * fill.price;
                         cash -= fill.fees;
@@ -164,6 +281,7 @@ pub fn run_backtest<S: Strategy>(
                             config.qty,
                             raw_price,
                             &config.cost_model,
+                            None,
                         );
                         cash += fill.qty * fill.price;
                         cash -= fill.fees;
@@ -219,6 +337,403 @@ pub fn run_backtest<S: Strategy>(
     Ok(BacktestResult {
         fills,
         trades,
+        pyramid_trades: vec![],
+        equity,
+    })
+}
+
+/// Configuration for backtest with dynamic position sizing.
+#[derive(Debug, Clone)]
+pub struct BacktestSizingConfig {
+    pub initial_cash: f64,
+    pub fill_model: FillModel,
+    pub cost_model: CostModel,
+}
+
+impl Default for BacktestSizingConfig {
+    fn default() -> Self {
+        Self {
+            initial_cash: 100_000.0,
+            fill_model: FillModel::NextOpen,
+            cost_model: CostModel::default(),
+        }
+    }
+}
+
+/// Pending signal with computed size information.
+#[derive(Debug, Clone)]
+struct PendingEntry {
+    signal: Signal,
+    size_result: SizeResult,
+}
+
+/// Run a backtest with dynamic position sizing.
+///
+/// Unlike `run_backtest`, this version uses a `PositionSizer` to determine
+/// position size at each entry signal. The sizer computes position size based
+/// on the bars available at signal time.
+pub fn run_backtest_with_sizer<S: Strategy, P: PositionSizer>(
+    bars: &[Bar],
+    strategy: &mut S,
+    sizer: &P,
+    config: BacktestSizingConfig,
+) -> Result<BacktestResult> {
+    if bars.is_empty() {
+        return Ok(BacktestResult {
+            fills: vec![],
+            trades: vec![],
+            pyramid_trades: vec![],
+            equity: vec![],
+        });
+    }
+
+    if config.initial_cash <= 0.0 {
+        return Err(TrendLabError::Config("initial_cash must be > 0".into()));
+    }
+
+    strategy.reset();
+
+    let mut cash = config.initial_cash;
+    let mut position_qty = 0.0;
+    let mut position = Position::Flat;
+
+    let mut pending_entry: Option<PendingEntry> = None;
+    let mut pending_exit: Option<Signal> = None;
+    let mut entry_qty: f64 = 0.0; // Track entry qty to use same qty on exit
+    let mut entry_atr: Option<f64> = None;
+
+    let mut fills: Vec<Fill> = vec![];
+    let mut trades: Vec<Trade> = vec![];
+    let mut current_entry: Option<Fill> = None;
+    let mut equity: Vec<EquityPoint> = Vec::with_capacity(bars.len());
+
+    for i in 0..bars.len() {
+        // 1) Execute fills on open (from prior close signal).
+        if let Some(entry) = pending_entry.take() {
+            if i > 0 && matches!(entry.signal, Signal::EnterLong) && position == Position::Flat {
+                let raw_price = bars[i].open;
+                let qty = entry.size_result.units;
+
+                let fill = execute_fill(
+                    bars[i].ts,
+                    Side::Buy,
+                    qty,
+                    raw_price,
+                    &config.cost_model,
+                    entry.size_result.atr,
+                );
+                cash -= fill.qty * fill.price;
+                cash -= fill.fees;
+                position_qty += fill.qty;
+                entry_qty = fill.qty;
+                entry_atr = entry.size_result.atr;
+                position = Position::Long;
+                current_entry = Some(fill.clone());
+                fills.push(fill);
+            }
+        }
+
+        if let Some(sig) = pending_exit.take() {
+            if i > 0 && matches!(sig, Signal::ExitLong) && position == Position::Long {
+                let raw_price = bars[i].open;
+                let qty = entry_qty; // Use same qty as entry
+
+                let fill = execute_fill(
+                    bars[i].ts,
+                    Side::Sell,
+                    qty,
+                    raw_price,
+                    &config.cost_model,
+                    entry_atr,
+                );
+                cash += fill.qty * fill.price;
+                cash -= fill.fees;
+                position_qty -= fill.qty;
+                position = Position::Flat;
+                entry_qty = 0.0;
+                entry_atr = None;
+
+                let entry = current_entry.take().ok_or_else(|| {
+                    TrendLabError::Strategy("exit fill without an entry fill".into())
+                })?;
+
+                let gross_pnl = (fill.price - entry.price) * entry.qty;
+                let net_pnl = gross_pnl - entry.fees - fill.fees;
+
+                trades.push(Trade {
+                    entry,
+                    exit: fill.clone(),
+                    gross_pnl,
+                    net_pnl,
+                });
+                fills.push(fill);
+            }
+        }
+
+        // 2) Mark-to-market equity at close.
+        let close = bars[i].close;
+        let eq = cash + position_qty * close;
+        equity.push(EquityPoint {
+            ts: bars[i].ts,
+            cash,
+            position_qty,
+            close,
+            equity: eq,
+        });
+
+        // 3) Compute signal on close.
+        let hist = &bars[..=i];
+        let warmup = strategy.warmup_period().max(sizer.warmup_period());
+
+        let sig = if i + 1 >= warmup {
+            strategy.signal(hist, position)
+        } else {
+            Signal::Hold
+        };
+
+        // 4) Prepare pending fill for next bar.
+        match (sig, position) {
+            (Signal::EnterLong, Position::Flat) => {
+                // Compute position size now (at signal time)
+                if let Some(size_result) = sizer.size(hist, close) {
+                    pending_entry = Some(PendingEntry {
+                        signal: sig,
+                        size_result,
+                    });
+                }
+                // If sizer returns None, skip the entry
+            }
+            (Signal::ExitLong, Position::Long) => {
+                pending_exit = Some(sig);
+            }
+            _ => {}
+        }
+    }
+
+    Ok(BacktestResult {
+        fills,
+        trades,
+        pyramid_trades: vec![],
+        equity,
+    })
+}
+
+/// State for pyramiding during a backtest.
+#[derive(Debug, Clone, Default)]
+struct PyramidState {
+    /// Current number of units (0 when flat).
+    units: usize,
+    /// Price of last pyramid entry (used for threshold calculation).
+    last_add_price: f64,
+    /// ATR at initial entry (used for threshold calculation).
+    entry_atr: f64,
+    /// All entry fills for the current position.
+    entries: Vec<Fill>,
+}
+
+impl PyramidState {
+    fn reset(&mut self) {
+        self.units = 0;
+        self.last_add_price = 0.0;
+        self.entry_atr = 0.0;
+        self.entries.clear();
+    }
+
+    fn is_flat(&self) -> bool {
+        self.units == 0
+    }
+
+    fn can_add(&self, max_units: usize) -> bool {
+        self.units < max_units
+    }
+
+    fn should_pyramid(&self, current_price: f64, threshold_atr_multiple: f64) -> bool {
+        if self.is_flat() || self.entry_atr <= 0.0 {
+            return false;
+        }
+        let threshold = self.entry_atr * threshold_atr_multiple;
+        current_price >= self.last_add_price + threshold
+    }
+}
+
+/// Run a backtest with pyramiding support.
+///
+/// This function supports adding to winning positions at fixed ATR intervals.
+/// - Initial entry creates unit 1
+/// - Additional units added when price moves by `threshold_atr_multiple * ATR`
+/// - Maximum of `max_units` total units
+/// - All units exit together on exit signal
+///
+/// Returns `BacktestResult` with `pyramid_trades` populated.
+pub fn run_backtest_with_pyramid<S: Strategy>(
+    bars: &[Bar],
+    strategy: &mut S,
+    config: BacktestConfig,
+) -> Result<BacktestResult> {
+    use crate::indicators::atr_wilder;
+
+    if bars.is_empty() {
+        return Ok(BacktestResult {
+            fills: vec![],
+            trades: vec![],
+            pyramid_trades: vec![],
+            equity: vec![],
+        });
+    }
+
+    if config.initial_cash <= 0.0 {
+        return Err(TrendLabError::Config("initial_cash must be > 0".into()));
+    }
+    if config.qty <= 0.0 {
+        return Err(TrendLabError::Config("qty must be > 0".into()));
+    }
+
+    // If pyramiding disabled, delegate to standard backtest
+    if !config.pyramid_config.enabled {
+        return run_backtest(bars, strategy, config);
+    }
+
+    strategy.reset();
+
+    let pyramid_cfg = &config.pyramid_config;
+    let atr_values = atr_wilder(bars, pyramid_cfg.atr_period);
+
+    let mut cash = config.initial_cash;
+    let mut position_qty = 0.0;
+    let mut position = Position::Flat;
+
+    let mut pending_signal: Option<Signal> = None;
+    let mut pending_pyramid_price: Option<f64> = None; // Price at which pyramid was triggered
+    let mut fills: Vec<Fill> = vec![];
+    let mut pyramid_trades: Vec<PyramidTrade> = vec![];
+    let mut equity: Vec<EquityPoint> = Vec::with_capacity(bars.len());
+    let mut pyr_state = PyramidState::default();
+
+    for i in 0..bars.len() {
+        let current_bar = &bars[i];
+
+        // 1) Execute pending entry/exit/pyramid fills on open
+        if let Some(sig) = pending_signal.take() {
+            match (sig, position) {
+                (Signal::EnterLong, Position::Flat) => {
+                    let raw_price = current_bar.open;
+                    let entry_atr = if i > 0 {
+                        atr_values[i - 1].unwrap_or(4.0) // Use prior bar's ATR, default if unavailable
+                    } else {
+                        4.0 // Default ATR for warmup period
+                    };
+
+                    let fill = execute_fill(
+                        current_bar.ts,
+                        Side::Buy,
+                        config.qty,
+                        raw_price,
+                        &config.cost_model,
+                        Some(entry_atr),
+                    );
+                    cash -= fill.qty * fill.price;
+                    cash -= fill.fees;
+                    position_qty += fill.qty;
+                    position = Position::Long;
+
+                    pyr_state.units = 1;
+                    pyr_state.last_add_price = fill.price;
+                    pyr_state.entry_atr = entry_atr;
+                    pyr_state.entries.push(fill.clone());
+                    fills.push(fill);
+                }
+                (Signal::ExitLong, Position::Long) => {
+                    // Exit all units together
+                    let raw_price = current_bar.open;
+                    let total_qty = position_qty;
+                    let fill = execute_fill(
+                        current_bar.ts,
+                        Side::Sell,
+                        total_qty,
+                        raw_price,
+                        &config.cost_model,
+                        Some(pyr_state.entry_atr),
+                    );
+                    cash += fill.qty * fill.price;
+                    cash -= fill.fees;
+                    position_qty = 0.0;
+                    position = Position::Flat;
+
+                    // Create pyramid trade from accumulated entries
+                    if !pyr_state.entries.is_empty() {
+                        let pyr_trade =
+                            PyramidTrade::from_fills(pyr_state.entries.clone(), fill.clone());
+                        pyramid_trades.push(pyr_trade);
+                    }
+
+                    fills.push(fill);
+                    pyr_state.reset();
+                }
+                _ => {}
+            }
+        }
+
+        // Execute pending pyramid add
+        if pending_pyramid_price.take().is_some()
+            && position == Position::Long
+            && pyr_state.can_add(pyramid_cfg.max_units)
+        {
+            let raw_price = current_bar.open;
+            let fill = execute_fill(
+                current_bar.ts,
+                Side::Buy,
+                config.qty,
+                raw_price,
+                &config.cost_model,
+                Some(pyr_state.entry_atr),
+            );
+            cash -= fill.qty * fill.price;
+            cash -= fill.fees;
+            position_qty += fill.qty;
+
+            pyr_state.units += 1;
+            pyr_state.last_add_price = fill.price;
+            pyr_state.entries.push(fill.clone());
+            fills.push(fill);
+        }
+
+        // 2) Mark-to-market equity at close
+        let close = current_bar.close;
+        let eq = cash + position_qty * close;
+        equity.push(EquityPoint {
+            ts: current_bar.ts,
+            cash,
+            position_qty,
+            close,
+            equity: eq,
+        });
+
+        // 3) Compute signals on close for next bar
+        let hist = &bars[..=i];
+        let warmup = strategy.warmup_period().max(pyramid_cfg.atr_period);
+
+        let sig = if i + 1 >= warmup {
+            strategy.signal(hist, position)
+        } else {
+            Signal::Hold
+        };
+
+        // Set pending signal for entry/exit
+        pending_signal = Some(sig);
+
+        // 4) Check for pyramid opportunity (on close, execute on next open)
+        if position == Position::Long
+            && pyr_state.can_add(pyramid_cfg.max_units)
+            && pyr_state.should_pyramid(close, pyramid_cfg.threshold_atr_multiple)
+        {
+            pending_pyramid_price = Some(close);
+        }
+    }
+
+    Ok(BacktestResult {
+        fills,
+        trades: vec![], // Standard trades not populated for pyramid backtest
+        pyramid_trades,
         equity,
     })
 }
@@ -229,6 +744,7 @@ fn execute_fill(
     qty: f64,
     raw_price: f64,
     costs: &CostModel,
+    atr_at_fill: Option<f64>,
 ) -> Fill {
     let slip_rate = costs.slippage_bps / 10_000.0;
     let fee_rate = costs.fees_bps_per_side / 10_000.0;
@@ -248,6 +764,7 @@ fn execute_fill(
         price: slipped_price,
         fees,
         raw_price,
+        atr_at_fill,
     }
 }
 

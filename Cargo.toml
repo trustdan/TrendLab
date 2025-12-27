@@ -4,6 +4,7 @@ members = [
     "crates/trendlab-core",
     "crates/trendlab-cli",
     "crates/trendlab-bdd",
+    "crates/trendlab-tui",
 ]
 
 [workspace.package]
@@ -24,13 +25,36 @@ chrono = { version = "0.4", features = ["serde"] }
 # CLI
 clap = { version = "4.5", features = ["derive"] }
 
+# Parallel processing
+rayon = "1.10"
+
 # Async (for data fetching)
 tokio = { version = "1.42", features = ["full"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "cookies"] }
+
+# Crypto (for checksums)
+sha2 = "0.10"
+
+# Config files
+toml = "0.8"
 
 # Testing
 cucumber = "0.21"
 async-trait = "0.1"
+
+# Terminal styling
+colored = "2.1"
+console = "0.15"
+
+# Terminal charts
+textplots = "0.8"
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# HTML templating
+maud = "0.26"
 
 # Internal crates
 trendlab-core = { path = "crates/trendlab-core" }

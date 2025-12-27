@@ -12,6 +12,8 @@ serde_json.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
+rayon.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
 # Unit tests use standard Rust test framework

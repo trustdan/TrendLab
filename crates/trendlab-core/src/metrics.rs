@@ -1,10 +1,14 @@
 //! Performance metrics calculations.
 
+use crate::backtest::BacktestResult;
 use serde::{Deserialize, Serialize};
 
 /// Performance metrics for a backtest run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metrics {
+    /// Total return (as decimal, e.g., 0.25 = 25%)
+    pub total_return: f64,
+
     /// Compound annual growth rate
     pub cagr: f64,
 
@@ -36,6 +40,7 @@ pub struct Metrics {
 impl Default for Metrics {
     fn default() -> Self {
         Self {
+            total_return: 0.0,
             cagr: 0.0,
             sharpe: 0.0,
             sortino: 0.0,
@@ -46,6 +51,107 @@ impl Default for Metrics {
             num_trades: 0,
             turnover: 0.0,
         }
+    }
+}
+
+/// Compute all metrics from a BacktestResult.
+pub fn compute_metrics(result: &BacktestResult, initial_cash: f64) -> Metrics {
+    if result.equity.is_empty() {
+        return Metrics::default();
+    }
+
+    let equity_curve: Vec<f64> = result.equity.iter().map(|e| e.equity).collect();
+    let last_equity = equity_curve.last().copied().unwrap_or(initial_cash);
+
+    // Total return
+    let total_return = if initial_cash > 0.0 {
+        (last_equity - initial_cash) / initial_cash
+    } else {
+        0.0
+    };
+
+    // Calculate years from first to last bar
+    let years = if result.equity.len() >= 2 {
+        let first_ts = result.equity.first().unwrap().ts;
+        let last_ts = result.equity.last().unwrap().ts;
+        let duration = last_ts.signed_duration_since(first_ts);
+        duration.num_days() as f64 / 365.25
+    } else {
+        0.0
+    };
+
+    // CAGR
+    let cagr = calculate_cagr(initial_cash, last_equity, years);
+
+    // Max drawdown
+    let max_drawdown = calculate_max_drawdown(&equity_curve);
+
+    // Calmar ratio (CAGR / Max Drawdown)
+    let calmar = if max_drawdown > 0.0 {
+        cagr / max_drawdown
+    } else {
+        0.0
+    };
+
+    // Daily returns for Sharpe calculation
+    let daily_returns: Vec<f64> = equity_curve
+        .windows(2)
+        .map(|w| (w[1] - w[0]) / w[0])
+        .collect();
+
+    let sharpe = calculate_sharpe(&daily_returns);
+    let sortino = calculate_sortino(&daily_returns);
+
+    // Trade-based metrics
+    let num_trades = result.trades.len() as u32;
+    let winning_trades = result.trades.iter().filter(|t| t.net_pnl > 0.0).count();
+    let win_rate = if num_trades > 0 {
+        winning_trades as f64 / num_trades as f64
+    } else {
+        0.0
+    };
+
+    // Profit factor
+    let gross_profit: f64 = result
+        .trades
+        .iter()
+        .filter(|t| t.net_pnl > 0.0)
+        .map(|t| t.net_pnl)
+        .sum();
+    let gross_loss: f64 = result
+        .trades
+        .iter()
+        .filter(|t| t.net_pnl < 0.0)
+        .map(|t| t.net_pnl.abs())
+        .sum();
+    let profit_factor = if gross_loss > 0.0 {
+        gross_profit / gross_loss
+    } else if gross_profit > 0.0 {
+        f64::INFINITY
+    } else {
+        0.0
+    };
+
+    // Turnover (total traded notional / average capital)
+    let total_traded: f64 = result.fills.iter().map(|f| (f.qty * f.price).abs()).sum();
+    let avg_capital = (initial_cash + last_equity) / 2.0;
+    let turnover = if years > 0.0 && avg_capital > 0.0 {
+        (total_traded / avg_capital) / years
+    } else {
+        0.0
+    };
+
+    Metrics {
+        total_return,
+        cagr,
+        sharpe,
+        sortino,
+        max_drawdown,
+        calmar,
+        win_rate,
+        profit_factor,
+        num_trades,
+        turnover,
     }
 }
 
@@ -80,6 +186,33 @@ pub fn calculate_sharpe(daily_returns: &[f64]) -> f64 {
 
     // Annualize: multiply mean by 252, std by sqrt(252)
     (mean * 252.0) / (std_dev * 252.0_f64.sqrt())
+}
+
+/// Calculate annualized Sortino ratio from daily returns.
+///
+/// Like Sharpe but only penalizes downside volatility.
+pub fn calculate_sortino(daily_returns: &[f64]) -> f64 {
+    if daily_returns.is_empty() {
+        return 0.0;
+    }
+
+    let n = daily_returns.len() as f64;
+    let mean = daily_returns.iter().sum::<f64>() / n;
+
+    // Downside deviation: only consider returns below zero
+    let downside_variance = daily_returns
+        .iter()
+        .map(|r| if *r < 0.0 { r.powi(2) } else { 0.0 })
+        .sum::<f64>()
+        / n;
+    let downside_dev = downside_variance.sqrt();
+
+    if downside_dev == 0.0 {
+        return 0.0;
+    }
+
+    // Annualize
+    (mean * 252.0) / (downside_dev * 252.0_f64.sqrt())
 }
 
 /// Calculate maximum drawdown from an equity curve.

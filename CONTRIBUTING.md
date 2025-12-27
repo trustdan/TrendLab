@@ -104,6 +104,47 @@ refactor: extract indicator calculations
 
 For significant changes, consider creating an ADR in `docs/adr/`. See the [ADR README](docs/adr/README.md) for the template.
 
+## Code Ownership
+
+**Sign your work.** We believe in craftsmanship and accountability.
+
+### Module Stewardship
+
+Each major module has a steward responsible for:
+
+- Reviewing PRs that touch that module
+- Maintaining documentation and invariants
+- Guiding architectural decisions
+
+| Module | Steward | Scope |
+|--------|---------|-------|
+| `trendlab-core` | TBD | Domain types, backtest kernel, strategies |
+| `trendlab-cli` | TBD | CLI interface, orchestration |
+| `trendlab-bdd` | TBD | BDD scenarios, fixtures, step definitions |
+| Data pipeline | TBD | Providers, caching, normalization |
+
+Stewardship is about responsibility, not gatekeeping. Anyone can contribute anywhere.
+
+### Commit Attribution
+
+- Use your real name and email in git config
+- Co-authored commits are welcome for pair programming
+- AI-assisted code should note this in the commit message
+
+### Pride in Craft
+
+From *The Pragmatic Programmer*:
+
+> "Pragmatic Programmers don't shirk from responsibility. Instead, we rejoice in accepting challenges and in making our expertise well known."
+
+When you contribute:
+
+- Write code you'd be proud to show
+- Leave the codebase better than you found it
+- If you see a broken window, fix it or file an issue
+
+---
+
 ## Questions?
 
 Open an issue with the `question` label or start a discussion.

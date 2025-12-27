@@ -1,0 +1,61 @@
+# TrendLab Universe Configuration
+# Defines sectors and their constituent tickers for multi-ticker backtesting
+
+[universe]
+name = "US Equities"
+description = "Curated list of US equities by sector"
+
+[[sectors]]
+id = "basic_materials"
+name = "Basic Materials"
+tickers = ["LIN", "SCCO", "NEM", "CF"]
+
+[[sectors]]
+id = "comms_services"
+name = "Communication Services"
+tickers = ["GOOG", "META", "RDDT", "NFLX"]
+
+[[sectors]]
+id = "consumer_cyclical"
+name = "Consumer Cyclical"
+tickers = ["AMZN", "TJX", "DASH", "HD", "BABA"]
+
+[[sectors]]
+id = "consumer_defensive"
+name = "Consumer Defensive"
+tickers = ["WMT", "PM", "UL", "COST", "PG", "MDLZ"]
+
+[[sectors]]
+id = "energy"
+name = "Energy"
+tickers = ["XOM", "CVX", "SHEL"]
+
+[[sectors]]
+id = "financial"
+name = "Financial"
+tickers = ["BRK-B", "JPM", "MS", "COIN", "PYPL", "IBKR"]
+
+[[sectors]]
+id = "healthcare"
+name = "Healthcare"
+tickers = ["LLY", "JNJ", "ABBV", "UNH"]
+
+[[sectors]]
+id = "industrials"
+name = "Industrials"
+tickers = ["GE", "RTX", "BA", "ETN", "MMM"]
+
+[[sectors]]
+id = "real_estate"
+name = "Real Estate"
+tickers = ["PLD", "AMT", "O"]
+
+[[sectors]]
+id = "technology"
+name = "Technology"
+tickers = ["NVDA", "AAPL", "PLTR", "CSCO", "MSFT", "AMD"]
+
+[[sectors]]
+id = "utilities"
+name = "Utilities"
+tickers = ["EIX", "NEE", "DUK", "AEP", "SO"]

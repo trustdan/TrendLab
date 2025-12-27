@@ -5,7 +5,29 @@
       "Bash(cargo check:*)",
       "Bash(cargo fmt:*)",
       "Bash(cargo clippy:*)",
-      "Bash(cargo test:*)"
+      "Bash(cargo test:*)",
+      "Bash(powershell:*)",
+      "Bash(findstr:*)",
+      "Bash(Select-String -Pattern \"DEBUG|SPLIT|Parsed bars\")",
+      "Bash(Select-Object -First 50)",
+      "Bash(cargo run:*)",
+      "Bash(cargo build:*)",
+      "Bash(dir:*)",
+      "Bash(Select-String -Pattern \"Scenario|PASSED|FAILED|error\\\\[|warning:\")",
+      "Bash(Select-Object -First 60)",
+      "Bash(Select-String -Pattern \"test result|error\\\\[|FAILED|passed\")",
+      "Bash(Select-Object -First 30)",
+      "Bash(Select-String -Pattern \"Scenario|PASSED|FAILED|error\\\\[|warning:|step.*matching\")",
+      "Bash(Select-Object -First 40)",
+      "Bash(ls:*)",
+      "Bash(Out-String)",
+      "Bash(tee:*)",
+      "Bash($env:RUST_MIN_STACK = \"8388608\")",
+      "Bash(dir /s /b dataparquet1d)",
+      "Bash(dir c:UsersDanTrendLabdata /s /b)",
+      "Bash(cmd /c \"dir c:\\\\Users\\\\Dan\\\\TrendLab\\\\data /s /b 2>&1\")",
+      "Bash(python -c:*)",
+      "Bash(curl:*)"
     ]
   }
 }

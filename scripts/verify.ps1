@@ -28,6 +28,15 @@ cargo test
 Assert-LastExit "cargo test"
 
 Write-Host ""
+Write-Host "-> cargo deny check (if installed)"
+if (Get-Command cargo-deny -ErrorAction SilentlyContinue) {
+    cargo deny check
+    Assert-LastExit "cargo deny check"
+} else {
+    Write-Host "   (skipped: cargo-deny not installed)"
+}
+
+Write-Host ""
 Write-Host "OK"
 
 

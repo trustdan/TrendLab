@@ -1,6 +1,7 @@
 //! Strategy trait and common implementations.
 
 use crate::bar::Bar;
+use crate::indicators::{donchian_channel, ema_close, sma_close, MAType};
 
 /// Position state in a backtest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,8 +18,359 @@ pub enum Signal {
     Hold,
     /// Enter long position
     EnterLong,
+    /// Add to existing long position (pyramid)
+    AddLong,
     /// Exit long position
     ExitLong,
+}
+
+/// Donchian breakout strategy.
+///
+/// Entry: Close breaks above the N-day high (upper Donchian channel)
+/// Exit: Close breaks below the M-day low (lower Donchian channel, typically M < N)
+///
+/// This follows the Turtle trading system convention:
+/// - System 1: 20-day entry, 10-day exit
+/// - System 2: 55-day entry, 20-day exit
+#[derive(Debug, Clone)]
+pub struct DonchianBreakoutStrategy {
+    entry_lookback: usize,
+    exit_lookback: usize,
+}
+
+impl DonchianBreakoutStrategy {
+    pub fn new(entry_lookback: usize, exit_lookback: usize) -> Self {
+        Self {
+            entry_lookback,
+            exit_lookback,
+        }
+    }
+
+    /// Turtle System 1: 20-day entry, 10-day exit
+    pub fn turtle_system_1() -> Self {
+        Self::new(20, 10)
+    }
+
+    /// Turtle System 2: 55-day entry, 20-day exit
+    pub fn turtle_system_2() -> Self {
+        Self::new(55, 20)
+    }
+
+    /// Get the entry lookback period.
+    pub fn entry_lookback(&self) -> usize {
+        self.entry_lookback
+    }
+
+    /// Get the exit lookback period.
+    pub fn exit_lookback(&self) -> usize {
+        self.exit_lookback
+    }
+}
+
+impl Strategy for DonchianBreakoutStrategy {
+    fn id(&self) -> &str {
+        "donchian_breakout"
+    }
+
+    fn warmup_period(&self) -> usize {
+        self.entry_lookback.max(self.exit_lookback)
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let current_close = bars[current_idx].close;
+
+        match current_position {
+            Position::Flat => {
+                // Check for entry: close > upper channel
+                let entry_channel = donchian_channel(bars, self.entry_lookback);
+                if let Some(ch) = entry_channel[current_idx] {
+                    if current_close > ch.upper {
+                        return Signal::EnterLong;
+                    }
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Check for exit: close < lower channel
+                let exit_channel = donchian_channel(bars, self.exit_lookback);
+                if let Some(ch) = exit_channel[current_idx] {
+                    if current_close < ch.lower {
+                        return Signal::ExitLong;
+                    }
+                }
+                Signal::Hold
+            }
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// Moving Average Crossover strategy.
+///
+/// Entry: Fast MA crosses above slow MA (golden cross)
+/// Exit: Fast MA crosses below slow MA (death cross)
+///
+/// Common configurations:
+/// - SMA 50/200: Classic "golden cross / death cross"
+/// - EMA 12/26: MACD-style short-term crossover
+/// - SMA 10/50: Medium-term trend following
+#[derive(Debug, Clone)]
+pub struct MACrossoverStrategy {
+    fast_period: usize,
+    slow_period: usize,
+    ma_type: MAType,
+    /// Tracks whether fast was above slow on previous bar (for crossover detection)
+    prev_fast_above_slow: Option<bool>,
+}
+
+impl MACrossoverStrategy {
+    pub fn new(fast_period: usize, slow_period: usize, ma_type: MAType) -> Self {
+        assert!(
+            fast_period < slow_period,
+            "Fast period must be less than slow period"
+        );
+        Self {
+            fast_period,
+            slow_period,
+            ma_type,
+            prev_fast_above_slow: None,
+        }
+    }
+
+    /// Classic golden cross: SMA 50/200
+    pub fn golden_cross_50_200() -> Self {
+        Self::new(50, 200, MAType::SMA)
+    }
+
+    /// MACD-style crossover: EMA 12/26
+    pub fn macd_style_12_26() -> Self {
+        Self::new(12, 26, MAType::EMA)
+    }
+
+    /// Medium-term crossover: SMA 10/50
+    pub fn medium_term_10_50() -> Self {
+        Self::new(10, 50, MAType::SMA)
+    }
+
+    /// Get the fast period.
+    pub fn fast_period(&self) -> usize {
+        self.fast_period
+    }
+
+    /// Get the slow period.
+    pub fn slow_period(&self) -> usize {
+        self.slow_period
+    }
+
+    /// Get the MA type.
+    pub fn ma_type(&self) -> MAType {
+        self.ma_type
+    }
+
+    /// Compute fast and slow MAs for all bars.
+    pub fn compute_mas(&self, bars: &[Bar]) -> (Vec<Option<f64>>, Vec<Option<f64>>) {
+        match self.ma_type {
+            MAType::SMA => (
+                sma_close(bars, self.fast_period),
+                sma_close(bars, self.slow_period),
+            ),
+            MAType::EMA => (
+                ema_close(bars, self.fast_period),
+                ema_close(bars, self.slow_period),
+            ),
+        }
+    }
+}
+
+impl Strategy for MACrossoverStrategy {
+    fn id(&self) -> &str {
+        "ma_crossover"
+    }
+
+    fn warmup_period(&self) -> usize {
+        // Need slow_period bars before we can compute the slow MA
+        self.slow_period
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let (fast_ma, slow_ma) = self.compute_mas(bars);
+
+        // Get current and previous MA values
+        let current_fast = match fast_ma[current_idx] {
+            Some(v) => v,
+            None => return Signal::Hold,
+        };
+        let current_slow = match slow_ma[current_idx] {
+            Some(v) => v,
+            None => return Signal::Hold,
+        };
+
+        // Need previous bar to detect crossover
+        if current_idx == 0 {
+            return Signal::Hold;
+        }
+
+        let prev_fast = match fast_ma[current_idx - 1] {
+            Some(v) => v,
+            None => return Signal::Hold,
+        };
+        let prev_slow = match slow_ma[current_idx - 1] {
+            Some(v) => v,
+            None => return Signal::Hold,
+        };
+
+        let fast_above_slow = current_fast > current_slow;
+        let prev_fast_above_slow = prev_fast > prev_slow;
+
+        match current_position {
+            Position::Flat => {
+                // Golden cross: fast crosses above slow
+                if fast_above_slow && !prev_fast_above_slow {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Death cross: fast crosses below slow
+                if !fast_above_slow && prev_fast_above_slow {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+        }
+    }
+
+    fn reset(&mut self) {
+        self.prev_fast_above_slow = None;
+    }
+}
+
+/// Time-Series Momentum (TSMOM) strategy.
+///
+/// Entry: When N-period return is positive (close > close N bars ago)
+/// Exit: When N-period return is negative (close < close N bars ago)
+///
+/// This is a pure time-series momentum strategy based on academic research
+/// (Moskowitz, Ooi, Pedersen 2012). It captures the well-documented momentum
+/// effect where assets that have been rising tend to continue rising.
+///
+/// Common lookback periods:
+/// - 252 days (12-month): Academic standard
+/// - 126 days (6-month): Short-term momentum
+/// - 21 days (1-month): Very short-term
+#[derive(Debug, Clone)]
+pub struct TsmomStrategy {
+    lookback: usize,
+}
+
+impl TsmomStrategy {
+    pub fn new(lookback: usize) -> Self {
+        assert!(lookback > 0, "Lookback must be at least 1");
+        Self { lookback }
+    }
+
+    /// Standard 12-month momentum (252 trading days)
+    pub fn twelve_month() -> Self {
+        Self::new(252)
+    }
+
+    /// 6-month momentum (126 trading days)
+    pub fn six_month() -> Self {
+        Self::new(126)
+    }
+
+    /// 1-month momentum (21 trading days)
+    pub fn one_month() -> Self {
+        Self::new(21)
+    }
+
+    /// Get the lookback period.
+    pub fn lookback(&self) -> usize {
+        self.lookback
+    }
+
+    /// Compute momentum (simple return) for a given index.
+    /// Returns None if the lookback period hasn't elapsed.
+    pub fn compute_momentum(&self, bars: &[Bar], current_idx: usize) -> Option<f64> {
+        if current_idx < self.lookback {
+            return None;
+        }
+        let lookback_idx = current_idx - self.lookback;
+        let current_close = bars[current_idx].close;
+        let lookback_close = bars[lookback_idx].close;
+        if lookback_close == 0.0 {
+            return None;
+        }
+        Some((current_close - lookback_close) / lookback_close)
+    }
+}
+
+impl Strategy for TsmomStrategy {
+    fn id(&self) -> &str {
+        "tsmom"
+    }
+
+    fn warmup_period(&self) -> usize {
+        self.lookback
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let current_close = bars[current_idx].close;
+        let lookback_close = bars[current_idx - self.lookback].close;
+
+        match current_position {
+            Position::Flat => {
+                // Entry: momentum is positive (current > lookback)
+                if current_close > lookback_close {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: momentum turns negative (current < lookback)
+                if current_close < lookback_close {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+        }
+    }
+
+    fn reset(&mut self) {}
 }
 
 /// Trait for trend-following strategies.
@@ -69,6 +421,14 @@ impl Strategy for NullStrategy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
+
+    fn make_bar(day: u32, open: f64, high: f64, low: f64, close: f64) -> Bar {
+        let ts = chrono::Utc
+            .with_ymd_and_hms(2024, 1, day, 0, 0, 0)
+            .unwrap();
+        Bar::new(ts, open, high, low, close, 1000.0, "TEST", "1d")
+    }
 
     #[test]
     fn test_null_strategy() {
@@ -76,5 +436,86 @@ mod tests {
         assert_eq!(strategy.id(), "null");
         assert_eq!(strategy.warmup_period(), 0);
         assert_eq!(strategy.signal(&[], Position::Flat), Signal::Hold);
+    }
+
+    #[test]
+    fn test_donchian_uptrend_generates_entry() {
+        // Create a clear uptrend: price goes from 100 to 120 over 15 bars
+        let bars: Vec<Bar> = (1..=15)
+            .map(|i| {
+                let base = 100.0 + (i as f64) * 1.5;
+                make_bar(i as u32, base, base + 1.0, base - 0.5, base + 0.5)
+            })
+            .collect();
+
+        // Use lookback of 10
+        let strategy = DonchianBreakoutStrategy::new(10, 5);
+
+        // After warmup (10 bars), strategy should signal entry on continued uptrend
+        // At bar 11 (index 10): close should be above prior 10-day high
+        let signal = strategy.signal(&bars[..11], Position::Flat);
+
+        // Bar 10 close = 100 + 11*1.5 + 0.5 = 117.0
+        // Prior 10 bars (0-9) highest high = bar 9 high = 100 + 10*1.5 + 1.0 = 116.0
+        // Entry condition: 117.0 > 116.0 → true!
+        assert_eq!(
+            signal,
+            Signal::EnterLong,
+            "Strategy should enter on uptrend breakout"
+        );
+    }
+
+    #[test]
+    fn test_donchian_during_warmup_holds() {
+        let bars: Vec<Bar> = (1..=10)
+            .map(|i| {
+                let base = 100.0 + (i as f64);
+                make_bar(i as u32, base, base + 1.0, base - 0.5, base + 0.5)
+            })
+            .collect();
+
+        let strategy = DonchianBreakoutStrategy::new(10, 5);
+
+        // During warmup, should always hold
+        for i in 1..=10 {
+            let signal = strategy.signal(&bars[..i], Position::Flat);
+            assert_eq!(
+                signal,
+                Signal::Hold,
+                "Should hold during warmup at bar {}",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_donchian_exit_on_downtrend() {
+        // First, create uptrend then reversal
+        let mut bars: Vec<Bar> = (1..=15)
+            .map(|i| {
+                let base = 100.0 + (i as f64) * 1.5;
+                make_bar(i as u32, base, base + 1.0, base - 0.5, base + 0.5)
+            })
+            .collect();
+
+        // Add bars that go down to trigger exit (5-day exit lookback)
+        for i in 16..=22 {
+            let base = 120.0 - ((i - 15) as f64) * 3.0;
+            bars.push(make_bar(i as u32, base, base + 0.5, base - 1.0, base - 0.5));
+        }
+
+        let strategy = DonchianBreakoutStrategy::new(10, 5);
+
+        // Check that exit triggers when close < 5-day low
+        // At bar 20 (after 5 bars of decline), close should be below prior 5-day low
+        let signal = strategy.signal(&bars[..20], Position::Long);
+
+        // Bar 20 close should be below prior 5-day low
+        // This should trigger an exit
+        assert_eq!(
+            signal,
+            Signal::ExitLong,
+            "Strategy should exit on downtrend"
+        );
     }
 }

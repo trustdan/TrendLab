@@ -16,6 +16,14 @@ echo "-> cargo test"
 cargo test
 echo
 
+echo "-> cargo deny check (if installed)"
+if command -v cargo-deny >/dev/null 2>&1; then
+  cargo deny check
+else
+  echo "   (skipped: cargo-deny not installed)"
+fi
+echo
+
 echo "OK"
 
 

@@ -2,120 +2,223 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://trendlab.local/schemas/strategy-artifact.schema.json",
   "title": "StrategyArtifact",
-  "description": "Schema for strategy artifacts used to generate Pine Script parity",
+  "description": "Exported strategy configuration for Pine Script parity validation",
   "type": "object",
-  "required": ["strategy_id", "version", "timeframe", "fill_model", "indicators", "rules", "parameters"],
+  "required": [
+    "schema_version",
+    "strategy_id",
+    "symbol",
+    "timeframe",
+    "indicators",
+    "rules",
+    "fill_model",
+    "cost_model",
+    "parameters",
+    "parity_vectors"
+  ],
   "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Schema version for forward compatibility",
+      "examples": ["1.0.0"]
+    },
     "strategy_id": {
       "type": "string",
-      "description": "Unique identifier for the strategy (e.g., 'ma_cross_v1')"
+      "description": "Unique identifier for the strategy",
+      "examples": ["donchian_breakout"]
     },
-    "version": {
+    "strategy_version": {
       "type": "string",
-      "pattern": "^\d+\.\d+\.\d+$",
-      "description": "Semantic version of the artifact schema"
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Version of the strategy implementation"
+    },
+    "symbol": {
+      "type": "string",
+      "description": "Trading symbol (ticker)",
+      "examples": ["SPY", "AAPL"]
     },
     "timeframe": {
       "type": "string",
       "enum": ["1d", "1h", "4h", "1w"],
       "description": "Bar timeframe"
     },
-    "fill_model": {
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of artifact generation"
+    },
+    "data_range": {
       "type": "object",
-      "required": ["convention", "fees_bps"],
+      "description": "Date range of the backtest data",
       "properties": {
-        "convention": {
-          "type": "string",
-          "enum": ["next_open", "next_close", "same_close"],
-          "description": "When orders are filled relative to signal bar"
-        },
-        "fees_bps": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Round-trip fees in basis points"
-        },
-        "slippage_bps": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Slippage in basis points (optional)"
-        }
-      }
+        "start": { "type": "string", "format": "date-time" },
+        "end": { "type": "string", "format": "date-time" }
+      },
+      "required": ["start", "end"]
     },
     "indicators": {
       "type": "array",
+      "description": "Indicator definitions used by the strategy",
       "items": {
         "type": "object",
-        "required": ["name", "type", "params"],
+        "required": ["id", "type", "params"],
         "properties": {
-          "name": {
+          "id": {
             "type": "string",
-            "description": "Indicator variable name (e.g., 'fast_ma')"
+            "description": "Unique identifier for this indicator instance",
+            "examples": ["donchian_entry", "donchian_exit", "sma_20"]
           },
           "type": {
             "type": "string",
-            "enum": ["sma", "ema", "atr", "rsi", "macd", "bollinger"],
+            "enum": ["donchian", "sma", "ema", "atr", "rsi", "macd", "bollinger"],
             "description": "Indicator type"
           },
           "params": {
             "type": "object",
-            "description": "Indicator-specific parameters"
+            "description": "Indicator-specific parameters",
+            "properties": {
+              "lookback": { "type": "integer", "minimum": 1 },
+              "period": { "type": "integer", "minimum": 1 },
+              "source": { "type": "string", "enum": ["close", "high", "low", "open", "hl2", "hlc3", "ohlc4"] }
+            }
           },
           "pine_expr": {
             "type": "string",
-            "description": "Equivalent Pine Script expression"
+            "description": "Pine Script expression for this indicator",
+            "examples": ["ta.highest(high, 10)", "ta.sma(close, 20)"]
           }
         }
       }
     },
     "rules": {
       "type": "object",
-      "required": ["entry_long", "exit_long"],
+      "description": "Entry and exit rules",
+      "required": ["entry", "exit"],
       "properties": {
-        "entry_long": {
-          "type": "string",
-          "description": "Boolean expression for long entry (Pine-compatible)"
+        "entry": {
+          "type": "object",
+          "required": ["condition", "pine_condition"],
+          "properties": {
+            "condition": {
+              "type": "string",
+              "description": "Human-readable condition",
+              "examples": ["close > donchian_entry.upper"]
+            },
+            "pine_condition": {
+              "type": "string",
+              "description": "Pine Script v6 boolean expression",
+              "examples": ["close > ta.highest(high[1], 10)"]
+            },
+            "position_required": {
+              "type": "string",
+              "enum": ["flat", "long", "short", "any"],
+              "default": "flat"
+            }
+          }
         },
-        "exit_long": {
-          "type": "string",
-          "description": "Boolean expression for long exit (Pine-compatible)"
+        "exit": {
+          "type": "object",
+          "required": ["condition", "pine_condition"],
+          "properties": {
+            "condition": {
+              "type": "string",
+              "description": "Human-readable condition",
+              "examples": ["close < donchian_exit.lower"]
+            },
+            "pine_condition": {
+              "type": "string",
+              "description": "Pine Script v6 boolean expression",
+              "examples": ["close < ta.lowest(low[1], 5)"]
+            },
+            "position_required": {
+              "type": "string",
+              "enum": ["flat", "long", "short", "any"],
+              "default": "long"
+            }
+          }
+        }
+      }
+    },
+    "fill_model": {
+      "type": "string",
+      "enum": ["NextOpen"],
+      "description": "How signals are filled"
+    },
+    "cost_model": {
+      "type": "object",
+      "description": "Fee and slippage configuration",
+      "required": ["fees_bps_per_side", "slippage_bps"],
+      "properties": {
+        "fees_bps_per_side": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Fees in basis points per side"
         },
-        "entry_short": {
-          "type": "string",
-          "description": "Boolean expression for short entry (optional)"
-        },
-        "exit_short": {
-          "type": "string",
-          "description": "Boolean expression for short exit (optional)"
+        "slippage_bps": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Slippage in basis points"
         }
       }
     },
     "parameters": {
       "type": "object",
-      "description": "Strategy parameter values used in this artifact"
+      "description": "Strategy parameters used in this configuration",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "number" },
+          { "type": "string" },
+          { "type": "boolean" }
+        ]
+      }
     },
     "parity_vectors": {
-      "type": "array",
-      "description": "Test vectors for Pine parity validation",
-      "items": {
-        "type": "object",
-        "required": ["ts", "indicators", "signals"],
-        "properties": {
-          "ts": {
-            "type": "string",
-            "format": "date",
-            "description": "Bar date (YYYY-MM-DD)"
-          },
-          "indicators": {
+      "type": "object",
+      "description": "Test vectors for validating Pine Script parity",
+      "required": ["vectors"],
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of the test window"
+        },
+        "vectors": {
+          "type": "array",
+          "items": {
             "type": "object",
-            "description": "Expected indicator values at this bar"
-          },
-          "signals": {
-            "type": "object",
+            "required": ["ts", "ohlcv"],
             "properties": {
-              "entry_long": { "type": "boolean" },
-              "exit_long": { "type": "boolean" },
-              "entry_short": { "type": "boolean" },
-              "exit_short": { "type": "boolean" }
+              "ts": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Bar timestamp"
+              },
+              "ohlcv": {
+                "type": "object",
+                "required": ["open", "high", "low", "close"],
+                "properties": {
+                  "open": { "type": "number" },
+                  "high": { "type": "number" },
+                  "low": { "type": "number" },
+                  "close": { "type": "number" },
+                  "volume": { "type": "number" }
+                }
+              },
+              "indicators": {
+                "type": "object",
+                "description": "Indicator values at this bar",
+                "additionalProperties": true
+              },
+              "signal": {
+                "type": ["string", "null"],
+                "enum": ["hold", "enter_long", "exit_long", "enter_short", "exit_short", null],
+                "description": "Expected signal at this bar"
+              },
+              "position_after": {
+                "type": "string",
+                "enum": ["flat", "long", "short"],
+                "description": "Position state after this bar"
+              }
             }
           }
         }
@@ -123,18 +226,11 @@
     },
     "metadata": {
       "type": "object",
+      "description": "Optional additional metadata",
       "properties": {
-        "created_at": { "type": "string", "format": "date-time" },
         "run_id": { "type": "string" },
         "config_id": { "type": "string" },
-        "symbol": { "type": "string" },
-        "date_range": {
-          "type": "object",
-          "properties": {
-            "start": { "type": "string", "format": "date" },
-            "end": { "type": "string", "format": "date" }
-          }
-        }
+        "notes": { "type": "string" }
       }
     }
   }
