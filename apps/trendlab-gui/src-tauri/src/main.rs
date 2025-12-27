@@ -3,5 +3,3 @@
 fn main() {
     trendlab_gui::run();
 }
-
-

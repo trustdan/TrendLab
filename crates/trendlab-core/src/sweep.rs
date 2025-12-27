@@ -1316,7 +1316,7 @@ impl StrategyParams {
                     for period in periods {
                         configs.push(StrategyConfigId::OpeningRangeBreakout {
                             range_bars: rb,
-                            period: period.clone(),
+                            period: *period,
                         });
                     }
                 }
@@ -2233,12 +2233,12 @@ impl MultiStrategySweepResult {
             for (strategy_type, sweep_result) in results {
                 for config_result in &sweep_result.config_results {
                     // Track best among configs that actually trade
-                    if config_result.metrics.num_trades > 0 {
-                        if best_trading.is_none()
-                            || config_result.metrics.sharpe > best_trading.unwrap().1.metrics.sharpe
-                        {
-                            best_trading = Some((strategy_type, config_result));
-                        }
+                    if config_result.metrics.num_trades > 0
+                        && (best_trading.is_none()
+                            || config_result.metrics.sharpe
+                                > best_trading.unwrap().1.metrics.sharpe)
+                    {
+                        best_trading = Some((strategy_type, config_result));
                     }
                     // Track best overall (including no-trade configs)
                     if best_any.is_none()
@@ -2297,12 +2297,12 @@ impl MultiStrategySweepResult {
             for (symbol, sweep_result) in results {
                 for config_result in &sweep_result.config_results {
                     // Track best among configs that actually trade
-                    if config_result.metrics.num_trades > 0 {
-                        if best_trading.is_none()
-                            || config_result.metrics.sharpe > best_trading.unwrap().1.metrics.sharpe
-                        {
-                            best_trading = Some((symbol, config_result));
-                        }
+                    if config_result.metrics.num_trades > 0
+                        && (best_trading.is_none()
+                            || config_result.metrics.sharpe
+                                > best_trading.unwrap().1.metrics.sharpe)
+                    {
+                        best_trading = Some((symbol, config_result));
                     }
                     // Track best overall (including no-trade configs)
                     if best_any.is_none()
@@ -2536,9 +2536,9 @@ pub fn create_strategy_from_config(config: &StrategyConfigId) -> Box<dyn Strateg
             af_step,
             af_max,
         } => Box::new(ParabolicSARStrategy::new(*af_start, *af_step, *af_max)),
-        StrategyConfigId::OpeningRangeBreakout { range_bars, period } => Box::new(
-            OpeningRangeBreakoutStrategy::new(*range_bars, period.clone()),
-        ),
+        StrategyConfigId::OpeningRangeBreakout { range_bars, period } => {
+            Box::new(OpeningRangeBreakoutStrategy::new(*range_bars, *period))
+        }
         StrategyConfigId::Ensemble {
             base_strategy,
             horizons,

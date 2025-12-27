@@ -462,9 +462,11 @@ impl StrategySpec {
             // ParabolicSar uses 5-bar warmup (per Wilder's algorithm)
             StrategySpec::ParabolicSar { .. } => 5,
             // Ensemble warmup is max of all child warmups
-            StrategySpec::Ensemble { children, .. } => {
-                children.iter().map(|c| c.warmup_period()).max().unwrap_or(0)
-            }
+            StrategySpec::Ensemble { children, .. } => children
+                .iter()
+                .map(|c| c.warmup_period())
+                .max()
+                .unwrap_or(0),
         }
     }
 }
@@ -1450,7 +1452,7 @@ impl StrategyV2 for BollingerSqueezeV2 {
     }
 
     fn trading_mode(&self) -> TradingMode {
-        self.trading_mode.clone()
+        self.trading_mode
     }
 
     fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
@@ -2497,11 +2499,13 @@ impl StrategyV2 for LarryWilliamsV2 {
 
     fn add_indicators_to_lf(&self, lf: LazyFrame) -> LazyFrame {
         // Prior day range: high - low of previous bar
-        let prior_range = (col("high") - col("low")).shift(lit(1)).alias("prior_range");
+        let prior_range = (col("high") - col("low"))
+            .shift(lit(1))
+            .alias("prior_range");
 
         // Upper breakout level: open + range_mult * prior_range
-        let upper_breakout = (col("open") + lit(self.range_mult) * col("prior_range"))
-            .alias("upper_breakout");
+        let upper_breakout =
+            (col("open") + lit(self.range_mult) * col("prior_range")).alias("upper_breakout");
 
         // ATR for trailing stop - compute true range using when/then/otherwise
         let tr = {
@@ -2510,17 +2514,15 @@ impl StrategyV2 for LarryWilliamsV2 {
             let hc = (col("high") - prev_close.clone()).abs();
             let lc = (col("low") - prev_close).abs();
             // max(hl, hc, lc) using when/then/otherwise
-            when(hc.clone().is_null())
-                .then(hl.clone())
-                .otherwise(
-                    when(
-                        hl.clone()
-                            .gt_eq(hc.clone())
-                            .and(hl.clone().gt_eq(lc.clone())),
-                    )
-                    .then(hl.clone())
-                    .otherwise(when(hc.clone().gt_eq(lc.clone())).then(hc).otherwise(lc)),
+            when(hc.clone().is_null()).then(hl.clone()).otherwise(
+                when(
+                    hl.clone()
+                        .gt_eq(hc.clone())
+                        .and(hl.clone().gt_eq(lc.clone())),
                 )
+                .then(hl.clone())
+                .otherwise(when(hc.clone().gt_eq(lc.clone())).then(hc).otherwise(lc)),
+            )
         };
 
         let atr_col = tr
@@ -2869,7 +2871,11 @@ impl StrategyV2 for ParabolicSARV2 {
         let prev_up = col("sar_is_uptrend").shift(lit(1)).fill_null(lit(false));
 
         // Short entry: downtrend starts
-        let raw_entry_short = up.clone().not().and(prev_up.clone()).alias("raw_entry_short");
+        let raw_entry_short = up
+            .clone()
+            .not()
+            .and(prev_up.clone())
+            .alias("raw_entry_short");
 
         // Short exit: downtrend ends
         let raw_exit_short = up.and(prev_up.not()).alias("raw_exit_short");
@@ -2916,8 +2922,15 @@ impl EnsembleV2 {
         horizons: Vec<usize>,
         voting: VotingMethod,
     ) -> Self {
-        assert!(!children.is_empty(), "Ensemble must have at least one child");
-        assert_eq!(children.len(), horizons.len(), "Children and horizons must match");
+        assert!(
+            !children.is_empty(),
+            "Ensemble must have at least one child"
+        );
+        assert_eq!(
+            children.len(),
+            horizons.len(),
+            "Children and horizons must match"
+        );
 
         let child_specs: Vec<StrategySpec> = children.iter().map(|c| c.spec().clone()).collect();
         let spec = StrategySpec::ensemble(child_specs, horizons.clone(), voting);
@@ -2932,8 +2945,13 @@ impl EnsembleV2 {
     }
 
     /// Create from child StrategySpecs.
-    pub fn from_specs(child_specs: Vec<StrategySpec>, horizons: Vec<usize>, voting: VotingMethod) -> Self {
-        let children: Vec<Box<dyn StrategyV2>> = child_specs.iter().map(create_strategy_v2).collect();
+    pub fn from_specs(
+        child_specs: Vec<StrategySpec>,
+        horizons: Vec<usize>,
+        voting: VotingMethod,
+    ) -> Self {
+        let children: Vec<Box<dyn StrategyV2>> =
+            child_specs.iter().map(create_strategy_v2).collect();
         Self::new(children, horizons, voting)
     }
 
@@ -2991,7 +3009,9 @@ impl EnsembleV2 {
                     StrategyTypeId::Donchian => Box::new(DonchianBreakoutV2::new(h, h / 2)),
                     StrategyTypeId::TurtleS1 => Box::new(DonchianBreakoutV2::turtle_system_1()),
                     StrategyTypeId::TurtleS2 => Box::new(DonchianBreakoutV2::turtle_system_2()),
-                    StrategyTypeId::MACrossover => Box::new(MACrossoverV2::new(h / 4, h, MAType::SMA)),
+                    StrategyTypeId::MACrossover => {
+                        Box::new(MACrossoverV2::new(h / 4, h, MAType::SMA))
+                    }
                     StrategyTypeId::Tsmom => Box::new(TsmomV2::new(h)),
                     _ => Box::new(DonchianBreakoutV2::new(h, h / 2)),
                 }
@@ -3000,9 +3020,15 @@ impl EnsembleV2 {
         Self::new(children, horizons, voting)
     }
 
-    pub fn voting(&self) -> VotingMethod { self.voting }
-    pub fn horizons(&self) -> &[usize] { &self.horizons }
-    pub fn num_children(&self) -> usize { self.children.len() }
+    pub fn voting(&self) -> VotingMethod {
+        self.voting
+    }
+    pub fn horizons(&self) -> &[usize] {
+        &self.horizons
+    }
+    pub fn num_children(&self) -> usize {
+        self.children.len()
+    }
 
     pub fn trading_mode(mut self, mode: TradingMode) -> Self {
         self.trading_mode = mode;
@@ -3011,15 +3037,25 @@ impl EnsembleV2 {
 }
 
 impl StrategyV2 for EnsembleV2 {
-    fn spec(&self) -> &StrategySpec { &self.spec }
-    fn trading_mode(&self) -> TradingMode { self.trading_mode }
+    fn spec(&self) -> &StrategySpec {
+        &self.spec
+    }
+    fn trading_mode(&self) -> TradingMode {
+        self.trading_mode
+    }
 
     fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
-        if bars.is_empty() { return Signal::Hold; }
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
         let current_idx = bars.len() - 1;
-        if current_idx < self.warmup_period() { return Signal::Hold; }
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
 
-        let signals: Vec<Signal> = self.children.iter()
+        let signals: Vec<Signal> = self
+            .children
+            .iter()
             .map(|child| child.signal(bars, current_position))
             .collect();
         self.voting.vote(&signals, &self.horizons)
@@ -3067,8 +3103,10 @@ impl StrategyV2 for EnsembleV2 {
                     exit_sum = exit_sum + when(c.clone()).then(lit(1i32)).otherwise(lit(0i32));
                 }
 
-                (entry_sum.gt_eq(lit(majority)).alias("raw_entry"),
-                 exit_sum.gt_eq(lit(majority)).alias("raw_exit"))
+                (
+                    entry_sum.gt_eq(lit(majority)).alias("raw_entry"),
+                    exit_sum.gt_eq(lit(majority)).alias("raw_exit"),
+                )
             }
             VotingMethod::WeightedByHorizon => {
                 let total: usize = self.horizons.iter().sum();
@@ -3083,14 +3121,20 @@ impl StrategyV2 for EnsembleV2 {
                     exit_w = exit_w + when(c.clone()).then(lit(h as i32)).otherwise(lit(0i32));
                 }
 
-                (entry_w.gt(lit(threshold)).alias("raw_entry"),
-                 exit_w.gt(lit(threshold)).alias("raw_exit"))
+                (
+                    entry_w.gt(lit(threshold)).alias("raw_entry"),
+                    exit_w.gt(lit(threshold)).alias("raw_exit"),
+                )
             }
             VotingMethod::UnanimousEntry => {
                 let mut all_entry = lit(true);
-                for c in &child_entry_cols { all_entry = all_entry.and(c.clone()); }
+                for c in &child_entry_cols {
+                    all_entry = all_entry.and(c.clone());
+                }
                 let mut any_exit = lit(false);
-                for c in &child_exit_cols { any_exit = any_exit.or(c.clone()); }
+                for c in &child_exit_cols {
+                    any_exit = any_exit.or(c.clone());
+                }
 
                 (all_entry.alias("raw_entry"), any_exit.alias("raw_exit"))
             }
@@ -3157,7 +3201,11 @@ pub fn create_strategy_v2(spec: &StrategySpec) -> Box<dyn StrategyV2> {
             range_mult,
             atr_stop_mult,
             atr_period,
-        } => Box::new(LarryWilliamsV2::new(*range_mult, *atr_stop_mult, *atr_period)),
+        } => Box::new(LarryWilliamsV2::new(
+            *range_mult,
+            *atr_stop_mult,
+            *atr_period,
+        )),
         StrategySpec::OpeningRangeBreakout { range_bars, period } => {
             Box::new(OpeningRangeBreakoutV2::new(*range_bars, *period))
         }

@@ -799,7 +799,7 @@ pub fn darvas_boxes(bars: &[Bar], confirmation_bars: usize) -> Vec<Option<Darvas
                 }
             }
             Some((top_high, top_idx)) => {
-                if !current_box.as_ref().map_or(false, |b| b.top_confirmed) {
+                if !current_box.as_ref().is_some_and(|b| b.top_confirmed) {
                     // Still confirming the top
                     if bar.high < top_high {
                         lower_high_count += 1;
@@ -1595,6 +1595,7 @@ pub fn dmi(bars: &[Bar], period: usize) -> Vec<Option<DMI>> {
 /// Aroon-Up = 100 * (period - bars_since_highest_high) / period
 ///
 /// Returns `None` until there are enough bars for the period.
+#[allow(clippy::needless_range_loop)]
 pub fn aroon_up(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
     if period == 0 || bars.is_empty() {
         return vec![None; bars.len()];
@@ -1631,6 +1632,7 @@ pub fn aroon_up(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
 /// Aroon-Down = 100 * (period - bars_since_lowest_low) / period
 ///
 /// Returns `None` until there are enough bars for the period.
+#[allow(clippy::needless_range_loop)]
 pub fn aroon_down(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
     if period == 0 || bars.is_empty() {
         return vec![None; bars.len()];
@@ -2240,6 +2242,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn parabolic_sar_af_respects_maximum() {
         // Create a very strong uptrend to hit AF max
         let ohlc: Vec<(f64, f64, f64, f64)> = (0..20)

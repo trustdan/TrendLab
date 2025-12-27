@@ -4,6 +4,7 @@
 //! - Yahoo Finance data fetching (async HTTP)
 //! - Parameter sweeps (parallel via Rayon)
 //! - Cancellation via atomic flag
+#![allow(dead_code)]
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender};

@@ -1,4 +1,8 @@
 //! Application state for TrendLab TUI
+#![allow(dead_code)]
+#![allow(clippy::derivable_impls)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::upper_case_acronyms)]
 
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};

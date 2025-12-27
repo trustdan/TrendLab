@@ -1891,7 +1891,7 @@ impl Strategy for OpeningRangeBreakoutStrategy {
             return Signal::Hold;
         }
 
-        let or_values = opening_range(bars, self.range_bars, self.period.clone());
+        let or_values = opening_range(bars, self.range_bars, self.period);
 
         let current_or = match or_values[current_idx] {
             Some(ref r) => r,

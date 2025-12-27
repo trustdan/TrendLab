@@ -17,7 +17,7 @@ pub enum JobStatus {
     Cancelled,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct JobHandle {
     cancelled: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -52,7 +52,7 @@ impl CancellationToken {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Jobs {
     inner: Arc<Mutex<HashMap<String, (JobStatus, JobHandle)>>>,
 }
@@ -97,5 +97,3 @@ impl Clone for Jobs {
         }
     }
 }
-
-

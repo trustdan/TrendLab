@@ -1,5 +1,6 @@
 // Re-export all types
 export * from './bar';
+export * from './data';
 export * from './metrics';
 export * from './strategy';
 export * from './backtest';

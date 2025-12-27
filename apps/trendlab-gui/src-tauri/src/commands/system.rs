@@ -16,7 +16,10 @@ pub struct StartJobResponse {
 
 /// Smoke-test command: starts a background job and emits progress + completion events.
 #[tauri::command]
-pub async fn ping_job(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<StartJobResponse, GuiError> {
+pub async fn ping_job(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<StartJobResponse, GuiError> {
     let job_id = format!("ping-{}", now_ms());
     let token = state.jobs.create(job_id.clone());
 
@@ -85,5 +88,3 @@ fn now_ms() -> u64 {
         .unwrap_or_else(|_| Duration::from_millis(0))
         .as_millis() as u64
 }
-
-

@@ -47,7 +47,10 @@
       "Bash(cargo fix:*)",
       "Bash(rustfmt:*)",
       "Bash(npm install:*)",
-      "Bash(npx tsc --noEmit)"
+      "Bash(npx tsc --noEmit)",
+      "Bash(cargo deny check:*)",
+      "Bash(cargo install:*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }

@@ -740,9 +740,7 @@ fn apply_opening_range_rolling(lf: LazyFrame, range_bars: usize) -> LazyFrame {
         .alias("orb_range_low");
 
     // For rolling, range is always complete after warmup
-    let is_complete = col("orb_range_high")
-        .is_not_null()
-        .alias("orb_is_complete");
+    let is_complete = col("orb_range_high").is_not_null().alias("orb_is_complete");
 
     // Bars in range is always range_bars for rolling
     let bars_in_range = when(col("orb_range_high").is_not_null())
@@ -841,15 +839,13 @@ fn apply_opening_range_calendar(lf: LazyFrame, range_bars: usize, period_type: &
     let lf = lf.with_columns([range_high, range_low]);
 
     // Clean up temporary columns
-    lf.select([
-        col("*").exclude([
-            "_period_key",
-            "_period_change",
-            "_period_idx",
-            "_range_high_masked",
-            "_range_low_masked",
-        ]),
-    ])
+    lf.select([col("*").exclude([
+        "_period_key",
+        "_period_change",
+        "_period_idx",
+        "_range_high_masked",
+        "_range_low_masked",
+    ])])
 }
 
 // =============================================================================
@@ -897,7 +893,9 @@ pub fn apply_parabolic_sar_exprs(lf: LazyFrame, atr_period: usize, af_equiv: f64
 
     // Simplified trend detection: close > lower band = uptrend
     // In uptrend, SAR is below price, so if close > approximated SAR, we're bullish
-    let is_uptrend = col("close").gt(col("sar_lower_approx")).alias("sar_is_uptrend");
+    let is_uptrend = col("close")
+        .gt(col("sar_lower_approx"))
+        .alias("sar_is_uptrend");
 
     lf.with_column(is_uptrend)
 }

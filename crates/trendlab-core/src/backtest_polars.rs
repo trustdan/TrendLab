@@ -1484,14 +1484,14 @@ mod tests {
         let pos_states: Vec<Option<i32>> = pos_state_col.i32().unwrap().iter().collect();
 
         // Should have at least some short positions (-1)
-        let has_short = pos_states.iter().any(|s| *s == Some(-1));
+        let has_short = pos_states.contains(&Some(-1));
         assert!(
             has_short,
             "Expected position_state=-1 for short positions in downtrend"
         );
 
         // Should NOT have any long positions in ShortOnly mode
-        let has_long = pos_states.iter().any(|s| *s == Some(1));
+        let has_long = pos_states.contains(&Some(1));
         assert!(
             !has_long,
             "Should not have long positions in ShortOnly mode"

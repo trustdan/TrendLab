@@ -19,5 +19,3 @@ pub struct JobProgressPayload {
 pub struct JobCompletePayload {
     pub message: String,
 }
-
-

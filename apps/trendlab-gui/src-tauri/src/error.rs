@@ -45,5 +45,3 @@ impl serde::Serialize for GuiError {
         self.envelope().serialize(serializer)
     }
 }
-
-

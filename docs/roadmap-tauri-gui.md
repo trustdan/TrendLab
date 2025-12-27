@@ -378,6 +378,224 @@ Implementation notes:
 
 ---
 
+## Phase 8: Unified Launcher + Companion Mode
+
+A single `trendlab` binary that offers TUI or GUI, with the terminal staying alive as a "companion" when GUI is launched.
+
+### User Experience
+
+```
+$ trendlab
+
+  ╭─────────────────────────────────────╮
+  │         T R E N D L A B             │
+  │   Trend-Following Backtest Lab      │
+  │                                     │
+  │   Press [T] for Terminal UI         │
+  │   Press [G] for Desktop GUI         │
+  │                                     │
+  │   (or --tui / --gui to skip)        │
+  ╰─────────────────────────────────────╯
+```
+
+**TUI selected**: Terminal transforms into full TUI (process replaced)
+
+**GUI selected**: GUI window opens, terminal becomes companion:
+
+```
+╭─ TrendLab Companion ──────────────────────────────────────╮
+│ GUI: Running (PID 12345)                    [q] quit      │
+├───────────────────────────────────────────────────────────┤
+│ Active Job: sweep-1735312456                              │
+│ Progress: [████████████░░░░░░░░] 62%  (186/300 configs)   │
+│ Current:  MSFT × donchian_breakout_30                     │
+│ Elapsed:  2m 34s                                          │
+├───────────────────────────────────────────────────────────┤
+│ Recent Results:                                           │
+│  AAPL  donchian_20       Sharpe 1.24  CAGR 18.2%  DD -12% │
+│  MSFT  ma_cross_50_200   Sharpe 0.87  CAGR 14.1%  DD -18% │
+│  GOOGL momentum_12       Sharpe 1.02  CAGR 16.8%  DD -15% │
+│  TSLA  atr_breakout_14   Sharpe 0.65  CAGR 22.4%  DD -31% │
+├───────────────────────────────────────────────────────────┤
+│ Log:                                                      │
+│  [12:34:56] Sweep started: 5 symbols × 12 strategies      │
+│  [12:34:57] Fetching AAPL data... done (2,516 bars)       │
+│  [12:35:02] AAPL: 24 configs complete, best Sharpe 1.24   │
+╰───────────────────────────────────────────────────────────╯
+```
+
+### Binary Layout
+
+| Command | Description |
+| ------- | ----------- |
+| `trendlab` | Unified launcher (prompts for TUI/GUI) |
+| `trendlab --tui` | Skip prompt, launch TUI directly |
+| `trendlab --gui` | Skip prompt, launch GUI directly |
+| `trendlab-tui` | Direct TUI binary (still available) |
+| `trendlab-gui` | Direct GUI binary (still available) |
+
+### Crate Structure
+
+```
+crates/
+├── trendlab-launcher/       # NEW: Unified launcher
+│   ├── Cargo.toml
+│   └── src/
+│       ├── main.rs          # Entry point, mode selection
+│       ├── prompt.rs        # Interactive T/G prompt
+│       ├── companion.rs     # Companion view when GUI running
+│       ├── ipc.rs           # IPC client for receiving events
+│       └── display.rs       # Ratatui rendering for companion
+```
+
+### IPC Architecture (GUI → Companion)
+
+#### Option A: Named Pipe / Unix Socket (Recommended)
+
+```
+GUI (Rust backend)                    Companion (Terminal)
+      │                                      │
+      │  ┌─────────────────────────┐         │
+      ├──│ /tmp/trendlab-{pid}.sock│─────────┤
+      │  └─────────────────────────┘         │
+      │                                      │
+  emit_to_companion(event)          recv() → update display
+```
+
+- Fast, local-only, no network exposure
+- Cross-platform: Unix sockets on Linux/macOS, named pipes on Windows
+- Clean shutdown: socket removed when companion exits
+
+#### Option B: Localhost TCP
+
+```rust
+// Companion listens on ephemeral port, passes to GUI via env
+let listener = TcpListener::bind("127.0.0.1:0")?;
+let port = listener.local_addr()?.port();
+env::set_var("TRENDLAB_COMPANION_PORT", port.to_string());
+Command::new("trendlab-gui").spawn()?;
+```
+
+- Simpler cross-platform implementation
+- Slightly more overhead than sockets
+- Firewall might prompt on first run (Windows)
+
+#### Option C: Shared Memory / mmap (Future)
+
+- Highest performance for high-frequency updates
+- More complex implementation
+- Overkill for current needs
+
+### IPC Message Types
+
+```rust
+/// Events sent from GUI to Companion
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum CompanionEvent {
+    /// GUI window opened
+    Started { pid: u32, version: String },
+
+    /// GUI window closed
+    Shutdown,
+
+    /// Job lifecycle
+    JobStarted { job_id: String, job_type: String, description: String },
+    JobProgress { job_id: String, current: u64, total: u64, message: String },
+    JobComplete { job_id: String, summary: String },
+    JobFailed { job_id: String, error: String },
+    JobCancelled { job_id: String },
+
+    /// Sweep results (streamed as they complete)
+    SweepResult {
+        ticker: String,
+        strategy: String,
+        config_id: String,
+        sharpe: f64,
+        cagr: f64,
+        max_dd: f64,
+    },
+
+    /// Log line
+    Log { level: String, message: String },
+
+    /// Status update
+    Status { message: String },
+}
+```
+
+### Implementation Tasks
+
+#### Launcher Core
+
+- [ ] Create `crates/trendlab-launcher/` crate
+- [ ] Add to workspace `Cargo.toml`
+- [ ] Implement mode selection prompt (crossterm for raw input)
+- [ ] Handle `--tui` and `--gui` CLI flags (clap)
+- [ ] TUI mode: `exec()` on Unix, `spawn().wait()` on Windows
+- [ ] GUI mode: spawn process + enter companion mode
+
+#### Companion View
+
+- [ ] Create `companion.rs` with ratatui-based UI
+- [ ] Layout: status bar, progress, recent results, log
+- [ ] Handle terminal resize
+- [ ] Keyboard: `q` to quit (sends shutdown signal to GUI)
+- [ ] Keyboard: `Esc` to minimize to single status line
+- [ ] Auto-exit when GUI process terminates
+
+#### IPC Implementation
+
+- [ ] Define `CompanionEvent` enum in shared types
+- [ ] Implement socket/pipe server in companion
+- [ ] Implement socket/pipe client in GUI's Rust backend
+- [ ] Helper: `emit_to_companion(event)` function
+- [ ] Graceful handling of companion not running (no-op)
+- [ ] Reconnection logic if companion restarts
+
+#### GUI Integration
+
+- [ ] On startup: check for `TRENDLAB_COMPANION_SOCKET` env var
+- [ ] If set, connect and send `Started` event
+- [ ] Hook into existing event emission to also send to companion
+- [ ] On shutdown: send `Shutdown` event, close connection
+
+#### Testing
+
+- [ ] Unit tests for IPC serialization
+- [ ] Integration test: launcher → TUI mode
+- [ ] Integration test: launcher → GUI + companion
+- [ ] Test companion display with mock events
+- [ ] Test graceful shutdown (GUI closed, companion exits)
+- [ ] Test companion closed while GUI running (GUI continues)
+
+### Dependencies
+
+```toml
+# crates/trendlab-launcher/Cargo.toml
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.27"
+ratatui = "0.28"
+tokio = { version = "1", features = ["full", "net"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+interprocess = "2"  # Cross-platform IPC (named pipes, Unix sockets)
+
+# Shared types (if extracted)
+trendlab-ipc = { path = "../trendlab-ipc" }  # Optional: shared event types
+```
+
+### Future Enhancements
+
+- [ ] Companion can send commands back to GUI (cancel job, etc.)
+- [ ] Multiple GUI instances, single companion aggregates
+- [ ] Companion persists log to file
+- [ ] Companion shows notifications (toast) on job complete
+- [ ] Web-based companion option (WebSocket server)
+
+---
+
 ## BDD Test Infrastructure
 
 ### Setup
