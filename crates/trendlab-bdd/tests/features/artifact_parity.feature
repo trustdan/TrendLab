@@ -70,5 +70,5 @@ Feature: StrategyArtifact export for Pine Script parity
     And a configuration with config_id "entry_10_exit_5"
     When I run "trendlab artifact export --run-id test_artifact_run --config-id entry_10_exit_5"
     Then the command should succeed
-    And the output file should exist at "artifacts/test_artifact_run/entry_10_exit_5.json"
+    And the artifact output file should exist at "artifacts/test_artifact_run/entry_10_exit_5.json"
     And the output should be a valid StrategyArtifact

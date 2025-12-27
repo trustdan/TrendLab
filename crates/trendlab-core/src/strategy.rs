@@ -1,7 +1,11 @@
 //! Strategy trait and common implementations.
 
 use crate::bar::Bar;
-use crate::indicators::{donchian_channel, ema_close, sma_close, MAType};
+use crate::indicators::{
+    aroon, atr, bollinger_bands, darvas_boxes, dmi, donchian_channel, ema_close, heikin_ashi,
+    keltner_channel, opening_range, parabolic_sar, range_breakout_levels, rolling_max_close,
+    sma_close, starc_bands, supertrend, BollingerBands, DarvasBox, HABar, MAType, OpeningPeriod,
+};
 
 /// Position state in a backtest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,7 +72,10 @@ impl Signal {
 
     /// Returns true if this is a short-side signal.
     pub fn is_short_side(&self) -> bool {
-        matches!(self, Signal::EnterShort | Signal::AddShort | Signal::ExitShort)
+        matches!(
+            self,
+            Signal::EnterShort | Signal::AddShort | Signal::ExitShort
+        )
     }
 }
 
@@ -427,6 +434,12 @@ impl Strategy for TsmomStrategy {
                 }
                 Signal::Hold
             }
+            Position::Short => {
+                // Short exit: momentum turns positive (cover when trend reverses)
+                // For now, default to Hold (long-only mode)
+                // TODO: Implement in Phase 4 when TradingMode is added to strategy
+                Signal::Hold
+            }
         }
     }
 
@@ -476,6 +489,1762 @@ impl Strategy for NullStrategy {
     }
 
     fn reset(&mut self) {}
+}
+
+// =============================================================================
+// Phase 1: ATR-Based Channel Strategies
+// =============================================================================
+
+/// Keltner Channel Breakout strategy.
+///
+/// Entry: Close breaks above EMA + k * ATR (upper band)
+/// Exit: Close breaks below EMA - k * ATR (lower band) OR below EMA
+///
+/// Keltner Channels use volatility (ATR) to set dynamic bands around an EMA.
+/// Unlike Bollinger Bands (which use standard deviation), Keltner uses ATR
+/// which can capture intraday volatility better.
+///
+/// Common configurations:
+/// - EMA 20, ATR 10, Mult 2.0: Standard
+/// - EMA 20, ATR 20, Mult 1.5: Tighter bands for more signals
+#[derive(Debug, Clone)]
+pub struct KeltnerBreakoutStrategy {
+    /// Period for EMA center line
+    ema_period: usize,
+    /// Period for ATR calculation
+    atr_period: usize,
+    /// Multiplier for ATR to set band width
+    multiplier: f64,
+}
+
+impl KeltnerBreakoutStrategy {
+    pub fn new(ema_period: usize, atr_period: usize, multiplier: f64) -> Self {
+        assert!(ema_period > 0, "EMA period must be at least 1");
+        assert!(atr_period > 0, "ATR period must be at least 1");
+        assert!(multiplier > 0.0, "Multiplier must be positive");
+
+        Self {
+            ema_period,
+            atr_period,
+            multiplier,
+        }
+    }
+
+    /// Standard configuration: EMA 20, ATR 10, Mult 2.0
+    pub fn standard() -> Self {
+        Self::new(20, 10, 2.0)
+    }
+
+    /// Tighter bands: EMA 20, ATR 20, Mult 1.5
+    pub fn tight() -> Self {
+        Self::new(20, 20, 1.5)
+    }
+
+    /// Get the EMA period.
+    pub fn ema_period(&self) -> usize {
+        self.ema_period
+    }
+
+    /// Get the ATR period.
+    pub fn atr_period(&self) -> usize {
+        self.atr_period
+    }
+
+    /// Get the multiplier.
+    pub fn multiplier(&self) -> f64 {
+        self.multiplier
+    }
+}
+
+impl Strategy for KeltnerBreakoutStrategy {
+    fn id(&self) -> &str {
+        "keltner_breakout"
+    }
+
+    fn warmup_period(&self) -> usize {
+        self.ema_period.max(self.atr_period)
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let keltner = keltner_channel(bars, self.ema_period, self.atr_period, self.multiplier);
+        let current_close = bars[current_idx].close;
+
+        let kc = match keltner[current_idx] {
+            Some(k) => k,
+            None => return Signal::Hold,
+        };
+
+        match current_position {
+            Position::Flat => {
+                // Entry: close > upper band
+                if current_close > kc.upper {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: close < lower band OR close < center (EMA)
+                if current_close < kc.lower || current_close < kc.center {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// STARC Bands Breakout strategy.
+///
+/// Entry: Close breaks above SMA + k * ATR (upper band)
+/// Exit: Close breaks below SMA - k * ATR (lower band)
+///
+/// STARC (Stoller Average Range Channel) is similar to Keltner but uses
+/// SMA instead of EMA for the center line, making it less responsive
+/// but potentially more stable.
+///
+/// Common configurations:
+/// - SMA 20, ATR 15, Mult 2.0: Standard
+/// - SMA 10, ATR 10, Mult 1.5: More responsive
+#[derive(Debug, Clone)]
+pub struct STARCBreakoutStrategy {
+    /// Period for SMA center line
+    sma_period: usize,
+    /// Period for ATR calculation
+    atr_period: usize,
+    /// Multiplier for ATR to set band width
+    multiplier: f64,
+}
+
+impl STARCBreakoutStrategy {
+    pub fn new(sma_period: usize, atr_period: usize, multiplier: f64) -> Self {
+        assert!(sma_period > 0, "SMA period must be at least 1");
+        assert!(atr_period > 0, "ATR period must be at least 1");
+        assert!(multiplier > 0.0, "Multiplier must be positive");
+
+        Self {
+            sma_period,
+            atr_period,
+            multiplier,
+        }
+    }
+
+    /// Standard configuration: SMA 20, ATR 15, Mult 2.0
+    pub fn standard() -> Self {
+        Self::new(20, 15, 2.0)
+    }
+
+    /// Responsive configuration: SMA 10, ATR 10, Mult 1.5
+    pub fn responsive() -> Self {
+        Self::new(10, 10, 1.5)
+    }
+
+    /// Get the SMA period.
+    pub fn sma_period(&self) -> usize {
+        self.sma_period
+    }
+
+    /// Get the ATR period.
+    pub fn atr_period(&self) -> usize {
+        self.atr_period
+    }
+
+    /// Get the multiplier.
+    pub fn multiplier(&self) -> f64 {
+        self.multiplier
+    }
+}
+
+impl Strategy for STARCBreakoutStrategy {
+    fn id(&self) -> &str {
+        "starc_breakout"
+    }
+
+    fn warmup_period(&self) -> usize {
+        self.sma_period.max(self.atr_period)
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let starc = starc_bands(bars, self.sma_period, self.atr_period, self.multiplier);
+        let current_close = bars[current_idx].close;
+
+        let sb = match starc[current_idx] {
+            Some(s) => s,
+            None => return Signal::Hold,
+        };
+
+        match current_position {
+            Position::Flat => {
+                // Entry: close > upper band
+                if current_close > sb.upper {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: close < lower band
+                if current_close < sb.lower {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// Supertrend strategy.
+///
+/// Entry: Supertrend flips to uptrend (price crosses above lower band)
+/// Exit: Supertrend flips to downtrend (price crosses below upper band)
+///
+/// Supertrend uses ATR to create dynamic support/resistance levels.
+/// In an uptrend, the lower band acts as trailing support.
+/// In a downtrend, the upper band acts as trailing resistance.
+///
+/// Common configurations:
+/// - ATR 10, Mult 3.0: Standard (less sensitive, fewer signals)
+/// - ATR 10, Mult 2.0: More sensitive (more signals)
+/// - ATR 7, Mult 3.0: Faster reaction
+#[derive(Debug, Clone)]
+pub struct SupertrendStrategy {
+    /// Period for ATR calculation
+    atr_period: usize,
+    /// Multiplier for ATR to set band width
+    multiplier: f64,
+}
+
+impl SupertrendStrategy {
+    pub fn new(atr_period: usize, multiplier: f64) -> Self {
+        assert!(atr_period > 0, "ATR period must be at least 1");
+        assert!(multiplier > 0.0, "Multiplier must be positive");
+
+        Self {
+            atr_period,
+            multiplier,
+        }
+    }
+
+    /// Standard configuration: ATR 10, Mult 3.0
+    pub fn standard() -> Self {
+        Self::new(10, 3.0)
+    }
+
+    /// Sensitive configuration: ATR 10, Mult 2.0
+    pub fn sensitive() -> Self {
+        Self::new(10, 2.0)
+    }
+
+    /// Fast configuration: ATR 7, Mult 3.0
+    pub fn fast() -> Self {
+        Self::new(7, 3.0)
+    }
+
+    /// Get the ATR period.
+    pub fn atr_period(&self) -> usize {
+        self.atr_period
+    }
+
+    /// Get the multiplier.
+    pub fn multiplier(&self) -> f64 {
+        self.multiplier
+    }
+}
+
+impl Strategy for SupertrendStrategy {
+    fn id(&self) -> &str {
+        "supertrend"
+    }
+
+    fn warmup_period(&self) -> usize {
+        self.atr_period
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let st_values = supertrend(bars, self.atr_period, self.multiplier);
+
+        let current_st = match st_values[current_idx] {
+            Some(st) => st,
+            None => return Signal::Hold,
+        };
+
+        // Need previous bar for trend flip detection
+        if current_idx == 0 {
+            return Signal::Hold;
+        }
+
+        let prev_st = match st_values[current_idx - 1] {
+            Some(st) => st,
+            None => return Signal::Hold,
+        };
+
+        match current_position {
+            Position::Flat => {
+                // Entry: Trend flips from downtrend to uptrend
+                if current_st.is_uptrend && !prev_st.is_uptrend {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: Trend flips from uptrend to downtrend
+                if !current_st.is_uptrend && prev_st.is_uptrend {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+// =============================================================================
+// Phase 2: Momentum & Direction Strategies
+// =============================================================================
+
+/// DMI/ADX Directional System strategy.
+///
+/// Entry: +DI crosses above -DI AND ADX > threshold
+/// Exit: +DI crosses below -DI OR ADX drops below threshold
+///
+/// Based on J. Welles Wilder's Directional Movement System.
+/// ADX measures trend strength (not direction), while +DI/-DI measure direction.
+///
+/// Common configurations:
+/// - DI Period 14, ADX Period 14, Threshold 25: Standard
+/// - DI Period 20, ADX Period 20, Threshold 20: Smoother, catches longer trends
+#[derive(Debug, Clone)]
+pub struct DmiAdxStrategy {
+    /// Period for +DI/-DI calculation
+    di_period: usize,
+    /// Period for ADX calculation
+    adx_period: usize,
+    /// Minimum ADX value for trend strength
+    adx_threshold: f64,
+}
+
+impl DmiAdxStrategy {
+    pub fn new(di_period: usize, adx_period: usize, adx_threshold: f64) -> Self {
+        assert!(di_period > 0, "DI period must be at least 1");
+        assert!(adx_period > 0, "ADX period must be at least 1");
+        assert!(adx_threshold > 0.0, "ADX threshold must be positive");
+
+        Self {
+            di_period,
+            adx_period,
+            adx_threshold,
+        }
+    }
+
+    /// Standard configuration: 14/14/25
+    pub fn standard() -> Self {
+        Self::new(14, 14, 25.0)
+    }
+
+    /// Smoother configuration: 20/20/20
+    pub fn smoother() -> Self {
+        Self::new(20, 20, 20.0)
+    }
+
+    /// Get the DI period.
+    pub fn di_period(&self) -> usize {
+        self.di_period
+    }
+
+    /// Get the ADX period.
+    pub fn adx_period(&self) -> usize {
+        self.adx_period
+    }
+
+    /// Get the ADX threshold.
+    pub fn adx_threshold(&self) -> f64 {
+        self.adx_threshold
+    }
+}
+
+impl Strategy for DmiAdxStrategy {
+    fn id(&self) -> &str {
+        "dmi_adx"
+    }
+
+    fn warmup_period(&self) -> usize {
+        // DMI requires double smoothing: once for DI, once for ADX
+        2 * self.di_period.max(self.adx_period)
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        // Compute DMI indicators (uses di_period for all components)
+        let dmi_values = dmi(bars, self.di_period);
+
+        // Get current DMI values
+        let current_dmi = match dmi_values[current_idx] {
+            Some(ref d) => d,
+            None => return Signal::Hold,
+        };
+
+        let plus_above_minus = current_dmi.plus_di > current_dmi.minus_di;
+        let strong_trend = current_dmi.adx > self.adx_threshold;
+
+        match current_position {
+            Position::Flat => {
+                // Entry: Direction is bullish and trend strength is above threshold.
+                //
+                // In practice, the +DI/-DI crossover often occurs *before* ADX rises above
+                // the threshold; requiring both on the same bar can miss the move entirely.
+                // So we enter on the first bar where both conditions are satisfied.
+                if plus_above_minus && strong_trend {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: Direction turns bearish OR trend weakens.
+                //
+                // Similar to entry, requiring an exact crossover edge can miss the exit if the
+                // cross occurs before other conditions change. Exit as soon as -DI dominates.
+                if !plus_above_minus {
+                    return Signal::ExitLong;
+                }
+                // Also exit if trend weakens below the threshold.
+                if current_dmi.adx < self.adx_threshold {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// Aroon Cross strategy.
+///
+/// Entry: Aroon-Up crosses above Aroon-Down
+/// Exit: Aroon-Up crosses below Aroon-Down
+///
+/// The Aroon indicator measures the time since the most recent high/low.
+/// - Aroon-Up = 100 means we just hit a period high
+/// - Aroon-Down = 100 means we just hit a period low
+/// - Aroon-Up > Aroon-Down suggests bullish momentum
+///
+/// Common configurations:
+/// - Period 25: Standard (monthly trading)
+/// - Period 14: Short-term
+/// - Period 50: Long-term
+#[derive(Debug, Clone)]
+pub struct AroonCrossStrategy {
+    /// Period for Aroon calculation
+    period: usize,
+}
+
+impl AroonCrossStrategy {
+    pub fn new(period: usize) -> Self {
+        assert!(period > 0, "Period must be at least 1");
+        Self { period }
+    }
+
+    /// Standard configuration: period 25
+    pub fn standard() -> Self {
+        Self::new(25)
+    }
+
+    /// Short-term configuration: period 14
+    pub fn short_term() -> Self {
+        Self::new(14)
+    }
+
+    /// Long-term configuration: period 50
+    pub fn long_term() -> Self {
+        Self::new(50)
+    }
+
+    /// Get the period.
+    pub fn period(&self) -> usize {
+        self.period
+    }
+}
+
+impl Strategy for AroonCrossStrategy {
+    fn id(&self) -> &str {
+        "aroon_cross"
+    }
+
+    fn warmup_period(&self) -> usize {
+        self.period
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let aroon_values = aroon(bars, self.period);
+
+        // Get current and previous Aroon values
+        let current_aroon = match aroon_values[current_idx] {
+            Some(ref a) => a,
+            None => return Signal::Hold,
+        };
+
+        // Need previous bar for crossover detection
+        if current_idx == 0 {
+            return Signal::Hold;
+        }
+
+        let prev_aroon = match aroon_values[current_idx - 1] {
+            Some(ref a) => a,
+            None => return Signal::Hold,
+        };
+
+        let up_above_down = current_aroon.aroon_up > current_aroon.aroon_down;
+        let prev_up_above_down = prev_aroon.aroon_up > prev_aroon.aroon_down;
+
+        match current_position {
+            Position::Flat => {
+                // Entry: Aroon-Up crosses above Aroon-Down
+                if up_above_down && !prev_up_above_down {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: Aroon-Up crosses below Aroon-Down
+                if !up_above_down && prev_up_above_down {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// Bollinger Squeeze Breakout strategy.
+///
+/// Entry: When in squeeze AND close breaks above upper band
+/// Exit: When close falls below middle band (SMA)
+///
+/// A "squeeze" occurs when volatility contracts (bandwidth narrows).
+/// The breakout from a squeeze often leads to significant moves.
+///
+/// Common configurations:
+/// - Period 20, Mult 2.0, Threshold 0.04: Standard
+/// - Period 20, Mult 2.5, Threshold 0.03: Tighter squeeze detection
+#[derive(Debug, Clone)]
+pub struct BollingerSqueezeStrategy {
+    /// Period for SMA and standard deviation
+    period: usize,
+    /// Standard deviation multiplier for bands
+    std_mult: f64,
+    /// Bandwidth threshold for squeeze detection
+    squeeze_threshold: f64,
+    /// Track whether we were in squeeze on previous bar
+    was_in_squeeze: bool,
+}
+
+impl BollingerSqueezeStrategy {
+    pub fn new(period: usize, std_mult: f64, squeeze_threshold: f64) -> Self {
+        assert!(period > 0, "Period must be at least 1");
+        assert!(
+            std_mult > 0.0,
+            "Standard deviation multiplier must be positive"
+        );
+        assert!(
+            squeeze_threshold > 0.0,
+            "Squeeze threshold must be positive"
+        );
+
+        Self {
+            period,
+            std_mult,
+            squeeze_threshold,
+            was_in_squeeze: false,
+        }
+    }
+
+    /// Standard configuration: period 20, mult 2.0, threshold 0.04
+    pub fn standard() -> Self {
+        Self::new(20, 2.0, 0.04)
+    }
+
+    /// Tight squeeze configuration: period 20, mult 2.5, threshold 0.03
+    pub fn tight_squeeze() -> Self {
+        Self::new(20, 2.5, 0.03)
+    }
+
+    /// Get the period.
+    pub fn period(&self) -> usize {
+        self.period
+    }
+
+    /// Get the standard deviation multiplier.
+    pub fn std_mult(&self) -> f64 {
+        self.std_mult
+    }
+
+    /// Get the squeeze threshold.
+    pub fn squeeze_threshold(&self) -> f64 {
+        self.squeeze_threshold
+    }
+
+    /// Check if in squeeze (bandwidth < threshold).
+    pub fn is_in_squeeze(&self, bb: &BollingerBands) -> bool {
+        bb.bandwidth < self.squeeze_threshold
+    }
+}
+
+impl Strategy for BollingerSqueezeStrategy {
+    fn id(&self) -> &str {
+        "bollinger_squeeze"
+    }
+
+    fn warmup_period(&self) -> usize {
+        self.period
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let bb_values = bollinger_bands(bars, self.period, self.std_mult);
+
+        // Get current Bollinger Bands
+        let current_bb = match bb_values[current_idx] {
+            Some(ref bb) => bb,
+            None => return Signal::Hold,
+        };
+
+        let current_close = bars[current_idx].close;
+        let in_squeeze = self.is_in_squeeze(current_bb);
+
+        // Check previous bar squeeze state
+        let prev_in_squeeze = if current_idx > 0 {
+            bb_values[current_idx - 1]
+                .as_ref()
+                .map(|bb| self.is_in_squeeze(bb))
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        match current_position {
+            Position::Flat => {
+                // Entry: In squeeze (or was in squeeze) AND close breaks above upper band
+                if (in_squeeze || prev_in_squeeze) && current_close > current_bb.upper {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: Close falls below middle band (SMA)
+                if current_close < current_bb.middle {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.was_in_squeeze = false;
+    }
+}
+
+// =============================================================================
+// Phase 3: Price Structure Strategies
+// =============================================================================
+
+/// 52-Week High Trend strategy.
+///
+/// Entry: When close reaches a certain percentage of the N-period high
+/// Exit: When close falls below a certain percentage of the N-period high
+///
+/// Based on George & Hwang (2004) "The 52-Week High and Momentum Investing"
+/// which shows that stocks near their 52-week high tend to continue rising.
+///
+/// Common configurations:
+/// - Period 252 (annual): Standard 52-week high
+/// - Period 126 (semi-annual): 6-month high
+/// - Entry 0.95: Buy when within 5% of high
+/// - Exit 0.90: Sell when 10% below high
+#[derive(Debug, Clone)]
+pub struct FiftyTwoWeekHighStrategy {
+    /// Lookback period for computing the rolling high
+    period: usize,
+    /// Entry threshold as a percentage of period high (e.g., 0.95 = 95%)
+    entry_pct: f64,
+    /// Exit threshold as a percentage of period high (e.g., 0.90 = 90%)
+    exit_pct: f64,
+}
+
+impl FiftyTwoWeekHighStrategy {
+    pub fn new(period: usize, entry_pct: f64, exit_pct: f64) -> Self {
+        assert!(period > 0, "Period must be at least 1");
+        assert!(
+            entry_pct > 0.0 && entry_pct <= 1.0,
+            "Entry percentage must be between 0 and 1"
+        );
+        assert!(
+            exit_pct > 0.0 && exit_pct <= 1.0,
+            "Exit percentage must be between 0 and 1"
+        );
+        assert!(
+            exit_pct < entry_pct,
+            "Exit percentage must be less than entry percentage"
+        );
+
+        Self {
+            period,
+            entry_pct,
+            exit_pct,
+        }
+    }
+
+    /// Standard 52-week high (252 trading days)
+    pub fn annual() -> Self {
+        Self::new(252, 0.95, 0.90)
+    }
+
+    /// 6-month high (126 trading days)
+    pub fn semi_annual() -> Self {
+        Self::new(126, 0.95, 0.90)
+    }
+
+    /// Get the period.
+    pub fn period(&self) -> usize {
+        self.period
+    }
+
+    /// Get the entry percentage.
+    pub fn entry_pct(&self) -> f64 {
+        self.entry_pct
+    }
+
+    /// Get the exit percentage.
+    pub fn exit_pct(&self) -> f64 {
+        self.exit_pct
+    }
+}
+
+impl Strategy for FiftyTwoWeekHighStrategy {
+    fn id(&self) -> &str {
+        "52wk_high"
+    }
+
+    fn warmup_period(&self) -> usize {
+        self.period
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let rolling_max = rolling_max_close(bars, self.period);
+        let period_high = match rolling_max[current_idx] {
+            Some(h) => h,
+            None => return Signal::Hold,
+        };
+
+        let current_close = bars[current_idx].close;
+        let proximity = current_close / period_high;
+
+        match current_position {
+            Position::Flat => {
+                // Entry: close >= entry_pct * period_high
+                if proximity >= self.entry_pct {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: close < exit_pct * period_high
+                if proximity < self.exit_pct {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// Darvas Box Breakout strategy.
+///
+/// Entry: When close breaks above a confirmed box top
+/// Exit: When close breaks below the box bottom
+///
+/// Based on Nicolas Darvas's "How I Made $2,000,000 in the Stock Market" (1960).
+/// The strategy identifies consolidation boxes and trades breakouts.
+#[derive(Debug, Clone)]
+pub struct DarvasBoxStrategy {
+    /// Number of bars needed to confirm box top/bottom
+    confirmation_bars: usize,
+    /// Currently tracked box (for state)
+    current_box: Option<DarvasBox>,
+}
+
+impl DarvasBoxStrategy {
+    pub fn new(confirmation_bars: usize) -> Self {
+        assert!(
+            confirmation_bars > 0,
+            "Confirmation bars must be at least 1"
+        );
+        Self {
+            confirmation_bars,
+            current_box: None,
+        }
+    }
+
+    /// Standard Darvas with 3-bar confirmation
+    pub fn standard() -> Self {
+        Self::new(3)
+    }
+
+    /// Get the confirmation bars.
+    pub fn confirmation_bars(&self) -> usize {
+        self.confirmation_bars
+    }
+}
+
+impl Strategy for DarvasBoxStrategy {
+    fn id(&self) -> &str {
+        "darvas_box"
+    }
+
+    fn warmup_period(&self) -> usize {
+        // Need enough bars for box formation (roughly 2x confirmation bars)
+        self.confirmation_bars * 2 + 2
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let boxes = darvas_boxes(bars, self.confirmation_bars);
+        let current_close = bars[current_idx].close;
+
+        // Get current and previous box states
+        let current_box = boxes[current_idx];
+        let prev_box = if current_idx > 0 {
+            boxes[current_idx - 1]
+        } else {
+            None
+        };
+
+        match current_position {
+            Position::Flat => {
+                // Entry: close breaks above a confirmed box top
+                if let Some(ref bx) = current_box {
+                    if bx.is_complete() && current_close > bx.top {
+                        return Signal::EnterLong;
+                    }
+                }
+                // Also check if we broke above previous box
+                if let Some(ref bx) = prev_box {
+                    if bx.is_complete() && current_close > bx.top {
+                        return Signal::EnterLong;
+                    }
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: close breaks below box bottom
+                if let Some(ref bx) = current_box {
+                    if current_close < bx.bottom {
+                        return Signal::ExitLong;
+                    }
+                }
+                if let Some(ref bx) = prev_box {
+                    if current_close < bx.bottom {
+                        return Signal::ExitLong;
+                    }
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.current_box = None;
+    }
+}
+
+/// Larry Williams Volatility Breakout strategy.
+///
+/// Entry: When close breaks above open + k * prior_range
+/// Exit: Trailing stop at entry_price - stop_mult * ATR
+///
+/// This is a classic volatility breakout system that trades
+/// range expansions based on the prior day's trading range.
+#[derive(Debug, Clone)]
+pub struct LarryWilliamsStrategy {
+    /// Multiplier for range breakout (e.g., 0.5)
+    range_mult: f64,
+    /// ATR multiplier for trailing stop
+    atr_stop_mult: f64,
+    /// ATR period for stop calculation
+    atr_period: usize,
+    /// Entry price (for trailing stop calculation)
+    entry_price: Option<f64>,
+    /// ATR at entry (for trailing stop)
+    entry_atr: Option<f64>,
+}
+
+impl LarryWilliamsStrategy {
+    pub fn new(range_mult: f64, atr_stop_mult: f64, atr_period: usize) -> Self {
+        assert!(range_mult > 0.0, "Range multiplier must be positive");
+        assert!(atr_stop_mult > 0.0, "ATR stop multiplier must be positive");
+        assert!(atr_period > 0, "ATR period must be at least 1");
+
+        Self {
+            range_mult,
+            atr_stop_mult,
+            atr_period,
+            entry_price: None,
+            entry_atr: None,
+        }
+    }
+
+    /// Standard configuration: range_mult=0.5, atr_stop=2.0, atr_period=14
+    pub fn standard() -> Self {
+        Self::new(0.5, 2.0, 14)
+    }
+
+    /// Get the range multiplier.
+    pub fn range_mult(&self) -> f64 {
+        self.range_mult
+    }
+
+    /// Get the ATR stop multiplier.
+    pub fn atr_stop_mult(&self) -> f64 {
+        self.atr_stop_mult
+    }
+
+    /// Get the ATR period.
+    pub fn atr_period(&self) -> usize {
+        self.atr_period
+    }
+}
+
+impl Strategy for LarryWilliamsStrategy {
+    fn id(&self) -> &str {
+        "larry_williams"
+    }
+
+    fn warmup_period(&self) -> usize {
+        // Need at least 2 bars for prior range + ATR period
+        self.atr_period.max(2)
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let current_bar = &bars[current_idx];
+        let breakout_levels = range_breakout_levels(bars, self.range_mult);
+        let (upper_breakout, _lower_breakout) = breakout_levels[current_idx];
+
+        let atr_values = atr(bars, self.atr_period);
+        let current_atr = atr_values[current_idx];
+
+        match current_position {
+            Position::Flat => {
+                // Entry: close > upper_breakout (open + k * prior_range)
+                if current_bar.close > upper_breakout {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: trailing stop using ATR
+                // For a stateless check, we use a simple condition:
+                // If close drops significantly below recent high, exit
+                // This is a simplified version - full implementation would track entry price
+                if let Some(current_atr_val) = current_atr {
+                    // Simple trailing stop: if we're down more than atr_stop_mult * ATR
+                    // from the recent high, exit
+                    if current_idx > 0 {
+                        let recent_high = bars[..=current_idx]
+                            .iter()
+                            .rev()
+                            .take(5) // Look at last 5 bars
+                            .map(|b| b.high)
+                            .fold(f64::NEG_INFINITY, f64::max);
+
+                        let stop_level = recent_high - self.atr_stop_mult * current_atr_val;
+                        if current_bar.close < stop_level {
+                            return Signal::ExitLong;
+                        }
+                    }
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.entry_price = None;
+        self.entry_atr = None;
+    }
+}
+
+/// Heikin-Ashi Regime strategy.
+///
+/// Entry: First bullish HA candle after bearish sequence
+/// Exit: First bearish HA candle after entry
+///
+/// Heikin-Ashi candles smooth price action to make trend
+/// identification easier. This strategy trades regime changes.
+#[derive(Debug, Clone)]
+pub struct HeikinAshiRegimeStrategy {
+    /// Number of confirmation bars needed
+    confirmation_bars: usize,
+}
+
+impl HeikinAshiRegimeStrategy {
+    pub fn new(confirmation_bars: usize) -> Self {
+        assert!(
+            confirmation_bars > 0,
+            "Confirmation bars must be at least 1"
+        );
+        Self { confirmation_bars }
+    }
+
+    /// Standard configuration with 1-bar confirmation
+    pub fn standard() -> Self {
+        Self::new(1)
+    }
+
+    /// Get the confirmation bars.
+    pub fn confirmation_bars(&self) -> usize {
+        self.confirmation_bars
+    }
+
+    /// Count consecutive bearish HA bars before current index.
+    fn count_prior_bearish(&self, ha_bars: &[HABar], current_idx: usize) -> usize {
+        let mut count = 0;
+        for i in (0..current_idx).rev() {
+            if ha_bars[i].is_bearish() {
+                count += 1;
+            } else {
+                break;
+            }
+        }
+        count
+    }
+}
+
+impl Strategy for HeikinAshiRegimeStrategy {
+    fn id(&self) -> &str {
+        "heikin_ashi"
+    }
+
+    fn warmup_period(&self) -> usize {
+        // Need enough prior bars to count `confirmation_bars` consecutive candles.
+        // (HA itself is defined from the very first bar.)
+        self.confirmation_bars
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let ha_bars = heikin_ashi(bars);
+        let current_ha = &ha_bars[current_idx];
+
+        match current_position {
+            Position::Flat => {
+                // Entry: First bullish HA after bearish sequence
+                if current_ha.is_bullish() {
+                    let prior_bearish_count = self.count_prior_bearish(&ha_bars, current_idx);
+                    if prior_bearish_count >= self.confirmation_bars {
+                        return Signal::EnterLong;
+                    }
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: First bearish HA after entry
+                if current_ha.is_bearish() {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+// =============================================================================
+// Phase 4: Complex Stateful + Ensemble Strategies
+// =============================================================================
+
+/// Parabolic SAR strategy.
+///
+/// Entry: SAR flips from above to below price (uptrend begins)
+/// Exit: SAR flips from below to above price (downtrend begins)
+///
+/// Based on J. Welles Wilder's Parabolic Stop and Reverse system.
+/// The SAR trails price, accelerating as the trend develops.
+/// AF (Acceleration Factor) increases with each new extreme price.
+///
+/// Common configurations:
+/// - AF 0.02/0.02/0.20: Standard (Wilder's original)
+/// - AF 0.01/0.01/0.10: Slower, fewer whipsaws
+/// - AF 0.03/0.03/0.30: Faster, more responsive
+#[derive(Debug, Clone)]
+pub struct ParabolicSARStrategy {
+    /// Starting acceleration factor
+    af_start: f64,
+    /// Acceleration factor step increment
+    af_step: f64,
+    /// Maximum acceleration factor
+    af_max: f64,
+}
+
+impl ParabolicSARStrategy {
+    pub fn new(af_start: f64, af_step: f64, af_max: f64) -> Self {
+        assert!(af_start > 0.0, "AF start must be positive");
+        assert!(af_step > 0.0, "AF step must be positive");
+        assert!(af_max >= af_start, "AF max must be >= AF start");
+
+        Self {
+            af_start,
+            af_step,
+            af_max,
+        }
+    }
+
+    /// Standard Wilder configuration: 0.02/0.02/0.20
+    pub fn standard() -> Self {
+        Self::new(0.02, 0.02, 0.20)
+    }
+
+    /// Slow configuration for fewer whipsaws: 0.01/0.01/0.10
+    pub fn slow() -> Self {
+        Self::new(0.01, 0.01, 0.10)
+    }
+
+    /// Fast configuration for quicker response: 0.03/0.03/0.30
+    pub fn fast() -> Self {
+        Self::new(0.03, 0.03, 0.30)
+    }
+
+    /// Get the starting AF.
+    pub fn af_start(&self) -> f64 {
+        self.af_start
+    }
+
+    /// Get the AF step.
+    pub fn af_step(&self) -> f64 {
+        self.af_step
+    }
+
+    /// Get the maximum AF.
+    pub fn af_max(&self) -> f64 {
+        self.af_max
+    }
+}
+
+impl Strategy for ParabolicSARStrategy {
+    fn id(&self) -> &str {
+        "parabolic_sar"
+    }
+
+    fn warmup_period(&self) -> usize {
+        5 // SAR needs a few bars to establish initial trend direction
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let sar_values = parabolic_sar(bars, self.af_start, self.af_step, self.af_max);
+
+        // Get current and previous SAR values
+        let current_sar = match sar_values[current_idx] {
+            Some(ref s) => s,
+            None => return Signal::Hold,
+        };
+
+        // Need previous bar for flip detection
+        if current_idx == 0 {
+            return Signal::Hold;
+        }
+
+        let prev_sar = sar_values[current_idx - 1].as_ref();
+
+        match current_position {
+            Position::Flat => {
+                // Entry: SAR flips to uptrend (was downtrend, now uptrend).
+                //
+                // If the series begins in an uptrend, there may be no bullish flip.
+                // In that case, enter on the first bar after warmup when SAR is already bullish.
+                let warmup_boundary_entry =
+                    current_idx == self.warmup_period() && current_sar.is_uptrend;
+
+                if current_sar.just_flipped_bullish(prev_sar) || warmup_boundary_entry {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: SAR flips to downtrend (was uptrend, now downtrend)
+                if current_sar.just_flipped_bearish(prev_sar) {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// Opening Range Breakout strategy.
+///
+/// Entry: Close breaks above the opening range high (after range complete)
+/// Exit: Close breaks below the opening range low
+///
+/// The "opening range" is defined as the high/low of the first N bars
+/// of a trading period (week, month, or rolling).
+///
+/// Common configurations:
+/// - 5 bars, Weekly: First week's range, trade breakouts for rest of month
+/// - 3 bars, Rolling: Simple rolling range breakout
+/// - 10 bars, Monthly: First 2 weeks define range for month
+#[derive(Debug, Clone)]
+pub struct OpeningRangeBreakoutStrategy {
+    /// Number of bars to define the opening range
+    range_bars: usize,
+    /// Period type for range detection
+    period: OpeningPeriod,
+}
+
+impl OpeningRangeBreakoutStrategy {
+    pub fn new(range_bars: usize, period: OpeningPeriod) -> Self {
+        assert!(range_bars > 0, "Range bars must be at least 1");
+
+        Self { range_bars, period }
+    }
+
+    /// Standard weekly range with 5 bars
+    pub fn weekly_5() -> Self {
+        Self::new(5, OpeningPeriod::Weekly)
+    }
+
+    /// Standard monthly range with 10 bars
+    pub fn monthly_10() -> Self {
+        Self::new(10, OpeningPeriod::Monthly)
+    }
+
+    /// Rolling range with 3 bars
+    pub fn rolling_3() -> Self {
+        Self::new(3, OpeningPeriod::Rolling)
+    }
+
+    /// Get the range bars.
+    pub fn range_bars(&self) -> usize {
+        self.range_bars
+    }
+
+    /// Get the period.
+    pub fn period(&self) -> &OpeningPeriod {
+        &self.period
+    }
+}
+
+impl Strategy for OpeningRangeBreakoutStrategy {
+    fn id(&self) -> &str {
+        "opening_range_breakout"
+    }
+
+    fn warmup_period(&self) -> usize {
+        self.range_bars
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let or_values = opening_range(bars, self.range_bars, self.period.clone());
+
+        let current_or = match or_values[current_idx] {
+            Some(ref r) => r,
+            None => return Signal::Hold,
+        };
+
+        // Only trade after range is complete
+        if !current_or.is_range_complete {
+            return Signal::Hold;
+        }
+
+        let current_close = bars[current_idx].close;
+
+        match current_position {
+            Position::Flat => {
+                // Entry: close breaks above range high
+                if current_or.is_breakout_high(current_close) {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: close breaks below range low
+                if current_or.is_breakout_low(current_close) {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// Voting method for ensemble strategies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum VotingMethod {
+    /// Simple majority vote (>50% must agree)
+    Majority,
+    /// Weighted by horizon (longer horizons get more weight)
+    WeightedByHorizon,
+    /// All strategies must agree for entry, any triggers exit
+    UnanimousEntry,
+}
+
+impl VotingMethod {
+    /// Vote on signals using the specified method.
+    ///
+    /// Returns the aggregated signal based on voting rules.
+    pub fn vote(&self, signals: &[Signal], horizons: &[usize]) -> Signal {
+        if signals.is_empty() {
+            return Signal::Hold;
+        }
+
+        match self {
+            VotingMethod::Majority => Self::majority_vote(signals),
+            VotingMethod::WeightedByHorizon => Self::weighted_vote(signals, horizons),
+            VotingMethod::UnanimousEntry => Self::unanimous_entry_vote(signals),
+        }
+    }
+
+    fn majority_vote(signals: &[Signal]) -> Signal {
+        let n = signals.len();
+        let majority = n / 2 + 1;
+
+        let entry_count = signals.iter().filter(|s| s.is_entry()).count();
+        let exit_count = signals.iter().filter(|s| s.is_exit()).count();
+
+        if entry_count >= majority {
+            // Return most common entry type
+            let long_entries = signals
+                .iter()
+                .filter(|s| matches!(s, Signal::EnterLong))
+                .count();
+            if long_entries >= majority {
+                return Signal::EnterLong;
+            }
+        }
+
+        if exit_count >= majority {
+            let long_exits = signals
+                .iter()
+                .filter(|s| matches!(s, Signal::ExitLong))
+                .count();
+            if long_exits >= majority {
+                return Signal::ExitLong;
+            }
+        }
+
+        Signal::Hold
+    }
+
+    fn weighted_vote(signals: &[Signal], horizons: &[usize]) -> Signal {
+        if signals.len() != horizons.len() {
+            return Signal::Hold;
+        }
+
+        let total_weight: usize = horizons.iter().sum();
+        if total_weight == 0 {
+            return Signal::Hold;
+        }
+
+        let mut entry_weight = 0usize;
+        let mut exit_weight = 0usize;
+
+        for (signal, &horizon) in signals.iter().zip(horizons.iter()) {
+            match signal {
+                Signal::EnterLong | Signal::EnterShort => entry_weight += horizon,
+                Signal::ExitLong | Signal::ExitShort => exit_weight += horizon,
+                _ => {}
+            }
+        }
+
+        let threshold = total_weight / 2;
+
+        if entry_weight > threshold {
+            // Determine if long or short based on signals
+            let long_weight: usize = signals
+                .iter()
+                .zip(horizons.iter())
+                .filter(|(s, _)| matches!(s, Signal::EnterLong))
+                .map(|(_, h)| h)
+                .sum();
+            if long_weight > threshold {
+                return Signal::EnterLong;
+            }
+        }
+
+        if exit_weight > threshold {
+            let long_exit_weight: usize = signals
+                .iter()
+                .zip(horizons.iter())
+                .filter(|(s, _)| matches!(s, Signal::ExitLong))
+                .map(|(_, h)| h)
+                .sum();
+            if long_exit_weight > threshold {
+                return Signal::ExitLong;
+            }
+        }
+
+        Signal::Hold
+    }
+
+    fn unanimous_entry_vote(signals: &[Signal]) -> Signal {
+        // For entry: ALL must agree
+        // For exit: ANY triggers exit
+        let all_entry_long = signals.iter().all(|s| matches!(s, Signal::EnterLong));
+        let all_entry_short = signals.iter().all(|s| matches!(s, Signal::EnterShort));
+        let any_exit_long = signals.iter().any(|s| matches!(s, Signal::ExitLong));
+        let any_exit_short = signals.iter().any(|s| matches!(s, Signal::ExitShort));
+
+        if any_exit_long {
+            return Signal::ExitLong;
+        }
+        if any_exit_short {
+            return Signal::ExitShort;
+        }
+        if all_entry_long {
+            return Signal::EnterLong;
+        }
+        if all_entry_short {
+            return Signal::EnterShort;
+        }
+
+        Signal::Hold
+    }
+}
+
+/// Multi-Horizon Ensemble strategy.
+///
+/// Combines multiple strategy instances with different parameterizations
+/// (typically different lookback periods / horizons) and aggregates
+/// their signals using a voting mechanism.
+///
+/// Common configurations:
+/// - Donchian Triple: 20/55/100 day lookbacks
+/// - MA Triple: 10/50/200 day crossovers
+/// - TSMOM Multi: 21/63/126/252 day momentum
+pub struct EnsembleStrategy {
+    /// Child strategies to combine
+    strategies: Vec<Box<dyn Strategy>>,
+    /// Horizons (lookback periods) for weighting
+    horizons: Vec<usize>,
+    /// Voting method for signal aggregation
+    voting: VotingMethod,
+}
+
+impl std::fmt::Debug for EnsembleStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EnsembleStrategy")
+            .field(
+                "strategies",
+                &format!("[{} strategies]", self.strategies.len()),
+            )
+            .field("horizons", &self.horizons)
+            .field("voting", &self.voting)
+            .finish()
+    }
+}
+
+impl EnsembleStrategy {
+    pub fn new(
+        strategies: Vec<Box<dyn Strategy>>,
+        horizons: Vec<usize>,
+        voting: VotingMethod,
+    ) -> Self {
+        assert!(
+            !strategies.is_empty(),
+            "Ensemble must have at least one strategy"
+        );
+        assert_eq!(
+            strategies.len(),
+            horizons.len(),
+            "Strategies and horizons must have same length"
+        );
+
+        Self {
+            strategies,
+            horizons,
+            voting,
+        }
+    }
+
+    /// Create a Donchian Triple ensemble (20/55/100 day breakouts).
+    pub fn donchian_triple() -> Self {
+        let strategies: Vec<Box<dyn Strategy>> = vec![
+            Box::new(DonchianBreakoutStrategy::new(20, 10)),
+            Box::new(DonchianBreakoutStrategy::new(55, 20)),
+            Box::new(DonchianBreakoutStrategy::new(100, 40)),
+        ];
+        let horizons = vec![20, 55, 100];
+        Self::new(strategies, horizons, VotingMethod::Majority)
+    }
+
+    /// Create an MA Triple ensemble (10/50/200 crossovers).
+    pub fn ma_triple() -> Self {
+        let strategies: Vec<Box<dyn Strategy>> = vec![
+            Box::new(MACrossoverStrategy::new(5, 10, MAType::EMA)),
+            Box::new(MACrossoverStrategy::new(20, 50, MAType::SMA)),
+            Box::new(MACrossoverStrategy::new(50, 200, MAType::SMA)),
+        ];
+        let horizons = vec![10, 50, 200];
+        Self::new(strategies, horizons, VotingMethod::WeightedByHorizon)
+    }
+
+    /// Create a TSMOM Multi ensemble (21/63/126/252 day momentum).
+    pub fn tsmom_multi() -> Self {
+        let strategies: Vec<Box<dyn Strategy>> = vec![
+            Box::new(TsmomStrategy::new(21)),
+            Box::new(TsmomStrategy::new(63)),
+            Box::new(TsmomStrategy::new(126)),
+            Box::new(TsmomStrategy::new(252)),
+        ];
+        let horizons = vec![21, 63, 126, 252];
+        Self::new(strategies, horizons, VotingMethod::Majority)
+    }
+
+    /// Create an ensemble from a base strategy type and horizons.
+    ///
+    /// Each horizon creates a separate instance of the base strategy:
+    /// - For Donchian: horizon becomes entry_lookback, exit is horizon/2
+    /// - For MACrossover: horizon becomes slow period, fast is horizon/4
+    /// - For TSMOM: horizon is the lookback period directly
+    pub fn from_base_strategy(
+        base_strategy: crate::sweep::StrategyTypeId,
+        horizons: Vec<usize>,
+        voting: VotingMethod,
+    ) -> Self {
+        let strategies: Vec<Box<dyn Strategy>> = horizons
+            .iter()
+            .map(|&h| -> Box<dyn Strategy> {
+                match base_strategy {
+                    crate::sweep::StrategyTypeId::Donchian => {
+                        Box::new(DonchianBreakoutStrategy::new(h, h / 2))
+                    }
+                    crate::sweep::StrategyTypeId::TurtleS1 => {
+                        Box::new(DonchianBreakoutStrategy::turtle_system_1())
+                    }
+                    crate::sweep::StrategyTypeId::TurtleS2 => {
+                        Box::new(DonchianBreakoutStrategy::turtle_system_2())
+                    }
+                    crate::sweep::StrategyTypeId::MACrossover => {
+                        Box::new(MACrossoverStrategy::new(h / 4, h, MAType::SMA))
+                    }
+                    crate::sweep::StrategyTypeId::Tsmom => Box::new(TsmomStrategy::new(h)),
+                    // For other strategy types, default to Donchian with horizon
+                    _ => Box::new(DonchianBreakoutStrategy::new(h, h / 2)),
+                }
+            })
+            .collect();
+
+        Self::new(strategies, horizons, voting)
+    }
+
+    /// Get the voting method.
+    pub fn voting(&self) -> VotingMethod {
+        self.voting
+    }
+
+    /// Get the horizons.
+    pub fn horizons(&self) -> &[usize] {
+        &self.horizons
+    }
+
+    /// Get the number of child strategies.
+    pub fn num_strategies(&self) -> usize {
+        self.strategies.len()
+    }
+}
+
+impl Strategy for EnsembleStrategy {
+    fn id(&self) -> &str {
+        "ensemble"
+    }
+
+    fn warmup_period(&self) -> usize {
+        // Warmup is the max of all child strategy warmups
+        self.strategies
+            .iter()
+            .map(|s| s.warmup_period())
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        // Collect signals from all child strategies
+        let signals: Vec<Signal> = self
+            .strategies
+            .iter()
+            .map(|s| s.signal(bars, current_position))
+            .collect();
+
+        // Aggregate using voting method
+        self.voting.vote(&signals, &self.horizons)
+    }
+
+    fn reset(&mut self) {
+        for strategy in &mut self.strategies {
+            strategy.reset();
+        }
+    }
 }
 
 #[cfg(test)]

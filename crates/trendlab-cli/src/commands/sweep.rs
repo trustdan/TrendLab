@@ -176,7 +176,10 @@ pub fn execute_sweep(
         bail!("No bars in date range {} to {} for {}", start, end, ticker);
     }
 
-    println!("Loaded {} bars for {} (direct Parquet pipeline)", bar_count, ticker);
+    println!(
+        "Loaded {} bars for {} (direct Parquet pipeline)",
+        bar_count, ticker
+    );
 
     // Configure backtest
     let backtest_config = BacktestConfig {
@@ -204,10 +207,11 @@ pub fn execute_sweep(
         run_sweep(&all_bars, &grid, backtest_config)
     } else {
         // Use Polars vectorized backtest (direct DataFrame - Phase 4)
-        let polars_config = PolarsBacktestConfig::new(100_000.0, 100.0).with_cost_model(CostModel {
-            fees_bps_per_side: 10.0,
-            slippage_bps: 5.0,
-        });
+        let polars_config =
+            PolarsBacktestConfig::new(100_000.0, 100.0).with_cost_model(CostModel {
+                fees_bps_per_side: 10.0,
+                slippage_bps: 5.0,
+            });
 
         // Create a Donchian strategy grid config
         let strategy_config = StrategyGridConfig {

@@ -258,12 +258,17 @@ pub fn scan_parquet_lazy(path: &Path) -> Result<LazyFrame, ProviderError> {
 ///
 /// # Returns
 /// A LazyFrame containing all data, sorted by timestamp.
-pub fn scan_multiple_parquet_lazy(paths: &[std::path::PathBuf]) -> Result<LazyFrame, ProviderError> {
+pub fn scan_multiple_parquet_lazy(
+    paths: &[std::path::PathBuf],
+) -> Result<LazyFrame, ProviderError> {
     if paths.is_empty() {
         // Return empty LazyFrame with correct schema
         let empty_df = DataFrame::new(vec![
             Series::new("ts".into(), Vec::<i64>::new())
-                .cast(&DataType::Datetime(TimeUnit::Milliseconds, Some("UTC".into())))
+                .cast(&DataType::Datetime(
+                    TimeUnit::Milliseconds,
+                    Some("UTC".into()),
+                ))
                 .unwrap()
                 .into(),
             Series::new("open".into(), Vec::<f64>::new()).into(),
@@ -293,9 +298,10 @@ pub fn scan_multiple_parquet_lazy(paths: &[std::path::PathBuf]) -> Result<LazyFr
         .collect::<Result<Vec<_>, _>>()?;
 
     // Concatenate all LazyFrames
-    let combined = concat(lazy_frames, UnionArgs::default()).map_err(|e| ProviderError::IoError {
-        message: format!("Failed to concatenate Parquet files: {}", e),
-    })?;
+    let combined =
+        concat(lazy_frames, UnionArgs::default()).map_err(|e| ProviderError::IoError {
+            message: format!("Failed to concatenate Parquet files: {}", e),
+        })?;
 
     // Sort by timestamp for consistent ordering
     let sort_opts = SortMultipleOptions::new().with_order_descending(false);
@@ -328,7 +334,11 @@ pub fn scan_symbol_parquet_lazy(
 
     if !symbol_dir.exists() {
         return Err(ProviderError::IoError {
-            message: format!("No data found for symbol {} at {}", symbol, symbol_dir.display()),
+            message: format!(
+                "No data found for symbol {} at {}",
+                symbol,
+                symbol_dir.display()
+            ),
         });
     }
 

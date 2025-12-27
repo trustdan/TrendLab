@@ -1,0 +1,92 @@
+/* Tokyo Night Theme Variables */
+:root {
+  color-scheme: dark;
+
+  /* Background */
+  --bg-base: #1a1b26;
+  --bg-dark: #16161e;
+  --bg-highlight: #292e42;
+  --bg-panel: #1f2335;
+  --bg-popup: #1f2335;
+  --bg-sidebar: #16161e;
+  --bg-statusline: #16161e;
+  --bg-visual: #364a82;
+
+  /* Foreground */
+  --fg: #c0caf5;
+  --fg-dark: #a9b1d6;
+  --fg-gutter: #3b4261;
+  --fg-sidebar: #7aa2f7;
+
+  /* Colors */
+  --blue: #7aa2f7;
+  --blue-dark: #3d59a1;
+  --blue-light: #89ddff;
+  --cyan: #7dcfff;
+  --green: #9ece6a;
+  --green-dark: #73daca;
+  --magenta: #bb9af7;
+  --orange: #ff9e64;
+  --purple: #9d7cd8;
+  --red: #f7768e;
+  --teal: #1abc9c;
+  --yellow: #e0af68;
+  --white: #c0caf5;
+
+  /* UI Elements */
+  --border: #29293d;
+  --border-highlight: #3b4261;
+  --scrollbar-bg: #1a1b26;
+  --scrollbar-fg: #3b4261;
+
+  /* Semantic */
+  --info: var(--blue);
+  --hint: var(--teal);
+  --warn: var(--yellow);
+  --error: var(--red);
+  --success: var(--green);
+  --muted: var(--fg-gutter);
+
+  /* Charts */
+  --chart-up: var(--green);
+  --chart-down: var(--red);
+  --chart-grid: #1f2335;
+  --chart-crosshair: #565f89;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.5);
+
+  /* Transitions */
+  --transition-fast: 100ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 300ms ease;
+
+  /* Border radius */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  /* Spacing */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+
+  /* Typography */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-base: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 18px;
+  --font-size-2xl: 22px;
+
+  /* Line heights */
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.75;
+}

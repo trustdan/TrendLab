@@ -1,0 +1,21 @@
+[package]
+name = "trendlab-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+build = "build.rs"
+
+[dependencies]
+tauri = { version = "2", features = ["devtools"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+trendlab-core = { workspace = true }
+
+[build-dependencies]
+tauri-build = { version = "2" }
+
+

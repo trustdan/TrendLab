@@ -1,7 +1,5 @@
 //! TrendLab CLI - Command-line interface for trend-following research.
 
-mod commands;
-
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use commands::artifact;
@@ -10,6 +8,7 @@ use commands::html_report;
 use commands::report;
 use commands::run;
 use commands::sweep;
+use trendlab_cli::commands;
 
 #[derive(Parser)]
 #[command(name = "trendlab")]
@@ -241,7 +240,11 @@ async fn main() -> Result<()> {
             }
             println!(
                 "  Engine:   {}",
-                if sequential { "Sequential" } else { "Polars (vectorized)" }
+                if sequential {
+                    "Sequential"
+                } else {
+                    "Polars (vectorized)"
+                }
             );
             println!();
 

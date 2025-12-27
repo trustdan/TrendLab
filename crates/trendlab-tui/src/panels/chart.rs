@@ -57,6 +57,7 @@ fn trend_symbol(value: f64) -> &'static str {
 }
 
 /// Generate Y-axis labels with smart formatting
+#[allow(dead_code)]
 fn generate_y_labels(y_min: f64, y_max: f64, count: usize) -> Vec<Span<'static>> {
     (0..count)
         .map(|i| {
@@ -428,6 +429,19 @@ fn strategy_color(strategy_type: StrategyTypeId) -> Color {
         StrategyTypeId::TurtleS2 => Color::Rgb(155, 89, 182), // Purple
         StrategyTypeId::MACrossover => Color::Rgb(241, 196, 15), // Yellow
         StrategyTypeId::Tsmom => Color::Rgb(231, 76, 60),     // Red
+        StrategyTypeId::Keltner => Color::Rgb(230, 126, 34),  // Orange
+        StrategyTypeId::STARC => Color::Rgb(26, 188, 156),    // Teal
+        StrategyTypeId::Supertrend => Color::Rgb(142, 68, 173), // Dark Purple
+        StrategyTypeId::DmiAdx => Color::Rgb(22, 160, 133),   // Dark Teal
+        StrategyTypeId::Aroon => Color::Rgb(39, 174, 96),     // Dark Green
+        StrategyTypeId::BollingerSqueeze => Color::Rgb(41, 128, 185), // Dark Blue
+        StrategyTypeId::FiftyTwoWeekHigh => Color::Rgb(192, 57, 43), // Dark Red
+        StrategyTypeId::DarvasBox => Color::Rgb(243, 156, 18), // Orange-Yellow
+        StrategyTypeId::LarryWilliams => Color::Rgb(211, 84, 0), // Burnt Orange
+        StrategyTypeId::HeikinAshi => Color::Rgb(127, 140, 141), // Gray
+        StrategyTypeId::ParabolicSar => Color::Rgb(44, 62, 80), // Dark Gray
+        StrategyTypeId::OpeningRangeBreakout => Color::Rgb(189, 195, 199), // Light Gray
+        StrategyTypeId::Ensemble => Color::Rgb(149, 165, 166), // Silver
     }
 }
 
@@ -769,10 +783,10 @@ fn draw_candlestick_chart(f: &mut Frame, app: &App, area: Rect, is_active: bool)
 
     // Apply zoom and scroll to get visible range
     let visible_count = ((total_bars as f64 / app.chart.zoom_level) as usize).max(10);
-    let max_scroll = (total_bars as f64 - visible_count as f64).max(0.0);
-    let scroll_offset = (app.chart.scroll_offset * max_scroll) as usize;
-    let end_idx = (scroll_offset + visible_count).min(total_bars);
-    let start_idx = end_idx.saturating_sub(visible_count);
+    let max_scroll = total_bars.saturating_sub(visible_count);
+    let scroll_offset = app.chart.scroll_offset.min(max_scroll);
+    let start_idx = scroll_offset;
+    let end_idx = (start_idx + visible_count).min(total_bars);
 
     let visible_candles: Vec<&CandleData> = candles[start_idx..end_idx].iter().collect();
 
@@ -783,7 +797,10 @@ fn draw_candlestick_chart(f: &mut Frame, app: &App, area: Rect, is_active: bool)
 
     // Calculate price bounds with padding
     let (y_min, y_max) = calculate_price_bounds(
-        &visible_candles.iter().map(|c| (*c).clone()).collect::<Vec<_>>(),
+        &visible_candles
+            .iter()
+            .map(|c| (*c).clone())
+            .collect::<Vec<_>>(),
     );
 
     // Generate Y-axis labels
@@ -868,7 +885,7 @@ fn draw_candlestick_chart(f: &mut Frame, app: &App, area: Rect, is_active: bool)
 
     // Overlay axis labels using a Chart widget (invisible data, just for axes)
     let empty_data: Vec<(f64, f64)> = vec![];
-    let axis_chart = Chart::new(vec![Dataset::default()
+    let _axis_chart = Chart::new(vec![Dataset::default()
         .data(&empty_data)
         .graph_type(GraphType::Line)])
     .block(Block::default())
@@ -891,7 +908,13 @@ fn draw_candlestick_chart(f: &mut Frame, app: &App, area: Rect, is_active: bool)
 }
 
 /// Helper to draw grid lines on canvas
-fn draw_grid_lines(ctx: &mut ratatui::widgets::canvas::Context, x_max: f64, y_min: f64, y_max: f64, num_lines: usize) {
+fn draw_grid_lines(
+    ctx: &mut ratatui::widgets::canvas::Context,
+    x_max: f64,
+    y_min: f64,
+    y_max: f64,
+    num_lines: usize,
+) {
     let grid_color = colors::GRID;
 
     // Horizontal grid lines
@@ -959,10 +982,10 @@ fn draw_volume_bars(f: &mut Frame, app: &App, area: Rect) {
 
     // Apply same zoom and scroll as candlestick chart
     let visible_count = ((total_bars as f64 / app.chart.zoom_level) as usize).max(10);
-    let max_scroll = (total_bars as f64 - visible_count as f64).max(0.0);
-    let scroll_offset = (app.chart.scroll_offset * max_scroll) as usize;
-    let end_idx = (scroll_offset + visible_count).min(total_bars);
-    let start_idx = end_idx.saturating_sub(visible_count);
+    let max_scroll = total_bars.saturating_sub(visible_count);
+    let scroll_offset = app.chart.scroll_offset.min(max_scroll);
+    let start_idx = scroll_offset;
+    let end_idx = (start_idx + visible_count).min(total_bars);
 
     let visible_candles: Vec<&CandleData> = candles[start_idx..end_idx].iter().collect();
 
@@ -984,7 +1007,10 @@ fn draw_volume_bars(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(colors::BORDER))
-                .title(Span::styled(" Volume ", Style::default().fg(colors::FG_DARK))),
+                .title(Span::styled(
+                    " Volume ",
+                    Style::default().fg(colors::FG_DARK),
+                )),
         )
         .x_bounds([0.0, visible_count_f64])
         .y_bounds([0.0, max_volume])
@@ -1032,17 +1058,9 @@ fn draw_crosshair(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    // Calculate relative position within chart
-    let rel_x = cursor_x - area.x;
-    let rel_y = cursor_y - area.y;
-
     // Draw vertical line
     for y in area.y..area.y + area.height {
         if y != cursor_y {
-            let cell = ratatui::buffer::Cell::default()
-                .set_char('│')
-                .set_fg(colors::CROSSHAIR)
-                .clone();
             if let Some(buf_cell) = f.buffer_mut().cell_mut((cursor_x, y)) {
                 buf_cell.set_char('│');
                 buf_cell.set_fg(colors::CROSSHAIR);
@@ -1088,12 +1106,18 @@ fn draw_tooltip(f: &mut Frame, app: &App, area: Rect) {
                     0.0
                 };
                 let trend = trend_symbol(change);
-                let trend_color = if change >= 0.0 { colors::GREEN } else { colors::RED };
+                let trend_color = if change >= 0.0 {
+                    colors::GREEN
+                } else {
+                    colors::RED
+                };
 
                 vec![
                     Line::from(vec![Span::styled(
                         candle.date.clone(),
-                        Style::default().fg(colors::CYAN).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(colors::CYAN)
+                            .add_modifier(Modifier::BOLD),
                     )]),
                     Line::from(vec![
                         Span::styled("O: ", Style::default().fg(colors::FG_DARK)),
@@ -1146,12 +1170,18 @@ fn draw_tooltip(f: &mut Frame, app: &App, area: Rect) {
                     0.0
                 };
                 let trend = trend_symbol(gain);
-                let trend_color = if gain >= 0.0 { colors::GREEN } else { colors::RED };
+                let trend_color = if gain >= 0.0 {
+                    colors::GREEN
+                } else {
+                    colors::RED
+                };
 
                 vec![
                     Line::from(vec![Span::styled(
                         format!("Day {}", data_idx),
-                        Style::default().fg(colors::CYAN).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(colors::CYAN)
+                            .add_modifier(Modifier::BOLD),
                     )]),
                     Line::from(vec![
                         Span::styled("Equity: ", Style::default().fg(colors::FG_DARK)),
@@ -1265,7 +1295,7 @@ fn draw_chart_info(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
             (0.0, 0.0, 0.0, 0.0, 0, 0.0)
         };
 
-    let view_mode = app.chart.view_mode_name();
+    let _view_mode = app.chart.view_mode_name();
 
     let lines = if app.chart.equity_curve.is_empty()
         && app.chart.ticker_curves.is_empty()
@@ -1279,17 +1309,41 @@ fn draw_chart_info(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
             Line::from(""),
             Line::from(vec![
                 Span::styled("'d': ", Style::default().fg(colors::CYAN)),
-                Span::styled("Toggle drawdown  ", Style::default().fg(colors::FG_DARK)),
+                Span::styled("DD  ", Style::default().fg(colors::FG_DARK)),
                 Span::styled("'m': ", Style::default().fg(colors::CYAN)),
                 Span::styled("Mode  ", Style::default().fg(colors::FG_DARK)),
+                Span::styled("'v': ", Style::default().fg(colors::CYAN)),
+                Span::styled("Vol  ", Style::default().fg(colors::FG_DARK)),
+                Span::styled("'c': ", Style::default().fg(colors::CYAN)),
+                Span::styled("Cross  ", Style::default().fg(colors::FG_DARK)),
                 Span::styled("\u{2191}\u{2193}: ", Style::default().fg(colors::CYAN)),
-                Span::styled("Zoom  ", Style::default().fg(colors::FG_DARK)),
-                Span::styled("Esc: ", Style::default().fg(colors::CYAN)),
-                Span::styled("Reset", Style::default().fg(colors::FG_DARK)),
+                Span::styled("Zoom", Style::default().fg(colors::FG_DARK)),
             ]),
         ]
     } else {
-        vec![
+        // Build winning config line if available
+        let config_line = if let Some(ref wc) = app.chart.winning_config {
+            let symbol_part = wc
+                .symbol
+                .as_ref()
+                .map(|s| format!(" [{}]", s))
+                .unwrap_or_default();
+            Line::from(vec![
+                Span::styled("\u{1f3c6} ", Style::default().fg(colors::YELLOW)), // Trophy emoji
+                Span::styled(
+                    wc.strategy_name.clone(),
+                    Style::default()
+                        .fg(colors::CYAN)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(": ", Style::default().fg(colors::FG_DARK)),
+                Span::styled(
+                    wc.config_display.clone(),
+                    Style::default().fg(colors::GREEN),
+                ),
+                Span::styled(symbol_part, Style::default().fg(colors::YELLOW)),
+            ])
+        } else {
             Line::from(vec![
                 Span::styled("Final: ", Style::default().fg(colors::FG_DARK)),
                 Span::styled(
@@ -1320,14 +1374,40 @@ fn draw_chart_info(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
                 ),
                 Span::styled("   MaxDD: ", Style::default().fg(colors::FG_DARK)),
                 Span::styled(format!("{:.1}%", max_dd), Style::default().fg(colors::RED)),
-            ]),
+            ])
+        };
+
+        vec![
+            config_line,
             Line::from(vec![
-                Span::styled("Trades: ", Style::default().fg(colors::FG_DARK)),
+                Span::styled("CAGR: ", Style::default().fg(colors::FG_DARK)),
+                Span::styled(
+                    format!("{:.1}%", cagr),
+                    if cagr > 0.0 {
+                        Style::default().fg(colors::GREEN)
+                    } else {
+                        Style::default().fg(colors::RED)
+                    },
+                ),
+                Span::styled("  Sharpe: ", Style::default().fg(colors::FG_DARK)),
+                Span::styled(
+                    format!("{:.2}", sharpe),
+                    if sharpe > 1.0 {
+                        Style::default().fg(colors::GREEN)
+                    } else if sharpe > 0.5 {
+                        Style::default().fg(colors::YELLOW)
+                    } else {
+                        Style::default().fg(colors::ORANGE)
+                    },
+                ),
+                Span::styled("  MaxDD: ", Style::default().fg(colors::FG_DARK)),
+                Span::styled(format!("{:.1}%", max_dd), Style::default().fg(colors::RED)),
+                Span::styled("  Trades: ", Style::default().fg(colors::FG_DARK)),
                 Span::styled(
                     format!("{}", num_trades),
                     Style::default().fg(colors::YELLOW),
                 ),
-                Span::styled("   Win Rate: ", Style::default().fg(colors::FG_DARK)),
+                Span::styled("  Win: ", Style::default().fg(colors::FG_DARK)),
                 Span::styled(
                     format!("{:.0}%", win_rate),
                     if win_rate > 50.0 {
@@ -1336,35 +1416,25 @@ fn draw_chart_info(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
                         Style::default().fg(colors::ORANGE)
                     },
                 ),
-                Span::styled("   Zoom: ", Style::default().fg(colors::FG_DARK)),
-                Span::styled(
-                    format!("{:.0}%", app.chart.zoom_level * 100.0),
-                    Style::default().fg(colors::YELLOW),
-                ),
-                Span::styled("   Mode: ", Style::default().fg(colors::FG_DARK)),
-                Span::styled(
-                    view_mode,
-                    Style::default()
-                        .fg(colors::MAGENTA)
-                        .add_modifier(Modifier::BOLD),
-                ),
                 if app.chart.show_drawdown {
-                    Span::styled("   [DD ON]", Style::default().fg(colors::RED))
+                    Span::styled("  [DD]", Style::default().fg(colors::RED))
                 } else {
-                    Span::styled("   [DD OFF]", Style::default().fg(colors::FG_DARK))
+                    Span::styled("", Style::default())
                 },
             ]),
             Line::from(vec![
                 Span::styled("'d': ", Style::default().fg(colors::CYAN)),
-                Span::styled("Drawdown  ", Style::default().fg(colors::FG_DARK)),
+                Span::styled("DD  ", Style::default().fg(colors::FG_DARK)),
                 Span::styled("'m': ", Style::default().fg(colors::CYAN)),
                 Span::styled("Mode  ", Style::default().fg(colors::FG_DARK)),
+                Span::styled("'v': ", Style::default().fg(colors::CYAN)),
+                Span::styled("Vol  ", Style::default().fg(colors::FG_DARK)),
+                Span::styled("'c': ", Style::default().fg(colors::CYAN)),
+                Span::styled("Cross  ", Style::default().fg(colors::FG_DARK)),
                 Span::styled("\u{2191}\u{2193}: ", Style::default().fg(colors::CYAN)),
                 Span::styled("Zoom  ", Style::default().fg(colors::FG_DARK)),
                 Span::styled("\u{2190}\u{2192}: ", Style::default().fg(colors::CYAN)),
-                Span::styled("Scroll  ", Style::default().fg(colors::FG_DARK)),
-                Span::styled("Esc: ", Style::default().fg(colors::CYAN)),
-                Span::styled("Reset", Style::default().fg(colors::FG_DARK)),
+                Span::styled("Scroll", Style::default().fg(colors::FG_DARK)),
             ]),
         ]
     };

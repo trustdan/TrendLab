@@ -436,11 +436,22 @@ pub fn create_donchian_artifact(
                 // AddLong keeps position as Long (for pyramiding)
                 Some("add_long".to_string())
             }
+            // Short signals not yet implemented (long-only first)
+            Signal::EnterShort => {
+                position = Position::Short;
+                Some("enter_short".to_string())
+            }
+            Signal::ExitShort => {
+                position = Position::Flat;
+                Some("exit_short".to_string())
+            }
+            Signal::AddShort => Some("add_short".to_string()),
         };
 
         let position_str = match position {
             Position::Flat => "flat",
             Position::Long => "long",
+            Position::Short => "short",
         };
 
         // Build indicator values

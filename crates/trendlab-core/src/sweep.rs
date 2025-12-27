@@ -9,8 +9,15 @@
 use crate::backtest::{run_backtest, BacktestConfig, BacktestResult, CostModel};
 use crate::bar::Bar;
 use crate::indicators::MAType;
+use crate::indicators::OpeningPeriod;
 use crate::metrics::{compute_metrics, Metrics};
-use crate::strategy::{DonchianBreakoutStrategy, MACrossoverStrategy, Strategy, TsmomStrategy};
+use crate::strategy::{
+    AroonCrossStrategy, BollingerSqueezeStrategy, DarvasBoxStrategy, DmiAdxStrategy,
+    DonchianBreakoutStrategy, EnsembleStrategy, FiftyTwoWeekHighStrategy, HeikinAshiRegimeStrategy,
+    KeltnerBreakoutStrategy, LarryWilliamsStrategy, MACrossoverStrategy,
+    OpeningRangeBreakoutStrategy, ParabolicSARStrategy, STARCBreakoutStrategy, Strategy,
+    SupertrendStrategy, TsmomStrategy, VotingMethod,
+};
 use chrono::{DateTime, Utc};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -655,6 +662,23 @@ pub enum StrategyTypeId {
     TurtleS2,
     MACrossover,
     Tsmom,
+    // Phase 1: ATR-Based Channels
+    Keltner,
+    STARC,
+    Supertrend,
+    // Phase 2: Momentum & Direction
+    DmiAdx,
+    Aroon,
+    BollingerSqueeze,
+    // Phase 3: Price Structure
+    FiftyTwoWeekHigh,
+    DarvasBox,
+    LarryWilliams,
+    HeikinAshi,
+    // Phase 4: Complex Stateful + Ensemble
+    ParabolicSar,
+    OpeningRangeBreakout,
+    Ensemble,
 }
 
 impl StrategyTypeId {
@@ -666,6 +690,23 @@ impl StrategyTypeId {
             Self::TurtleS2,
             Self::MACrossover,
             Self::Tsmom,
+            // Phase 1
+            Self::Keltner,
+            Self::STARC,
+            Self::Supertrend,
+            // Phase 2
+            Self::DmiAdx,
+            Self::Aroon,
+            Self::BollingerSqueeze,
+            // Phase 3
+            Self::FiftyTwoWeekHigh,
+            Self::DarvasBox,
+            Self::LarryWilliams,
+            Self::HeikinAshi,
+            // Phase 4
+            Self::ParabolicSar,
+            Self::OpeningRangeBreakout,
+            Self::Ensemble,
         ]
     }
 
@@ -677,6 +718,19 @@ impl StrategyTypeId {
             Self::TurtleS2 => "Turtle System 2",
             Self::MACrossover => "MA Crossover",
             Self::Tsmom => "TSMOM",
+            Self::Keltner => "Keltner Channel",
+            Self::STARC => "STARC Bands",
+            Self::Supertrend => "Supertrend",
+            Self::DmiAdx => "DMI/ADX Directional",
+            Self::Aroon => "Aroon Cross",
+            Self::BollingerSqueeze => "Bollinger Squeeze",
+            Self::FiftyTwoWeekHigh => "52-Week High",
+            Self::DarvasBox => "Darvas Box",
+            Self::LarryWilliams => "Larry Williams",
+            Self::HeikinAshi => "Heikin-Ashi Regime",
+            Self::ParabolicSar => "Parabolic SAR",
+            Self::OpeningRangeBreakout => "Opening Range Breakout",
+            Self::Ensemble => "Multi-Horizon Ensemble",
         }
     }
 
@@ -688,6 +742,19 @@ impl StrategyTypeId {
             Self::TurtleS2 => "turtle_s2",
             Self::MACrossover => "ma_crossover",
             Self::Tsmom => "tsmom",
+            Self::Keltner => "keltner",
+            Self::STARC => "starc",
+            Self::Supertrend => "supertrend",
+            Self::DmiAdx => "dmi_adx",
+            Self::Aroon => "aroon",
+            Self::BollingerSqueeze => "bollinger_squeeze",
+            Self::FiftyTwoWeekHigh => "52wk_high",
+            Self::DarvasBox => "darvas_box",
+            Self::LarryWilliams => "larry_williams",
+            Self::HeikinAshi => "heikin_ashi",
+            Self::ParabolicSar => "parabolic_sar",
+            Self::OpeningRangeBreakout => "orb",
+            Self::Ensemble => "ensemble",
         }
     }
 }
@@ -709,6 +776,66 @@ pub enum StrategyConfigId {
     Tsmom {
         lookback: usize,
     },
+    // Phase 2: Momentum & Direction
+    DmiAdx {
+        di_period: usize,
+        adx_period: usize,
+        adx_threshold: f64,
+    },
+    Aroon {
+        period: usize,
+    },
+    BollingerSqueeze {
+        period: usize,
+        std_mult: f64,
+        squeeze_threshold: f64,
+    },
+    // Phase 1: ATR-Based Channels
+    Keltner {
+        ema_period: usize,
+        atr_period: usize,
+        multiplier: f64,
+    },
+    STARC {
+        sma_period: usize,
+        atr_period: usize,
+        multiplier: f64,
+    },
+    Supertrend {
+        atr_period: usize,
+        multiplier: f64,
+    },
+    // Phase 3: Price Structure
+    FiftyTwoWeekHigh {
+        period: usize,
+        entry_pct: f64,
+        exit_pct: f64,
+    },
+    DarvasBox {
+        box_confirmation_bars: usize,
+    },
+    LarryWilliams {
+        range_multiplier: f64,
+        atr_stop_mult: f64,
+    },
+    HeikinAshi {
+        confirmation_bars: usize,
+    },
+    // Phase 4: Complex Stateful + Ensemble
+    ParabolicSar {
+        af_start: f64,
+        af_step: f64,
+        af_max: f64,
+    },
+    OpeningRangeBreakout {
+        range_bars: usize,
+        period: OpeningPeriod,
+    },
+    Ensemble {
+        base_strategy: StrategyTypeId,
+        horizons: Vec<usize>,
+        voting: VotingMethod,
+    },
 }
 
 impl StrategyConfigId {
@@ -720,6 +847,22 @@ impl StrategyConfigId {
             Self::TurtleS2 => StrategyTypeId::TurtleS2,
             Self::MACrossover { .. } => StrategyTypeId::MACrossover,
             Self::Tsmom { .. } => StrategyTypeId::Tsmom,
+            Self::DmiAdx { .. } => StrategyTypeId::DmiAdx,
+            Self::Aroon { .. } => StrategyTypeId::Aroon,
+            Self::BollingerSqueeze { .. } => StrategyTypeId::BollingerSqueeze,
+            // Phase 1
+            Self::Keltner { .. } => StrategyTypeId::Keltner,
+            Self::STARC { .. } => StrategyTypeId::STARC,
+            Self::Supertrend { .. } => StrategyTypeId::Supertrend,
+            // Phase 3
+            Self::FiftyTwoWeekHigh { .. } => StrategyTypeId::FiftyTwoWeekHigh,
+            Self::DarvasBox { .. } => StrategyTypeId::DarvasBox,
+            Self::LarryWilliams { .. } => StrategyTypeId::LarryWilliams,
+            Self::HeikinAshi { .. } => StrategyTypeId::HeikinAshi,
+            // Phase 4
+            Self::ParabolicSar { .. } => StrategyTypeId::ParabolicSar,
+            Self::OpeningRangeBreakout { .. } => StrategyTypeId::OpeningRangeBreakout,
+            Self::Ensemble { .. } => StrategyTypeId::Ensemble,
         }
     }
 
@@ -740,6 +883,77 @@ impl StrategyConfigId {
                 format!("MA {} {}/{}", ma_type.name(), fast, slow)
             }
             Self::Tsmom { lookback } => format!("TSMOM {}", lookback),
+            Self::DmiAdx {
+                di_period,
+                adx_period,
+                adx_threshold,
+            } => format!("DMI/ADX {}/{}/{:.0}", di_period, adx_period, adx_threshold),
+            Self::Aroon { period } => format!("Aroon {}", period),
+            Self::BollingerSqueeze {
+                period,
+                std_mult,
+                squeeze_threshold,
+            } => format!(
+                "BB Squeeze {}/{:.1}/{:.2}",
+                period, std_mult, squeeze_threshold
+            ),
+            // Phase 1: ATR-Based Channels
+            Self::Keltner {
+                ema_period,
+                atr_period,
+                multiplier,
+            } => format!("Keltner {}/{}/{:.1}", ema_period, atr_period, multiplier),
+            Self::STARC {
+                sma_period,
+                atr_period,
+                multiplier,
+            } => format!("STARC {}/{}/{:.1}", sma_period, atr_period, multiplier),
+            Self::Supertrend {
+                atr_period,
+                multiplier,
+            } => format!("Supertrend {}/{:.1}", atr_period, multiplier),
+            // Phase 3: Price Structure
+            Self::FiftyTwoWeekHigh {
+                period,
+                entry_pct,
+                exit_pct,
+            } => format!(
+                "52wk High {}/{:.0}%/{:.0}%",
+                period,
+                entry_pct * 100.0,
+                exit_pct * 100.0
+            ),
+            Self::DarvasBox {
+                box_confirmation_bars,
+            } => {
+                format!("Darvas Box {}", box_confirmation_bars)
+            }
+            Self::LarryWilliams {
+                range_multiplier,
+                atr_stop_mult,
+            } => format!("Williams {:.2}/{:.1}", range_multiplier, atr_stop_mult),
+            Self::HeikinAshi { confirmation_bars } => {
+                format!("Heikin-Ashi {}", confirmation_bars)
+            }
+            // Phase 4
+            Self::ParabolicSar {
+                af_start,
+                af_step,
+                af_max,
+            } => format!("SAR {:.2}/{:.2}/{:.2}", af_start, af_step, af_max),
+            Self::OpeningRangeBreakout { range_bars, period } => {
+                format!("ORB {} {:?}", range_bars, period)
+            }
+            Self::Ensemble {
+                base_strategy,
+                horizons,
+                voting,
+            } => format!(
+                "Ensemble {} {:?} {:?}",
+                base_strategy.name(),
+                horizons,
+                voting
+            ),
         }
     }
 
@@ -754,6 +968,43 @@ impl StrategyConfigId {
             Self::TurtleS2 => ConfigId::new(55, 20),
             Self::MACrossover { fast, slow, .. } => ConfigId::new(*fast, *slow),
             Self::Tsmom { lookback } => ConfigId::new(*lookback, 0),
+            Self::DmiAdx {
+                di_period,
+                adx_period,
+                ..
+            } => ConfigId::new(*di_period, *adx_period),
+            Self::Aroon { period } => ConfigId::new(*period, 0),
+            Self::BollingerSqueeze { period, .. } => ConfigId::new(*period, 0),
+            // Phase 1: Pack params into legacy format
+            Self::Keltner {
+                ema_period,
+                atr_period,
+                ..
+            } => ConfigId::new(*ema_period, *atr_period),
+            Self::STARC {
+                sma_period,
+                atr_period,
+                ..
+            } => ConfigId::new(*sma_period, *atr_period),
+            Self::Supertrend { atr_period, .. } => ConfigId::new(*atr_period, 0),
+            // Phase 3
+            Self::FiftyTwoWeekHigh { period, .. } => ConfigId::new(*period, 0),
+            Self::DarvasBox {
+                box_confirmation_bars,
+            } => ConfigId::new(*box_confirmation_bars, 0),
+            Self::LarryWilliams {
+                range_multiplier, ..
+            } => ConfigId::new((*range_multiplier * 100.0) as usize, 0),
+            Self::HeikinAshi { confirmation_bars } => ConfigId::new(*confirmation_bars, 0),
+            // Phase 4: Pack params into legacy format
+            Self::ParabolicSar { af_start, .. } => {
+                // Store af_start * 100 as entry_lookback
+                ConfigId::new((*af_start * 100.0) as usize, 0)
+            }
+            Self::OpeningRangeBreakout { range_bars, .. } => ConfigId::new(*range_bars, 0),
+            Self::Ensemble { horizons, .. } => {
+                ConfigId::new(horizons.len(), horizons.first().copied().unwrap_or(0))
+            }
         }
     }
 }
@@ -774,6 +1025,66 @@ pub enum StrategyParams {
     },
     Tsmom {
         lookbacks: Vec<usize>,
+    },
+    // Phase 2: Momentum & Direction
+    DmiAdx {
+        di_periods: Vec<usize>,
+        adx_periods: Vec<usize>,
+        adx_thresholds: Vec<f64>,
+    },
+    Aroon {
+        periods: Vec<usize>,
+    },
+    BollingerSqueeze {
+        periods: Vec<usize>,
+        std_mults: Vec<f64>,
+        squeeze_thresholds: Vec<f64>,
+    },
+    // Phase 1: ATR-Based Channels
+    Keltner {
+        ema_periods: Vec<usize>,
+        atr_periods: Vec<usize>,
+        multipliers: Vec<f64>,
+    },
+    STARC {
+        sma_periods: Vec<usize>,
+        atr_periods: Vec<usize>,
+        multipliers: Vec<f64>,
+    },
+    Supertrend {
+        atr_periods: Vec<usize>,
+        multipliers: Vec<f64>,
+    },
+    // Phase 3: Price Structure
+    FiftyTwoWeekHigh {
+        periods: Vec<usize>,
+        entry_pcts: Vec<f64>,
+        exit_pcts: Vec<f64>,
+    },
+    DarvasBox {
+        box_confirmation_bars: Vec<usize>,
+    },
+    LarryWilliams {
+        range_multipliers: Vec<f64>,
+        atr_stop_mults: Vec<f64>,
+    },
+    HeikinAshi {
+        confirmation_bars: Vec<usize>,
+    },
+    // Phase 4: Complex Stateful + Ensemble
+    ParabolicSar {
+        af_starts: Vec<f64>,
+        af_steps: Vec<f64>,
+        af_maxs: Vec<f64>,
+    },
+    OpeningRangeBreakout {
+        range_bars: Vec<usize>,
+        periods: Vec<OpeningPeriod>,
+    },
+    Ensemble {
+        base_strategies: Vec<StrategyTypeId>,
+        horizon_sets: Vec<Vec<usize>>,
+        voting_methods: Vec<VotingMethod>,
     },
 }
 
@@ -826,6 +1137,210 @@ impl StrategyParams {
                 .iter()
                 .map(|&lookback| StrategyConfigId::Tsmom { lookback })
                 .collect(),
+            // Phase 2: Momentum & Direction
+            Self::DmiAdx {
+                di_periods,
+                adx_periods,
+                adx_thresholds,
+            } => {
+                let mut configs = Vec::new();
+                for &di_period in di_periods {
+                    for &adx_period in adx_periods {
+                        for &adx_threshold in adx_thresholds {
+                            configs.push(StrategyConfigId::DmiAdx {
+                                di_period,
+                                adx_period,
+                                adx_threshold,
+                            });
+                        }
+                    }
+                }
+                configs
+            }
+            Self::Aroon { periods } => periods
+                .iter()
+                .map(|&period| StrategyConfigId::Aroon { period })
+                .collect(),
+            Self::BollingerSqueeze {
+                periods,
+                std_mults,
+                squeeze_thresholds,
+            } => {
+                let mut configs = Vec::new();
+                for &period in periods {
+                    for &std_mult in std_mults {
+                        for &squeeze_threshold in squeeze_thresholds {
+                            configs.push(StrategyConfigId::BollingerSqueeze {
+                                period,
+                                std_mult,
+                                squeeze_threshold,
+                            });
+                        }
+                    }
+                }
+                configs
+            }
+            // Phase 1: ATR-Based Channels
+            Self::Keltner {
+                ema_periods,
+                atr_periods,
+                multipliers,
+            } => {
+                let mut configs = Vec::new();
+                for &ema_period in ema_periods {
+                    for &atr_period in atr_periods {
+                        for &multiplier in multipliers {
+                            configs.push(StrategyConfigId::Keltner {
+                                ema_period,
+                                atr_period,
+                                multiplier,
+                            });
+                        }
+                    }
+                }
+                configs
+            }
+            Self::STARC {
+                sma_periods,
+                atr_periods,
+                multipliers,
+            } => {
+                let mut configs = Vec::new();
+                for &sma_period in sma_periods {
+                    for &atr_period in atr_periods {
+                        for &multiplier in multipliers {
+                            configs.push(StrategyConfigId::STARC {
+                                sma_period,
+                                atr_period,
+                                multiplier,
+                            });
+                        }
+                    }
+                }
+                configs
+            }
+            Self::Supertrend {
+                atr_periods,
+                multipliers,
+            } => {
+                let mut configs = Vec::new();
+                for &atr_period in atr_periods {
+                    for &multiplier in multipliers {
+                        configs.push(StrategyConfigId::Supertrend {
+                            atr_period,
+                            multiplier,
+                        });
+                    }
+                }
+                configs
+            }
+            // Phase 3: Price Structure
+            Self::FiftyTwoWeekHigh {
+                periods,
+                entry_pcts,
+                exit_pcts,
+            } => {
+                let mut configs = Vec::new();
+                for &period in periods {
+                    for &entry_pct in entry_pcts {
+                        for &exit_pct in exit_pcts {
+                            if exit_pct < entry_pct {
+                                configs.push(StrategyConfigId::FiftyTwoWeekHigh {
+                                    period,
+                                    entry_pct,
+                                    exit_pct,
+                                });
+                            }
+                        }
+                    }
+                }
+                configs
+            }
+            Self::DarvasBox {
+                box_confirmation_bars,
+            } => box_confirmation_bars
+                .iter()
+                .map(|&bars| StrategyConfigId::DarvasBox {
+                    box_confirmation_bars: bars,
+                })
+                .collect(),
+            Self::LarryWilliams {
+                range_multipliers,
+                atr_stop_mults,
+            } => {
+                let mut configs = Vec::new();
+                for &range_multiplier in range_multipliers {
+                    for &atr_stop_mult in atr_stop_mults {
+                        configs.push(StrategyConfigId::LarryWilliams {
+                            range_multiplier,
+                            atr_stop_mult,
+                        });
+                    }
+                }
+                configs
+            }
+            Self::HeikinAshi { confirmation_bars } => confirmation_bars
+                .iter()
+                .map(|&bars| StrategyConfigId::HeikinAshi {
+                    confirmation_bars: bars,
+                })
+                .collect(),
+            // Phase 4: Complex Stateful + Ensemble
+            Self::ParabolicSar {
+                af_starts,
+                af_steps,
+                af_maxs,
+            } => {
+                let mut configs = Vec::new();
+                for &af_start in af_starts {
+                    for &af_step in af_steps {
+                        for &af_max in af_maxs {
+                            if af_max >= af_start {
+                                configs.push(StrategyConfigId::ParabolicSar {
+                                    af_start,
+                                    af_step,
+                                    af_max,
+                                });
+                            }
+                        }
+                    }
+                }
+                configs
+            }
+            Self::OpeningRangeBreakout {
+                range_bars,
+                periods,
+            } => {
+                let mut configs = Vec::new();
+                for &rb in range_bars {
+                    for period in periods {
+                        configs.push(StrategyConfigId::OpeningRangeBreakout {
+                            range_bars: rb,
+                            period: period.clone(),
+                        });
+                    }
+                }
+                configs
+            }
+            Self::Ensemble {
+                base_strategies,
+                horizon_sets,
+                voting_methods,
+            } => {
+                let mut configs = Vec::new();
+                for &base_strategy in base_strategies {
+                    for horizons in horizon_sets {
+                        for &voting in voting_methods {
+                            configs.push(StrategyConfigId::Ensemble {
+                                base_strategy,
+                                horizons: horizons.clone(),
+                                voting,
+                            });
+                        }
+                    }
+                }
+                configs
+            }
         }
     }
 
@@ -977,6 +1492,501 @@ impl StrategyGridConfig {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Phase 2: Momentum & Direction Strategies
+    // -------------------------------------------------------------------------
+
+    /// Default DMI/ADX grid.
+    pub fn dmi_adx_default() -> Self {
+        Self {
+            strategy_type: StrategyTypeId::DmiAdx,
+            enabled: true,
+            params: StrategyParams::DmiAdx {
+                di_periods: vec![10, 14, 20, 25],
+                adx_periods: vec![10, 14, 20],
+                adx_thresholds: vec![20.0, 25.0, 30.0],
+            },
+        }
+    }
+
+    /// DMI/ADX grid with specified sweep depth.
+    ///
+    /// Parameter ranges based on Wilder's original research:
+    /// - Quick: Classic 14-period with standard threshold
+    /// - Standard: Common variations
+    /// - Comprehensive: Extended exploration
+    pub fn dmi_adx_with_depth(depth: SweepDepth) -> Self {
+        let (di_periods, adx_periods, adx_thresholds) = match depth {
+            SweepDepth::Quick => (vec![14], vec![14], vec![25.0]),
+            SweepDepth::Standard => (
+                vec![10, 14, 20, 25],
+                vec![10, 14, 20],
+                vec![20.0, 25.0, 30.0],
+            ),
+            SweepDepth::Comprehensive => (
+                vec![7, 10, 14, 20, 25, 30],
+                vec![7, 10, 14, 20, 25],
+                vec![15.0, 20.0, 25.0, 30.0, 35.0],
+            ),
+        };
+        Self {
+            strategy_type: StrategyTypeId::DmiAdx,
+            enabled: true,
+            params: StrategyParams::DmiAdx {
+                di_periods,
+                adx_periods,
+                adx_thresholds,
+            },
+        }
+    }
+
+    /// Default Aroon grid.
+    pub fn aroon_default() -> Self {
+        Self {
+            strategy_type: StrategyTypeId::Aroon,
+            enabled: true,
+            params: StrategyParams::Aroon {
+                periods: vec![14, 20, 25, 30, 50],
+            },
+        }
+    }
+
+    /// Aroon grid with specified sweep depth.
+    ///
+    /// Parameter ranges based on common trading timeframes:
+    /// - Quick: Standard 25-period
+    /// - Standard: Common variations
+    /// - Comprehensive: Extended exploration
+    pub fn aroon_with_depth(depth: SweepDepth) -> Self {
+        let periods = match depth {
+            SweepDepth::Quick => vec![25],
+            SweepDepth::Standard => vec![14, 20, 25, 30, 50],
+            SweepDepth::Comprehensive => vec![10, 14, 20, 25, 30, 40, 50, 70],
+        };
+        Self {
+            strategy_type: StrategyTypeId::Aroon,
+            enabled: true,
+            params: StrategyParams::Aroon { periods },
+        }
+    }
+
+    /// Default Bollinger Squeeze grid.
+    pub fn bollinger_squeeze_default() -> Self {
+        Self {
+            strategy_type: StrategyTypeId::BollingerSqueeze,
+            enabled: true,
+            params: StrategyParams::BollingerSqueeze {
+                periods: vec![15, 20, 25],
+                std_mults: vec![1.5, 2.0, 2.5],
+                squeeze_thresholds: vec![0.03, 0.04, 0.05],
+            },
+        }
+    }
+
+    /// Bollinger Squeeze grid with specified sweep depth.
+    ///
+    /// Parameter ranges based on Bollinger's research:
+    /// - Quick: Standard 20-period with 2.0 std dev
+    /// - Standard: Common variations
+    /// - Comprehensive: Extended exploration
+    pub fn bollinger_squeeze_with_depth(depth: SweepDepth) -> Self {
+        let (periods, std_mults, squeeze_thresholds) = match depth {
+            SweepDepth::Quick => (vec![20], vec![2.0], vec![0.04]),
+            SweepDepth::Standard => (
+                vec![15, 20, 25],
+                vec![1.5, 2.0, 2.5],
+                vec![0.03, 0.04, 0.05],
+            ),
+            SweepDepth::Comprehensive => (
+                vec![10, 15, 20, 25, 30],
+                vec![1.5, 2.0, 2.5, 3.0],
+                vec![0.02, 0.03, 0.04, 0.05, 0.06],
+            ),
+        };
+        Self {
+            strategy_type: StrategyTypeId::BollingerSqueeze,
+            enabled: true,
+            params: StrategyParams::BollingerSqueeze {
+                periods,
+                std_mults,
+                squeeze_thresholds,
+            },
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 1: ATR-Based Channel Strategies
+    // -------------------------------------------------------------------------
+
+    /// Default Keltner Channel grid.
+    pub fn keltner_default() -> Self {
+        Self {
+            strategy_type: StrategyTypeId::Keltner,
+            enabled: true,
+            params: StrategyParams::Keltner {
+                ema_periods: vec![10, 20, 30],
+                atr_periods: vec![10, 14, 20],
+                multipliers: vec![1.5, 2.0, 2.5],
+            },
+        }
+    }
+
+    /// Keltner Channel grid with specified sweep depth.
+    pub fn keltner_with_depth(depth: SweepDepth) -> Self {
+        let (ema_periods, atr_periods, multipliers) = match depth {
+            SweepDepth::Quick => (vec![20], vec![10], vec![2.0]),
+            SweepDepth::Standard => (vec![10, 20, 30], vec![10, 14, 20], vec![1.5, 2.0, 2.5]),
+            SweepDepth::Comprehensive => (
+                vec![10, 15, 20, 30, 50],
+                vec![7, 10, 14, 20],
+                vec![1.0, 1.5, 2.0, 2.5, 3.0],
+            ),
+        };
+        Self {
+            strategy_type: StrategyTypeId::Keltner,
+            enabled: true,
+            params: StrategyParams::Keltner {
+                ema_periods,
+                atr_periods,
+                multipliers,
+            },
+        }
+    }
+
+    /// Default STARC Bands grid.
+    pub fn starc_default() -> Self {
+        Self {
+            strategy_type: StrategyTypeId::STARC,
+            enabled: true,
+            params: StrategyParams::STARC {
+                sma_periods: vec![15, 20, 25],
+                atr_periods: vec![10, 15, 20],
+                multipliers: vec![1.5, 2.0, 2.5],
+            },
+        }
+    }
+
+    /// STARC Bands grid with specified sweep depth.
+    pub fn starc_with_depth(depth: SweepDepth) -> Self {
+        let (sma_periods, atr_periods, multipliers) = match depth {
+            SweepDepth::Quick => (vec![20], vec![15], vec![2.0]),
+            SweepDepth::Standard => (vec![15, 20, 25], vec![10, 15, 20], vec![1.5, 2.0, 2.5]),
+            SweepDepth::Comprehensive => (
+                vec![10, 15, 20, 25, 30],
+                vec![7, 10, 15, 20],
+                vec![1.0, 1.5, 2.0, 2.5, 3.0],
+            ),
+        };
+        Self {
+            strategy_type: StrategyTypeId::STARC,
+            enabled: true,
+            params: StrategyParams::STARC {
+                sma_periods,
+                atr_periods,
+                multipliers,
+            },
+        }
+    }
+
+    /// Default Supertrend grid.
+    pub fn supertrend_default() -> Self {
+        Self {
+            strategy_type: StrategyTypeId::Supertrend,
+            enabled: true,
+            params: StrategyParams::Supertrend {
+                atr_periods: vec![7, 10, 14],
+                multipliers: vec![2.0, 3.0, 4.0],
+            },
+        }
+    }
+
+    /// Supertrend grid with specified sweep depth.
+    pub fn supertrend_with_depth(depth: SweepDepth) -> Self {
+        let (atr_periods, multipliers) = match depth {
+            SweepDepth::Quick => (vec![10], vec![3.0]),
+            SweepDepth::Standard => (vec![7, 10, 14], vec![2.0, 3.0, 4.0]),
+            SweepDepth::Comprehensive => (vec![5, 7, 10, 14, 20], vec![1.5, 2.0, 2.5, 3.0, 4.0]),
+        };
+        Self {
+            strategy_type: StrategyTypeId::Supertrend,
+            enabled: true,
+            params: StrategyParams::Supertrend {
+                atr_periods,
+                multipliers,
+            },
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 3: Price Structure Strategies
+    // -------------------------------------------------------------------------
+
+    /// Default 52-Week High grid.
+    pub fn fifty_two_week_high_default() -> Self {
+        Self {
+            strategy_type: StrategyTypeId::FiftyTwoWeekHigh,
+            enabled: true,
+            params: StrategyParams::FiftyTwoWeekHigh {
+                periods: vec![126, 189, 252],
+                entry_pcts: vec![0.95, 0.98, 1.0],
+                exit_pcts: vec![0.85, 0.90],
+            },
+        }
+    }
+
+    /// 52-Week High grid with specified sweep depth.
+    pub fn fifty_two_week_high_with_depth(depth: SweepDepth) -> Self {
+        let (periods, entry_pcts, exit_pcts) = match depth {
+            SweepDepth::Quick => (vec![252], vec![0.95], vec![0.90]),
+            SweepDepth::Standard => (vec![126, 189, 252], vec![0.95, 0.98, 1.0], vec![0.85, 0.90]),
+            SweepDepth::Comprehensive => (
+                vec![63, 126, 189, 252],
+                vec![0.90, 0.95, 0.98, 1.0],
+                vec![0.80, 0.85, 0.90],
+            ),
+        };
+        Self {
+            strategy_type: StrategyTypeId::FiftyTwoWeekHigh,
+            enabled: true,
+            params: StrategyParams::FiftyTwoWeekHigh {
+                periods,
+                entry_pcts,
+                exit_pcts,
+            },
+        }
+    }
+
+    /// Default Darvas Box grid.
+    pub fn darvas_box_default() -> Self {
+        Self {
+            strategy_type: StrategyTypeId::DarvasBox,
+            enabled: true,
+            params: StrategyParams::DarvasBox {
+                box_confirmation_bars: vec![2, 3, 4],
+            },
+        }
+    }
+
+    /// Darvas Box grid with specified sweep depth.
+    pub fn darvas_box_with_depth(depth: SweepDepth) -> Self {
+        let box_confirmation_bars = match depth {
+            SweepDepth::Quick => vec![3],
+            SweepDepth::Standard => vec![2, 3, 4],
+            SweepDepth::Comprehensive => vec![2, 3, 4, 5],
+        };
+        Self {
+            strategy_type: StrategyTypeId::DarvasBox,
+            enabled: true,
+            params: StrategyParams::DarvasBox {
+                box_confirmation_bars,
+            },
+        }
+    }
+
+    /// Default Larry Williams grid.
+    pub fn larry_williams_default() -> Self {
+        Self {
+            strategy_type: StrategyTypeId::LarryWilliams,
+            enabled: true,
+            params: StrategyParams::LarryWilliams {
+                range_multipliers: vec![0.3, 0.5, 0.7],
+                atr_stop_mults: vec![1.5, 2.0, 2.5],
+            },
+        }
+    }
+
+    /// Larry Williams grid with specified sweep depth.
+    pub fn larry_williams_with_depth(depth: SweepDepth) -> Self {
+        let (range_multipliers, atr_stop_mults) = match depth {
+            SweepDepth::Quick => (vec![0.5], vec![2.0]),
+            SweepDepth::Standard => (vec![0.3, 0.5, 0.7], vec![1.5, 2.0, 2.5]),
+            SweepDepth::Comprehensive => {
+                (vec![0.2, 0.3, 0.5, 0.7, 1.0], vec![1.0, 1.5, 2.0, 2.5, 3.0])
+            }
+        };
+        Self {
+            strategy_type: StrategyTypeId::LarryWilliams,
+            enabled: true,
+            params: StrategyParams::LarryWilliams {
+                range_multipliers,
+                atr_stop_mults,
+            },
+        }
+    }
+
+    /// Default Heikin-Ashi grid.
+    pub fn heikin_ashi_default() -> Self {
+        Self {
+            strategy_type: StrategyTypeId::HeikinAshi,
+            enabled: true,
+            params: StrategyParams::HeikinAshi {
+                confirmation_bars: vec![1, 2, 3],
+            },
+        }
+    }
+
+    /// Heikin-Ashi grid with specified sweep depth.
+    pub fn heikin_ashi_with_depth(depth: SweepDepth) -> Self {
+        let confirmation_bars = match depth {
+            SweepDepth::Quick => vec![1],
+            SweepDepth::Standard => vec![1, 2, 3],
+            SweepDepth::Comprehensive => vec![1, 2, 3, 4],
+        };
+        Self {
+            strategy_type: StrategyTypeId::HeikinAshi,
+            enabled: true,
+            params: StrategyParams::HeikinAshi { confirmation_bars },
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 4: Complex Stateful + Ensemble Strategies
+    // -------------------------------------------------------------------------
+
+    /// Default Parabolic SAR grid.
+    pub fn parabolic_sar_default() -> Self {
+        Self {
+            strategy_type: StrategyTypeId::ParabolicSar,
+            enabled: true,
+            params: StrategyParams::ParabolicSar {
+                af_starts: vec![0.01, 0.02, 0.03],
+                af_steps: vec![0.02],
+                af_maxs: vec![0.15, 0.20, 0.25],
+            },
+        }
+    }
+
+    /// Parabolic SAR grid with specified sweep depth.
+    ///
+    /// Parameter ranges based on Wilder's original research:
+    /// - Quick: Standard 0.02/0.02/0.20 only (1 config)
+    /// - Standard: Common variations (~9 configs)
+    /// - Comprehensive: Finer exploration (~27 configs)
+    pub fn parabolic_sar_with_depth(depth: SweepDepth) -> Self {
+        let (af_starts, af_steps, af_maxs) = match depth {
+            SweepDepth::Quick => (vec![0.02], vec![0.02], vec![0.20]),
+            SweepDepth::Standard => (vec![0.01, 0.02, 0.03], vec![0.02], vec![0.15, 0.20, 0.25]),
+            SweepDepth::Comprehensive => (
+                vec![0.01, 0.015, 0.02, 0.025, 0.03],
+                vec![0.01, 0.02, 0.03],
+                vec![0.10, 0.15, 0.20, 0.25, 0.30],
+            ),
+        };
+        Self {
+            strategy_type: StrategyTypeId::ParabolicSar,
+            enabled: true,
+            params: StrategyParams::ParabolicSar {
+                af_starts,
+                af_steps,
+                af_maxs,
+            },
+        }
+    }
+
+    /// Default Opening Range Breakout grid.
+    pub fn orb_default() -> Self {
+        Self {
+            strategy_type: StrategyTypeId::OpeningRangeBreakout,
+            enabled: true,
+            params: StrategyParams::OpeningRangeBreakout {
+                range_bars: vec![3, 5, 10],
+                periods: vec![
+                    OpeningPeriod::Weekly,
+                    OpeningPeriod::Monthly,
+                    OpeningPeriod::Rolling,
+                ],
+            },
+        }
+    }
+
+    /// Opening Range Breakout grid with specified sweep depth.
+    ///
+    /// Parameter ranges:
+    /// - Quick: 5 bars, Weekly only (1 config)
+    /// - Standard: 3/5/10 bars with Weekly + Rolling (6 configs)
+    /// - Comprehensive: Extended bar counts with all periods (12 configs)
+    pub fn orb_with_depth(depth: SweepDepth) -> Self {
+        let (range_bars, periods) = match depth {
+            SweepDepth::Quick => (vec![5], vec![OpeningPeriod::Weekly]),
+            SweepDepth::Standard => (
+                vec![3, 5, 10],
+                vec![OpeningPeriod::Weekly, OpeningPeriod::Rolling],
+            ),
+            SweepDepth::Comprehensive => (
+                vec![3, 5, 7, 10],
+                vec![
+                    OpeningPeriod::Weekly,
+                    OpeningPeriod::Monthly,
+                    OpeningPeriod::Rolling,
+                ],
+            ),
+        };
+        Self {
+            strategy_type: StrategyTypeId::OpeningRangeBreakout,
+            enabled: true,
+            params: StrategyParams::OpeningRangeBreakout {
+                range_bars,
+                periods,
+            },
+        }
+    }
+
+    /// Default Ensemble grid (presets only).
+    pub fn ensemble_default() -> Self {
+        Self {
+            strategy_type: StrategyTypeId::Ensemble,
+            enabled: true,
+            params: StrategyParams::Ensemble {
+                base_strategies: vec![StrategyTypeId::Donchian, StrategyTypeId::MACrossover],
+                horizon_sets: vec![vec![20, 50, 100], vec![10, 21, 63]],
+                voting_methods: vec![VotingMethod::Majority, VotingMethod::WeightedByHorizon],
+            },
+        }
+    }
+
+    /// Ensemble grid with specified sweep depth.
+    ///
+    /// Parameter ranges:
+    /// - Quick: Donchian triple only (1 config)
+    /// - Standard: Donchian + MA with 2 voting methods (4 configs)
+    /// - Comprehensive: Multiple base strategies and horizon sets (12 configs)
+    pub fn ensemble_with_depth(depth: SweepDepth) -> Self {
+        let (base_strategies, horizon_sets, voting_methods) = match depth {
+            SweepDepth::Quick => (
+                vec![StrategyTypeId::Donchian],
+                vec![vec![20, 50, 100]],
+                vec![VotingMethod::Majority],
+            ),
+            SweepDepth::Standard => (
+                vec![StrategyTypeId::Donchian, StrategyTypeId::MACrossover],
+                vec![vec![20, 50, 100], vec![10, 21, 63]],
+                vec![VotingMethod::Majority, VotingMethod::WeightedByHorizon],
+            ),
+            SweepDepth::Comprehensive => (
+                vec![
+                    StrategyTypeId::Donchian,
+                    StrategyTypeId::MACrossover,
+                    StrategyTypeId::Tsmom,
+                ],
+                vec![vec![20, 50, 100], vec![10, 21, 63], vec![21, 63, 252]],
+                vec![
+                    VotingMethod::Majority,
+                    VotingMethod::WeightedByHorizon,
+                    VotingMethod::UnanimousEntry,
+                ],
+            ),
+        };
+        Self {
+            strategy_type: StrategyTypeId::Ensemble,
+            enabled: true,
+            params: StrategyParams::Ensemble {
+                base_strategies,
+                horizon_sets,
+                voting_methods,
+            },
+        }
+    }
+
     /// Generate all configs for this strategy.
     pub fn generate_configs(&self) -> Vec<StrategyConfigId> {
         if !self.enabled {
@@ -1011,6 +2021,14 @@ impl MultiStrategyGrid {
                 StrategyGridConfig::turtle_s2(),
                 StrategyGridConfig::ma_crossover_default(),
                 StrategyGridConfig::tsmom_default(),
+                // Phase 2
+                StrategyGridConfig::dmi_adx_default(),
+                StrategyGridConfig::aroon_default(),
+                StrategyGridConfig::bollinger_squeeze_default(),
+                // Phase 4
+                StrategyGridConfig::parabolic_sar_default(),
+                StrategyGridConfig::orb_default(),
+                StrategyGridConfig::ensemble_default(),
             ],
         }
     }
@@ -1023,6 +2041,22 @@ impl MultiStrategyGrid {
             StrategyTypeId::TurtleS2 => StrategyGridConfig::turtle_s2(),
             StrategyTypeId::MACrossover => StrategyGridConfig::ma_crossover_default(),
             StrategyTypeId::Tsmom => StrategyGridConfig::tsmom_default(),
+            StrategyTypeId::DmiAdx => StrategyGridConfig::dmi_adx_default(),
+            StrategyTypeId::Aroon => StrategyGridConfig::aroon_default(),
+            StrategyTypeId::BollingerSqueeze => StrategyGridConfig::bollinger_squeeze_default(),
+            // Phase 1: ATR-Based Channels
+            StrategyTypeId::Keltner => StrategyGridConfig::keltner_default(),
+            StrategyTypeId::STARC => StrategyGridConfig::starc_default(),
+            StrategyTypeId::Supertrend => StrategyGridConfig::supertrend_default(),
+            // Phase 3: Price Structure
+            StrategyTypeId::FiftyTwoWeekHigh => StrategyGridConfig::fifty_two_week_high_default(),
+            StrategyTypeId::DarvasBox => StrategyGridConfig::darvas_box_default(),
+            StrategyTypeId::LarryWilliams => StrategyGridConfig::larry_williams_default(),
+            StrategyTypeId::HeikinAshi => StrategyGridConfig::heikin_ashi_default(),
+            // Phase 4
+            StrategyTypeId::ParabolicSar => StrategyGridConfig::parabolic_sar_default(),
+            StrategyTypeId::OpeningRangeBreakout => StrategyGridConfig::orb_default(),
+            StrategyTypeId::Ensemble => StrategyGridConfig::ensemble_default(),
         };
         Self {
             strategies: vec![config],
@@ -1036,11 +2070,29 @@ impl MultiStrategyGrid {
     pub fn with_depth(depth: SweepDepth) -> Self {
         Self {
             strategies: vec![
+                // Original strategies
                 StrategyGridConfig::donchian_with_depth(depth),
                 StrategyGridConfig::turtle_s1(), // Fixed params, no depth
                 StrategyGridConfig::turtle_s2(), // Fixed params, no depth
                 StrategyGridConfig::ma_crossover_with_depth(depth),
                 StrategyGridConfig::tsmom_with_depth(depth),
+                // Phase 1: ATR-Based Channels
+                StrategyGridConfig::keltner_with_depth(depth),
+                StrategyGridConfig::starc_with_depth(depth),
+                StrategyGridConfig::supertrend_with_depth(depth),
+                // Phase 2: Momentum/Direction
+                StrategyGridConfig::dmi_adx_with_depth(depth),
+                StrategyGridConfig::aroon_with_depth(depth),
+                StrategyGridConfig::bollinger_squeeze_with_depth(depth),
+                // Phase 3: Price Structure
+                StrategyGridConfig::fifty_two_week_high_with_depth(depth),
+                StrategyGridConfig::darvas_box_with_depth(depth),
+                StrategyGridConfig::larry_williams_with_depth(depth),
+                StrategyGridConfig::heikin_ashi_with_depth(depth),
+                // Phase 4: Complex Stateful
+                StrategyGridConfig::parabolic_sar_with_depth(depth),
+                StrategyGridConfig::orb_with_depth(depth),
+                StrategyGridConfig::ensemble_with_depth(depth),
             ],
         }
     }
@@ -1053,6 +2105,26 @@ impl MultiStrategyGrid {
             StrategyTypeId::TurtleS2 => StrategyGridConfig::turtle_s2(),
             StrategyTypeId::MACrossover => StrategyGridConfig::ma_crossover_with_depth(depth),
             StrategyTypeId::Tsmom => StrategyGridConfig::tsmom_with_depth(depth),
+            StrategyTypeId::DmiAdx => StrategyGridConfig::dmi_adx_with_depth(depth),
+            StrategyTypeId::Aroon => StrategyGridConfig::aroon_with_depth(depth),
+            StrategyTypeId::BollingerSqueeze => {
+                StrategyGridConfig::bollinger_squeeze_with_depth(depth)
+            }
+            // Phase 1: ATR-Based Channels
+            StrategyTypeId::Keltner => StrategyGridConfig::keltner_with_depth(depth),
+            StrategyTypeId::STARC => StrategyGridConfig::starc_with_depth(depth),
+            StrategyTypeId::Supertrend => StrategyGridConfig::supertrend_with_depth(depth),
+            // Phase 3: Price Structure
+            StrategyTypeId::FiftyTwoWeekHigh => {
+                StrategyGridConfig::fifty_two_week_high_with_depth(depth)
+            }
+            StrategyTypeId::DarvasBox => StrategyGridConfig::darvas_box_with_depth(depth),
+            StrategyTypeId::LarryWilliams => StrategyGridConfig::larry_williams_with_depth(depth),
+            StrategyTypeId::HeikinAshi => StrategyGridConfig::heikin_ashi_with_depth(depth),
+            // Phase 4: Complex Stateful
+            StrategyTypeId::ParabolicSar => StrategyGridConfig::parabolic_sar_with_depth(depth),
+            StrategyTypeId::OpeningRangeBreakout => StrategyGridConfig::orb_with_depth(depth),
+            StrategyTypeId::Ensemble => StrategyGridConfig::ensemble_with_depth(depth),
         };
         Self {
             strategies: vec![config],
@@ -1163,8 +2235,7 @@ impl MultiStrategySweepResult {
                     // Track best among configs that actually trade
                     if config_result.metrics.num_trades > 0 {
                         if best_trading.is_none()
-                            || config_result.metrics.sharpe
-                                > best_trading.unwrap().1.metrics.sharpe
+                            || config_result.metrics.sharpe > best_trading.unwrap().1.metrics.sharpe
                         {
                             best_trading = Some((strategy_type, config_result));
                         }
@@ -1337,6 +2408,69 @@ fn config_id_to_strategy_config_id(
         StrategyTypeId::Tsmom => StrategyConfigId::Tsmom {
             lookback: config_id.entry_lookback,
         },
+        // Phase 2: Momentum & Direction
+        // Note: These use legacy ConfigId layout where entry_lookback=di_period/period,
+        // exit_lookback=adx_period/0. Thresholds use defaults.
+        StrategyTypeId::DmiAdx => StrategyConfigId::DmiAdx {
+            di_period: config_id.entry_lookback,
+            adx_period: config_id.exit_lookback,
+            adx_threshold: 25.0, // Default
+        },
+        StrategyTypeId::Aroon => StrategyConfigId::Aroon {
+            period: config_id.entry_lookback,
+        },
+        StrategyTypeId::BollingerSqueeze => StrategyConfigId::BollingerSqueeze {
+            period: config_id.entry_lookback,
+            std_mult: 2.0,           // Default
+            squeeze_threshold: 0.04, // Default
+        },
+        // Phase 4: Complex Stateful + Ensemble
+        StrategyTypeId::ParabolicSar => StrategyConfigId::ParabolicSar {
+            af_start: (config_id.entry_lookback as f64) / 100.0,
+            af_step: 0.02, // Default
+            af_max: 0.20,  // Default
+        },
+        StrategyTypeId::OpeningRangeBreakout => StrategyConfigId::OpeningRangeBreakout {
+            range_bars: config_id.entry_lookback,
+            period: OpeningPeriod::Weekly, // Default
+        },
+        StrategyTypeId::Ensemble => StrategyConfigId::Ensemble {
+            base_strategy: StrategyTypeId::Donchian,
+            horizons: vec![20, 50, 100], // Default
+            voting: VotingMethod::Majority,
+        },
+        // Phase 1: ATR-Based Channels
+        // Note: Legacy ConfigId layout maps entry_lookback=ema/sma period, exit_lookback=atr period
+        StrategyTypeId::Keltner => StrategyConfigId::Keltner {
+            ema_period: config_id.entry_lookback,
+            atr_period: config_id.exit_lookback,
+            multiplier: 2.0, // Default
+        },
+        StrategyTypeId::STARC => StrategyConfigId::STARC {
+            sma_period: config_id.entry_lookback,
+            atr_period: config_id.exit_lookback,
+            multiplier: 2.0, // Default
+        },
+        StrategyTypeId::Supertrend => StrategyConfigId::Supertrend {
+            atr_period: config_id.entry_lookback,
+            multiplier: 3.0, // Default
+        },
+        // Phase 3: Price Structure
+        StrategyTypeId::FiftyTwoWeekHigh => StrategyConfigId::FiftyTwoWeekHigh {
+            period: config_id.entry_lookback,
+            entry_pct: 0.95, // Default
+            exit_pct: 0.90,  // Default
+        },
+        StrategyTypeId::DarvasBox => StrategyConfigId::DarvasBox {
+            box_confirmation_bars: config_id.entry_lookback.max(1),
+        },
+        StrategyTypeId::LarryWilliams => StrategyConfigId::LarryWilliams {
+            range_multiplier: 0.5, // Default
+            atr_stop_mult: 2.0,    // Default
+        },
+        StrategyTypeId::HeikinAshi => StrategyConfigId::HeikinAshi {
+            confirmation_bars: config_id.entry_lookback.max(1),
+        },
     }
 }
 
@@ -1358,6 +2492,85 @@ pub fn create_strategy_from_config(config: &StrategyConfigId) -> Box<dyn Strateg
             ma_type,
         } => Box::new(MACrossoverStrategy::new(*fast, *slow, *ma_type)),
         StrategyConfigId::Tsmom { lookback } => Box::new(TsmomStrategy::new(*lookback)),
+        // Phase 2: Momentum & Direction
+        StrategyConfigId::DmiAdx {
+            di_period,
+            adx_period,
+            adx_threshold,
+        } => Box::new(DmiAdxStrategy::new(*di_period, *adx_period, *adx_threshold)),
+        StrategyConfigId::Aroon { period } => Box::new(AroonCrossStrategy::new(*period)),
+        StrategyConfigId::BollingerSqueeze {
+            period,
+            std_mult,
+            squeeze_threshold,
+        } => Box::new(BollingerSqueezeStrategy::new(
+            *period,
+            *std_mult,
+            *squeeze_threshold,
+        )),
+        // Phase 3: Price Structure - implemented strategies
+        StrategyConfigId::FiftyTwoWeekHigh {
+            period,
+            entry_pct,
+            exit_pct,
+        } => Box::new(FiftyTwoWeekHighStrategy::new(
+            *period, *entry_pct, *exit_pct,
+        )),
+        StrategyConfigId::DarvasBox {
+            box_confirmation_bars,
+        } => Box::new(DarvasBoxStrategy::new(*box_confirmation_bars)),
+        StrategyConfigId::LarryWilliams {
+            range_multiplier,
+            atr_stop_mult,
+        } => Box::new(LarryWilliamsStrategy::new(
+            *range_multiplier,
+            *atr_stop_mult,
+            10,
+        )),
+        StrategyConfigId::HeikinAshi { confirmation_bars } => {
+            Box::new(HeikinAshiRegimeStrategy::new(*confirmation_bars))
+        }
+        // Phase 4: Complex Stateful + Ensemble
+        StrategyConfigId::ParabolicSar {
+            af_start,
+            af_step,
+            af_max,
+        } => Box::new(ParabolicSARStrategy::new(*af_start, *af_step, *af_max)),
+        StrategyConfigId::OpeningRangeBreakout { range_bars, period } => Box::new(
+            OpeningRangeBreakoutStrategy::new(*range_bars, period.clone()),
+        ),
+        StrategyConfigId::Ensemble {
+            base_strategy,
+            horizons,
+            voting,
+        } => Box::new(EnsembleStrategy::from_base_strategy(
+            *base_strategy,
+            horizons.clone(),
+            *voting,
+        )),
+        // Phase 1: ATR-Based Channels
+        StrategyConfigId::Keltner {
+            ema_period,
+            atr_period,
+            multiplier,
+        } => Box::new(KeltnerBreakoutStrategy::new(
+            *ema_period,
+            *atr_period,
+            *multiplier,
+        )),
+        StrategyConfigId::STARC {
+            sma_period,
+            atr_period,
+            multiplier,
+        } => Box::new(STARCBreakoutStrategy::new(
+            *sma_period,
+            *atr_period,
+            *multiplier,
+        )),
+        StrategyConfigId::Supertrend {
+            atr_period,
+            multiplier,
+        } => Box::new(SupertrendStrategy::new(*atr_period, *multiplier)),
     }
 }
 

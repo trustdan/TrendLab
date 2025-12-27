@@ -1,15 +1,20 @@
 //! Polars-native backtest kernel.
 //!
 //! Provides a fully vectorized backtest implementation using Polars LazyFrames.
-//! The key challenge is the position state machine (Flat→Long→Flat) which
+//! The key challenge is the position state machine (Short↔Flat↔Long) which
 //! requires sequential logic. We solve this using a stateful scan.
 //!
 //! Assumptions (same as sequential backtest):
 //! - Signals are computed on bar close
 //! - Fills occur on the next bar open
-//! - Long-only (flat or long)
+//! - Supports Long-only, Short-only, or Long/Short trading modes
+//!
+//! Position States:
+//! - -1 = Short (negative position)
+//! -  0 = Flat (no position)
+//! -  1 = Long (positive position)
 
-use crate::backtest::{BacktestResult, CostModel, EquityPoint, Fill, Side, Trade};
+use crate::backtest::{BacktestResult, CostModel, EquityPoint, Fill, Side, Trade, TradeDirection};
 use crate::error::{Result, TrendLabError};
 use crate::indicators_polars::donchian_channel_exprs;
 use crate::strategy_v2::StrategyV2;
@@ -26,6 +31,8 @@ pub struct PolarsBacktestConfig {
     pub qty: f64,
     /// Cost model (fees and slippage)
     pub cost_model: CostModel,
+    /// Trading mode (LongOnly, ShortOnly, or LongShort)
+    pub trading_mode: crate::strategy::TradingMode,
 }
 
 impl Default for PolarsBacktestConfig {
@@ -34,6 +41,7 @@ impl Default for PolarsBacktestConfig {
             initial_cash: 100_000.0,
             qty: 1.0,
             cost_model: CostModel::default(),
+            trading_mode: crate::strategy::TradingMode::LongOnly,
         }
     }
 }
@@ -44,11 +52,17 @@ impl PolarsBacktestConfig {
             initial_cash,
             qty,
             cost_model: CostModel::default(),
+            trading_mode: crate::strategy::TradingMode::LongOnly,
         }
     }
 
     pub fn with_cost_model(mut self, cost_model: CostModel) -> Self {
         self.cost_model = cost_model;
+        self
+    }
+
+    pub fn with_trading_mode(mut self, trading_mode: crate::strategy::TradingMode) -> Self {
+        self.trading_mode = trading_mode;
         self
     }
 }
@@ -110,6 +124,7 @@ impl DonchianBacktestConfig {
             initial_cash: self.initial_cash,
             qty: self.qty,
             cost_model: self.cost_model,
+            trading_mode: crate::strategy::TradingMode::LongOnly,
         }
     }
 }
@@ -206,7 +221,7 @@ impl PolarsBacktestResult {
     }
 
     fn extract_fills_and_trades(&self) -> Result<(Vec<Fill>, Vec<Trade>)> {
-        // Get signal columns
+        // Get signal columns for long trades
         let entry_fill_col = self
             .df
             .column("entry_fill")
@@ -219,6 +234,19 @@ impl PolarsBacktestResult {
             .map_err(TrendLabError::Polars)?
             .bool()
             .map_err(TrendLabError::Polars)?;
+
+        // Get signal columns for short trades (optional, default to false)
+        let entry_short_fill_col = self
+            .df
+            .column("entry_short_fill")
+            .ok()
+            .and_then(|c| c.bool().ok());
+        let exit_short_fill_col = self
+            .df
+            .column("exit_short_fill")
+            .ok()
+            .and_then(|c| c.bool().ok());
+
         let ts_col = self
             .df
             .column("ts")
@@ -252,14 +280,23 @@ impl PolarsBacktestResult {
 
         let mut fills = Vec::new();
         let mut trades = Vec::new();
-        let mut current_entry: Option<Fill> = None;
+        let mut current_long_entry: Option<Fill> = None;
+        let mut current_short_entry: Option<Fill> = None;
 
         let n = self.df.height();
         for i in 0..n {
-            let is_entry = entry_fill_col.get(i).unwrap_or(false);
-            let is_exit = exit_fill_col.get(i).unwrap_or(false);
+            let is_long_entry = entry_fill_col.get(i).unwrap_or(false);
+            let is_long_exit = exit_fill_col.get(i).unwrap_or(false);
+            let is_short_entry = entry_short_fill_col
+                .as_ref()
+                .and_then(|c| c.get(i))
+                .unwrap_or(false);
+            let is_short_exit = exit_short_fill_col
+                .as_ref()
+                .and_then(|c| c.get(i))
+                .unwrap_or(false);
 
-            if is_entry || is_exit {
+            if is_long_entry || is_long_exit || is_short_entry || is_short_exit {
                 let ts_ms = ts_col.get(i).unwrap_or(0);
                 let ts = Utc
                     .timestamp_millis_opt(ts_ms)
@@ -270,9 +307,16 @@ impl PolarsBacktestResult {
                 let fees = fill_fees_col.get(i).unwrap_or(0.0);
                 let qty = fill_qty_col.get(i).unwrap_or(0.0);
 
+                // Determine side based on fill type
+                let side = if is_long_entry || is_short_exit {
+                    Side::Buy // Buy to open long, or buy to cover short
+                } else {
+                    Side::Sell // Sell to close long, or sell to open short
+                };
+
                 let fill = Fill {
                     ts,
-                    side: if is_entry { Side::Buy } else { Side::Sell },
+                    side,
                     qty,
                     price,
                     fees,
@@ -282,17 +326,37 @@ impl PolarsBacktestResult {
 
                 fills.push(fill.clone());
 
-                if is_entry {
-                    current_entry = Some(fill);
-                } else if is_exit {
-                    if let Some(entry) = current_entry.take() {
+                // Handle long trades
+                if is_long_entry {
+                    current_long_entry = Some(fill.clone());
+                } else if is_long_exit {
+                    if let Some(entry) = current_long_entry.take() {
                         let gross_pnl = (fill.price - entry.price) * entry.qty;
+                        let net_pnl = gross_pnl - entry.fees - fill.fees;
+                        trades.push(Trade {
+                            entry,
+                            exit: fill.clone(),
+                            gross_pnl,
+                            net_pnl,
+                            direction: TradeDirection::Long,
+                        });
+                    }
+                }
+
+                // Handle short trades
+                if is_short_entry {
+                    current_short_entry = Some(fill.clone());
+                } else if is_short_exit {
+                    if let Some(entry) = current_short_entry.take() {
+                        // Short PnL: profit when exit price < entry price
+                        let gross_pnl = (entry.price - fill.price) * entry.qty;
                         let net_pnl = gross_pnl - entry.fees - fill.fees;
                         trades.push(Trade {
                             entry,
                             exit: fill,
                             gross_pnl,
                             net_pnl,
+                            direction: TradeDirection::Short,
                         });
                     }
                 }
@@ -371,13 +435,23 @@ pub fn run_donchian_backtest_polars(
         .unwrap_or(config.initial_cash);
     let total_return = (final_equity - config.initial_cash) / config.initial_cash;
 
-    // Count trades
+    // Count trades (both long and short)
     let exit_fill_col = df
         .column("exit_fill")
         .map_err(TrendLabError::Polars)?
         .bool()
         .map_err(TrendLabError::Polars)?;
-    let num_trades = exit_fill_col.sum().unwrap_or(0) as usize;
+    let long_trades = exit_fill_col.sum().unwrap_or(0) as usize;
+
+    // Count short trades if column exists
+    let short_trades = df
+        .column("exit_short_fill")
+        .ok()
+        .and_then(|c| c.bool().ok())
+        .map(|c| c.sum().unwrap_or(0) as usize)
+        .unwrap_or(0);
+
+    let num_trades = long_trades + short_trades;
 
     Ok(PolarsBacktestResult {
         df,
@@ -408,11 +482,8 @@ pub fn run_backtest_polars<S: StrategyV2 + ?Sized>(
         return Err(TrendLabError::Config("qty must be > 0".into()));
     }
 
-    // 1. Add indicator columns via strategy
-    let lf = strategy.add_indicators_to_lf(lf);
-
-    // 2. Add signal columns via strategy (raw_entry, raw_exit)
-    let lf = strategy.add_signals_to_lf(lf);
+    // Add all strategy columns: indicators + long signals + short signals (based on trading mode)
+    let lf = strategy.add_strategy_columns(lf);
 
     // Collect to DataFrame for stateful processing
     let df = lf.collect().map_err(TrendLabError::Polars)?;
@@ -441,13 +512,23 @@ pub fn run_backtest_polars<S: StrategyV2 + ?Sized>(
         .unwrap_or(config.initial_cash);
     let total_return = (final_equity - config.initial_cash) / config.initial_cash;
 
-    // Count trades
+    // Count trades (both long and short)
     let exit_fill_col = df
         .column("exit_fill")
         .map_err(TrendLabError::Polars)?
         .bool()
         .map_err(TrendLabError::Polars)?;
-    let num_trades = exit_fill_col.sum().unwrap_or(0) as usize;
+    let long_trades = exit_fill_col.sum().unwrap_or(0) as usize;
+
+    // Count short trades if column exists
+    let short_trades = df
+        .column("exit_short_fill")
+        .ok()
+        .and_then(|c| c.bool().ok())
+        .map(|c| c.sum().unwrap_or(0) as usize)
+        .unwrap_or(0);
+
+    let num_trades = long_trades + short_trades;
 
     Ok(PolarsBacktestResult {
         df,
@@ -460,7 +541,13 @@ pub fn run_backtest_polars<S: StrategyV2 + ?Sized>(
 /// Apply position state machine to compute valid signals, fills, and equity.
 ///
 /// This is inherently sequential but we process it efficiently in a single pass.
-/// Expects DataFrame to have `raw_entry` and `raw_exit` boolean columns.
+/// Expects DataFrame to have `raw_entry` and `raw_exit` boolean columns for long signals.
+/// Optionally supports `raw_entry_short` and `raw_exit_short` for short signals.
+///
+/// Position states:
+/// - -1 = Short (negative position)
+/// -  0 = Flat (no position)
+/// -  1 = Long (positive position)
 fn apply_position_state_machine(
     mut df: DataFrame,
     config: &PolarsBacktestConfig,
@@ -478,6 +565,14 @@ fn apply_position_state_machine(
         .map_err(TrendLabError::Polars)?
         .bool()
         .map_err(TrendLabError::Polars)?;
+
+    // Optional short signal columns (default to false if not present)
+    let raw_entry_short = df
+        .column("raw_entry_short")
+        .ok()
+        .and_then(|c| c.bool().ok());
+    let raw_exit_short = df.column("raw_exit_short").ok().and_then(|c| c.bool().ok());
+
     let open_col = df
         .column("open")
         .map_err(TrendLabError::Polars)?
@@ -489,10 +584,12 @@ fn apply_position_state_machine(
         .f64()
         .map_err(TrendLabError::Polars)?;
 
-    // Output arrays
-    let mut position_state: Vec<i32> = Vec::with_capacity(n); // 0=Flat, 1=Long
-    let mut entry_fill: Vec<bool> = Vec::with_capacity(n);
-    let mut exit_fill: Vec<bool> = Vec::with_capacity(n);
+    // Output arrays - position_state: -1=Short, 0=Flat, 1=Long
+    let mut position_state: Vec<i32> = Vec::with_capacity(n);
+    let mut entry_fill: Vec<bool> = Vec::with_capacity(n); // Long entry
+    let mut exit_fill: Vec<bool> = Vec::with_capacity(n); // Long exit
+    let mut entry_short_fill: Vec<bool> = Vec::with_capacity(n); // Short entry
+    let mut exit_short_fill: Vec<bool> = Vec::with_capacity(n); // Short exit (cover)
     let mut fill_price: Vec<f64> = Vec::with_capacity(n);
     let mut fill_fees: Vec<f64> = Vec::with_capacity(n);
     let mut fill_qty: Vec<f64> = Vec::with_capacity(n);
@@ -502,12 +599,14 @@ fn apply_position_state_machine(
 
     // State variables
     let mut current_cash = config.initial_cash;
-    let mut current_position_qty = 0.0;
-    let mut current_state = 0_i32; // 0=Flat
+    let mut current_position_qty = 0.0; // Positive for long, negative for short
+    let mut current_state = 0_i32; // -1=Short, 0=Flat, 1=Long
 
-    // Pending signal from previous bar
-    let mut pending_entry = false;
-    let mut pending_exit = false;
+    // Pending signals from previous bar
+    let mut pending_entry_long = false;
+    let mut pending_exit_long = false;
+    let mut pending_entry_short = false;
+    let mut pending_exit_short = false;
 
     let fee_rate = config.cost_model.fees_bps_per_side / 10_000.0;
     let slippage_rate = config.cost_model.slippage_bps / 10_000.0;
@@ -518,14 +617,16 @@ fn apply_position_state_machine(
 
         let mut is_entry_fill = false;
         let mut is_exit_fill = false;
+        let mut is_entry_short_fill = false;
+        let mut is_exit_short_fill = false;
         let mut bar_fill_price = 0.0;
         let mut bar_fill_fees = 0.0;
         let mut bar_fill_qty = 0.0;
 
         // Execute pending signals on this bar's open
         if i > 0 {
-            if pending_entry && current_state == 0 {
-                // Execute entry
+            if pending_entry_long && current_state == 0 {
+                // Execute long entry (buy to open)
                 let price = open * (1.0 + slippage_rate); // Slippage makes price worse for buyer
                 let fees = price * config.qty * fee_rate;
 
@@ -538,8 +639,8 @@ fn apply_position_state_machine(
                 bar_fill_price = price;
                 bar_fill_fees = fees;
                 bar_fill_qty = config.qty;
-            } else if pending_exit && current_state == 1 {
-                // Execute exit
+            } else if pending_exit_long && current_state == 1 {
+                // Execute long exit (sell to close)
                 let price = open * (1.0 - slippage_rate); // Slippage makes price worse for seller
                 let fees = price * current_position_qty * fee_rate;
 
@@ -552,32 +653,117 @@ fn apply_position_state_machine(
                 bar_fill_price = price;
                 bar_fill_fees = fees;
                 bar_fill_qty = config.qty;
+            } else if pending_entry_short && current_state == 0 {
+                // Execute short entry (sell to open)
+                // When shorting: receive cash from sale, but need to eventually buy back
+                let price = open * (1.0 - slippage_rate); // Slippage makes price worse for seller
+                let fees = price * config.qty * fee_rate;
+
+                current_cash += price * config.qty; // Receive cash from short sale
+                current_cash -= fees;
+                current_position_qty = -config.qty; // Negative position
+                current_state = -1;
+
+                is_entry_short_fill = true;
+                bar_fill_price = price;
+                bar_fill_fees = fees;
+                bar_fill_qty = config.qty;
+            } else if pending_exit_short && current_state == -1 {
+                // Execute short exit (buy to cover)
+                let price = open * (1.0 + slippage_rate); // Slippage makes price worse for buyer
+                let qty_to_cover = current_position_qty.abs();
+                let fees = price * qty_to_cover * fee_rate;
+
+                current_cash -= price * qty_to_cover; // Pay to buy back shares
+                current_cash -= fees;
+                current_position_qty = 0.0;
+                current_state = 0;
+
+                is_exit_short_fill = true;
+                bar_fill_price = price;
+                bar_fill_fees = fees;
+                bar_fill_qty = qty_to_cover;
             }
         }
 
-        pending_entry = false;
-        pending_exit = false;
+        // Reset pending signals
+        pending_entry_long = false;
+        pending_exit_long = false;
+        pending_entry_short = false;
+        pending_exit_short = false;
 
         // Record state after fills
         position_state.push(current_state);
         entry_fill.push(is_entry_fill);
         exit_fill.push(is_exit_fill);
+        entry_short_fill.push(is_entry_short_fill);
+        exit_short_fill.push(is_exit_short_fill);
         fill_price.push(bar_fill_price);
         fill_fees.push(bar_fill_fees);
         fill_qty.push(bar_fill_qty);
         cash.push(current_cash);
         position_qty.push(current_position_qty);
+
+        // Equity calculation handles both long and short positions
+        // For long: cash + qty * close
+        // For short: cash + qty * close (qty is negative, so this reduces equity when price rises)
         equity.push(current_cash + current_position_qty * close);
 
         // Generate signals for next bar (only if we have indicator values)
-        let has_entry_signal = raw_entry.get(i).unwrap_or(false);
-        let has_exit_signal = raw_exit.get(i).unwrap_or(false);
+        // Read raw signals
+        let raw_entry_long = raw_entry.get(i).unwrap_or(false);
+        let raw_exit_long = raw_exit.get(i).unwrap_or(false);
+        let raw_entry_short_signal = raw_entry_short
+            .as_ref()
+            .and_then(|c| c.get(i))
+            .unwrap_or(false);
+        let raw_exit_short_signal = raw_exit_short
+            .as_ref()
+            .and_then(|c| c.get(i))
+            .unwrap_or(false);
 
-        // Only generate entry signal if flat, exit if long
-        if current_state == 0 && has_entry_signal {
-            pending_entry = true;
-        } else if current_state == 1 && has_exit_signal {
-            pending_exit = true;
+        // Filter signals based on trading mode
+        use crate::strategy::TradingMode;
+        let has_entry_long = match config.trading_mode {
+            TradingMode::LongOnly | TradingMode::LongShort => raw_entry_long,
+            TradingMode::ShortOnly => false,
+        };
+        let has_exit_long = match config.trading_mode {
+            TradingMode::LongOnly | TradingMode::LongShort => raw_exit_long,
+            TradingMode::ShortOnly => false,
+        };
+        let has_entry_short = match config.trading_mode {
+            TradingMode::ShortOnly | TradingMode::LongShort => raw_entry_short_signal,
+            TradingMode::LongOnly => false,
+        };
+        let has_exit_short = match config.trading_mode {
+            TradingMode::ShortOnly | TradingMode::LongShort => raw_exit_short_signal,
+            TradingMode::LongOnly => false,
+        };
+
+        // Generate pending signals based on current state
+        match current_state {
+            0 => {
+                // Flat: can enter long or short (based on trading mode)
+                if has_entry_long {
+                    pending_entry_long = true;
+                } else if has_entry_short {
+                    pending_entry_short = true;
+                }
+            }
+            1 => {
+                // Long: can only exit long
+                if has_exit_long {
+                    pending_exit_long = true;
+                }
+            }
+            -1 => {
+                // Short: can only exit short
+                if has_exit_short {
+                    pending_exit_short = true;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -592,6 +778,14 @@ fn apply_position_state_machine(
         .clone();
     df = df
         .with_column(Series::new("exit_fill".into(), exit_fill))
+        .map_err(TrendLabError::Polars)?
+        .clone();
+    df = df
+        .with_column(Series::new("entry_short_fill".into(), entry_short_fill))
+        .map_err(TrendLabError::Polars)?
+        .clone();
+    df = df
+        .with_column(Series::new("exit_short_fill".into(), exit_short_fill))
         .map_err(TrendLabError::Polars)?
         .clone();
     df = df
@@ -693,12 +887,22 @@ pub fn run_donchian_sweep_polars(
             .unwrap_or(config.initial_cash);
         let total_return = (final_equity - config.initial_cash) / config.initial_cash;
 
+        // Count trades (both long and short)
         let exit_fill_col = df
             .column("exit_fill")
             .map_err(TrendLabError::Polars)?
             .bool()
             .map_err(TrendLabError::Polars)?;
-        let num_trades = exit_fill_col.sum().unwrap_or(0) as usize;
+        let long_trades = exit_fill_col.sum().unwrap_or(0) as usize;
+
+        let short_trades = df
+            .column("exit_short_fill")
+            .ok()
+            .and_then(|c| c.bool().ok())
+            .map(|c| c.sum().unwrap_or(0) as usize)
+            .unwrap_or(0);
+
+        let num_trades = long_trades + short_trades;
 
         results.push(PolarsBacktestResult {
             df,
@@ -738,10 +942,15 @@ pub fn run_strategy_sweep_polars(
     let configs = strategy_config.generate_configs();
 
     // Run each config through the Polars backtest
+    // Strategies without V2 implementations are gracefully skipped
     let mut config_results = Vec::with_capacity(configs.len());
 
     for strategy_config_id in &configs {
-        let strategy = create_strategy_v2_from_config(strategy_config_id);
+        // Skip strategies without V2 implementations
+        let strategy = match create_strategy_v2_from_config(strategy_config_id) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
 
         // Run Polars backtest
         let polars_result = run_backtest_polars(df.clone().lazy(), strategy.as_ref(), config)?;
@@ -801,10 +1010,12 @@ pub fn run_strategy_sweep_polars_parallel(
     let configs = strategy_config.generate_configs();
 
     // Run each config through the Polars backtest in parallel
+    // Strategies without V2 implementations are gracefully skipped
     let config_results: Vec<SweepConfigResult> = configs
         .par_iter()
         .filter_map(|strategy_config_id| {
-            let strategy = create_strategy_v2_from_config(strategy_config_id);
+            // Skip strategies without V2 implementations
+            let strategy = create_strategy_v2_from_config(strategy_config_id).ok()?;
 
             // Run Polars backtest
             let polars_result =
@@ -1123,5 +1334,251 @@ mod tests {
             seq_result.trades.len(),
             polars_result.num_trades
         );
+    }
+
+    fn make_downtrending_bars(n: usize, trend: f64) -> Vec<Bar> {
+        // Create bars that actually break below the Donchian lower channel.
+        // For short entry signals, close must be < min(low) of previous lookback bars.
+        // We achieve this by making each bar's close well below previous bars' lows.
+        // With trend = -3.0 and range of 2.0, each bar's close will be ~3 units below
+        // the previous bar's low, ensuring breakdowns.
+        (0..n)
+            .map(|i| {
+                let ts = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()
+                    + chrono::Duration::days(i as i64);
+                // Each bar's range is well below the previous bar
+                // trend should be negative, e.g., -3.0 for aggressive downtrend
+                let base = 200.0 + (i as f64 * trend);
+                let open = base + 1.0;
+                let close = base - 1.0; // Close at lower end of range
+                let high = base + 2.0;
+                let low = base - 2.0; // Low extends below close
+                Bar::new(ts, open, high, low, close, 1000.0, "TEST", "1d")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_polars_backtest_short_only_downtrend() {
+        use crate::strategy::TradingMode;
+        use crate::strategy_v2::DonchianBreakoutV2;
+
+        // Create bars with strong downtrend - shorts should profit
+        // Use -3.0 to ensure close breaks below the Donchian lower channel
+        let bars = make_downtrending_bars(50, -3.0);
+        let df = bars_to_dataframe(&bars).unwrap();
+
+        let strategy = DonchianBreakoutV2::new(5, 3).trading_mode(TradingMode::ShortOnly);
+        let config =
+            PolarsBacktestConfig::new(10000.0, 10.0).with_trading_mode(TradingMode::ShortOnly);
+        let result = run_backtest_polars(df.lazy(), &strategy, &config).unwrap();
+
+        // Should have made money shorting in downtrend
+        assert!(
+            result.total_return > 0.0,
+            "Expected positive return from shorts in downtrend, got {:.4}",
+            result.total_return
+        );
+
+        // Verify we entered short positions (check position_state has -1 values)
+        let states = result.df.column("position_state").unwrap().i32().unwrap();
+        let short_count = states.iter().filter(|s| *s == Some(-1)).count();
+        assert!(
+            short_count > 0,
+            "Expected to be in short position for some bars, found {} bars in short",
+            short_count
+        );
+
+        // Also verify we actually entered shorts (entry_short_fill has true values)
+        let entry_fills = result
+            .df
+            .column("entry_short_fill")
+            .unwrap()
+            .bool()
+            .unwrap();
+        let entry_count = entry_fills.sum().unwrap_or(0);
+        assert!(
+            entry_count > 0,
+            "Expected at least one short entry fill, got {}",
+            entry_count
+        );
+    }
+
+    #[test]
+    fn test_polars_backtest_long_short_mode() {
+        use crate::strategy::TradingMode;
+        use crate::strategy_v2::DonchianBreakoutV2;
+
+        // Create mixed bars - some up, some down
+        let mut bars = make_trending_bars(30, 1.0);
+        let downtrend = make_downtrending_bars(30, -3.0); // Strong downtrend for short signals
+        bars.extend(downtrend);
+
+        let df = bars_to_dataframe(&bars).unwrap();
+        let lf = df.lazy();
+
+        let strategy = DonchianBreakoutV2::new(5, 3).trading_mode(TradingMode::LongShort);
+        let config =
+            PolarsBacktestConfig::new(10000.0, 10.0).with_trading_mode(TradingMode::LongShort);
+        let result = run_backtest_polars(lf, &strategy, &config).unwrap();
+
+        // In LongShort mode, should take trades in both directions
+        // At minimum, the strategy should execute without error
+        assert!(
+            result.df.height() == 60,
+            "DataFrame should have all 60 bars"
+        );
+    }
+
+    #[test]
+    fn test_polars_short_trade_pnl_calculation() {
+        use crate::strategy::TradingMode;
+        use crate::strategy_v2::DonchianBreakoutV2;
+
+        // Create a clear downtrend for short trading
+        let bars = make_downtrending_bars(50, -3.0); // Strong downtrend for short signals
+        let df = bars_to_dataframe(&bars).unwrap();
+        let lf = df.lazy();
+
+        let strategy = DonchianBreakoutV2::new(5, 3).trading_mode(TradingMode::ShortOnly);
+        let config =
+            PolarsBacktestConfig::new(10000.0, 10.0).with_trading_mode(TradingMode::ShortOnly);
+        let result = run_backtest_polars(lf, &strategy, &config).unwrap();
+
+        // Convert to traditional result to check trades
+        let traditional = result.to_backtest_result().unwrap();
+
+        // Verify short trades have correct PnL (profit when price drops)
+        for trade in &traditional.trades {
+            // For a profitable short: entry_price > exit_price => positive PnL
+            // The PnL should be (entry_price - exit_price) * qty
+            if trade.gross_pnl > 0.0 {
+                assert!(
+                    trade.entry.price > trade.exit.price,
+                    "Profitable short trade should have entry > exit, got entry={:.2} exit={:.2}",
+                    trade.entry.price,
+                    trade.exit.price
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_polars_short_position_state() {
+        use crate::strategy::TradingMode;
+        use crate::strategy_v2::DonchianBreakoutV2;
+        use polars::prelude::*;
+
+        // Create downtrend data
+        let bars = make_downtrending_bars(30, -1.5);
+        let df = bars_to_dataframe(&bars).unwrap();
+        let lf = df.lazy();
+
+        let strategy = DonchianBreakoutV2::new(5, 3).trading_mode(TradingMode::ShortOnly);
+        let config =
+            PolarsBacktestConfig::new(10000.0, 10.0).with_trading_mode(TradingMode::ShortOnly);
+        let result = run_backtest_polars(lf, &strategy, &config).unwrap();
+
+        // Check that position_state includes -1 for short positions
+        let pos_state_col = result.df.column("position_state").unwrap();
+        let pos_states: Vec<Option<i32>> = pos_state_col.i32().unwrap().iter().collect();
+
+        // Should have at least some short positions (-1)
+        let has_short = pos_states.iter().any(|s| *s == Some(-1));
+        assert!(
+            has_short,
+            "Expected position_state=-1 for short positions in downtrend"
+        );
+
+        // Should NOT have any long positions in ShortOnly mode
+        let has_long = pos_states.iter().any(|s| *s == Some(1));
+        assert!(
+            !has_long,
+            "Should not have long positions in ShortOnly mode"
+        );
+    }
+
+    #[test]
+    fn test_polars_short_consistency() {
+        use crate::strategy::TradingMode;
+        use crate::strategy_v2::DonchianBreakoutV2;
+
+        // Use deterministic downtrend data - strong trend to trigger short entries
+        let bars = make_downtrending_bars(100, -3.0);
+
+        let entry_lookback = 10;
+        let exit_lookback = 5;
+        let initial_cash = 10000.0;
+        let qty = 10.0;
+
+        // Run Polars backtest with short mode
+        let df = bars_to_dataframe(&bars).unwrap();
+        let polars_strategy = DonchianBreakoutV2::new(entry_lookback, exit_lookback)
+            .trading_mode(TradingMode::ShortOnly);
+        let polars_config =
+            PolarsBacktestConfig::new(initial_cash, qty).with_trading_mode(TradingMode::ShortOnly);
+        let result = run_backtest_polars(df.lazy(), &polars_strategy, &polars_config).unwrap();
+
+        // Verify short trades in downtrend should be profitable
+        assert!(
+            result.total_return > 0.0,
+            "Expected positive return from shorts in downtrend, got {:.4}",
+            result.total_return
+        );
+
+        // Final equity should be greater than initial cash
+        assert!(
+            result.final_equity > initial_cash,
+            "Short strategy should profit in downtrend: final={:.2} initial={:.2}",
+            result.final_equity,
+            initial_cash
+        );
+
+        // Should have entered short positions (check position_state for -1 values)
+        let states = result.df.column("position_state").unwrap().i32().unwrap();
+        let short_count = states.iter().filter(|s| *s == Some(-1)).count();
+        assert!(
+            short_count > 0,
+            "Expected short positions (position_state=-1) in 100-bar downtrend"
+        );
+    }
+
+    #[test]
+    fn test_polars_short_equity_accounting() {
+        use crate::strategy::TradingMode;
+        use crate::strategy_v2::DonchianBreakoutV2;
+        use polars::prelude::*;
+
+        // Downtrend data - use strong trend to trigger short entries
+        let bars = make_downtrending_bars(40, -3.0);
+        let df = bars_to_dataframe(&bars).unwrap();
+        let lf = df.lazy();
+
+        let initial_cash = 10000.0;
+        let qty = 10.0;
+        let strategy = DonchianBreakoutV2::new(5, 3).trading_mode(TradingMode::ShortOnly);
+        let config =
+            PolarsBacktestConfig::new(initial_cash, qty).with_trading_mode(TradingMode::ShortOnly);
+        let result = run_backtest_polars(lf, &strategy, &config).unwrap();
+
+        // Check position_qty column - should be negative when short
+        let pos_qty_col = result.df.column("position_qty").unwrap();
+        let pos_qtys: Vec<Option<f64>> = pos_qty_col.f64().unwrap().iter().collect();
+
+        // When in short position, position_qty should be negative
+        let pos_state_col = result.df.column("position_state").unwrap();
+        let pos_states: Vec<Option<i32>> = pos_state_col.i32().unwrap().iter().collect();
+
+        for (i, (state, qty_opt)) in pos_states.iter().zip(pos_qtys.iter()).enumerate() {
+            if *state == Some(-1) {
+                let q = qty_opt.unwrap_or(0.0);
+                assert!(
+                    q < 0.0,
+                    "At bar {}: position_state=-1 but position_qty={:.2} (expected negative)",
+                    i,
+                    q
+                );
+            }
+        }
     }
 }

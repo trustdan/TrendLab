@@ -962,10 +962,7 @@ fn handle_sweep_from_parquet(
     });
 
     let sweep_result = SweepResult {
-        sweep_id: format!(
-            "tui_parquet_{}",
-            chrono::Utc::now().format("%Y%m%d_%H%M%S")
-        ),
+        sweep_id: format!("tui_parquet_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S")),
         config_results: results,
         started_at: chrono::Utc::now(),
         completed_at: chrono::Utc::now(),
@@ -1013,8 +1010,8 @@ fn handle_multi_strategy_sweep_from_parquet(
     let completed_configs = Arc::new(AtomicUsize::new(0));
 
     // Polars backtest config
-    let polars_config = PolarsBacktestConfig::new(config.initial_cash, config.qty)
-        .with_cost_model(CostModel {
+    let polars_config =
+        PolarsBacktestConfig::new(config.initial_cash, config.qty).with_cost_model(CostModel {
             fees_bps_per_side: config.cost_model.fees_bps_per_side,
             slippage_bps: config.cost_model.slippage_bps,
         });
@@ -1126,8 +1123,8 @@ fn handle_multi_strategy_sweep(
     let completed_configs = Arc::new(AtomicUsize::new(0));
 
     // Polars backtest config (mirrors the BacktestConfig)
-    let polars_config = PolarsBacktestConfig::new(config.initial_cash, config.qty)
-        .with_cost_model(CostModel {
+    let polars_config =
+        PolarsBacktestConfig::new(config.initial_cash, config.qty).with_cost_model(CostModel {
             fees_bps_per_side: config.cost_model.fees_bps_per_side,
             slippage_bps: config.cost_model.slippage_bps,
         });

@@ -16,6 +16,7 @@ polars.workspace = true
 tokio.workspace = true
 reqwest.workspace = true
 rayon.workspace = true
+rand.workspace = true
 urlencoding = "2.1"
 
 [[bin]]

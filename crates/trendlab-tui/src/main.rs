@@ -9,7 +9,10 @@
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, poll, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    event::{
+        self, poll, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind,
+        MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -23,7 +26,7 @@ mod panels;
 mod ui;
 mod worker;
 
-use app::App;
+use app::{App, Panel};
 use worker::{spawn_worker, WorkerChannels, WorkerCommand, WorkerUpdate};
 
 fn main() -> Result<()> {
@@ -71,17 +74,43 @@ fn run_app<B: ratatui::backend::Backend>(
         // 1. Render current state
         terminal.draw(|f| ui::draw(f, app))?;
 
-        // 2. Poll for keyboard input (non-blocking, 16ms timeout for ~60fps)
+        // 2. Poll for input (non-blocking, 16ms timeout for ~60fps)
         if poll(Duration::from_millis(16))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    match handle_key(app, key.code, channels) {
-                        KeyResult::Quit => return Ok(()),
-                        KeyResult::Continue => {}
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.kind == KeyEventKind::Press {
+                        match handle_key(app, key.code, channels) {
+                            KeyResult::Quit => return Ok(()),
+                            KeyResult::Continue => {}
+                        }
                     }
                 }
+                Event::Mouse(mouse) => {
+                    match mouse.kind {
+                        MouseEventKind::Moved => {
+                            app.update_cursor_position(mouse.column, mouse.row);
+                        }
+                        MouseEventKind::ScrollUp => {
+                            // Zoom in on chart when in Chart panel
+                            if app.active_panel == Panel::Chart {
+                                app.chart.zoom_in_animated();
+                            }
+                        }
+                        MouseEventKind::ScrollDown => {
+                            // Zoom out on chart when in Chart panel
+                            if app.active_panel == Panel::Chart {
+                                app.chart.zoom_out_animated();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
             }
         }
+
+        // Tick animations (for smooth zoom/pan)
+        app.tick_animations();
 
         // 3. Drain all pending updates from worker (non-blocking)
         while let Ok(update) = channels.update_rx.try_recv() {
@@ -128,8 +157,11 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
         }
 
         KeyCode::BackTab => {
-            // In Strategy panel, BackTab goes from params back to strategy list
-            if app.active_panel == app::Panel::Strategy && !app.strategy.editing_strategy {
+            // In Strategy panel, BackTab goes from params back to strategy selection
+            if app.active_panel == app::Panel::Strategy
+                && app.strategy.focus == app::StrategyFocus::Parameters
+            {
+                app.strategy.focus = app::StrategyFocus::Selection;
                 app.strategy.editing_strategy = true;
             } else {
                 app.prev_panel();
@@ -179,7 +211,15 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
         }
 
         KeyCode::Enter => {
-            app.handle_enter_with_channels(channels);
+            // Enter to expand/collapse categories or confirm actions
+            if app.active_panel == app::Panel::Strategy
+                && app.strategy.focus == app::StrategyFocus::Selection
+                && app.strategy.focus_on_category
+            {
+                app.handle_strategy_enter();
+            } else {
+                app.handle_enter_with_channels(channels);
+            }
             KeyResult::Continue
         }
 
@@ -217,26 +257,70 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
         }
 
         KeyCode::Char('v') => {
-            // 'v' for toggle view mode (in results panel)
-            app.handle_toggle_view();
+            // 'v' for toggle view mode (in results panel) or volume (in chart panel)
+            if app.active_panel == Panel::Chart {
+                app.handle_toggle_volume();
+            } else {
+                app.handle_toggle_view();
+            }
+            KeyResult::Continue
+        }
+
+        KeyCode::Char('R') => {
+            // Reset to canonical defaults (lookbacks, grids, fetch range)
+            app.reset_ui_defaults();
+            KeyResult::Continue
+        }
+
+        KeyCode::Char('c') => {
+            // 'c' for toggle crosshair (in chart panel)
+            if app.active_panel == Panel::Chart {
+                app.handle_toggle_crosshair();
+            }
             KeyResult::Continue
         }
 
         KeyCode::Char(' ') => {
-            // Space to toggle ticker selection in Data panel
-            app.handle_space();
+            // Space to toggle selection
+            if app.active_panel == app::Panel::Strategy
+                && app.strategy.focus == app::StrategyFocus::Selection
+            {
+                app.handle_strategy_space();
+            } else {
+                app.handle_space();
+            }
             KeyResult::Continue
         }
 
         KeyCode::Char('a') => {
-            // 'a' to select all tickers in current sector
-            app.handle_select_all();
+            // 'a' to select all in current context
+            if app.active_panel == app::Panel::Strategy
+                && app.strategy.focus == app::StrategyFocus::Selection
+            {
+                app.handle_strategy_select_all();
+            } else {
+                app.handle_select_all();
+            }
             KeyResult::Continue
         }
 
         KeyCode::Char('n') => {
-            // 'n' to deselect all tickers in current sector
-            app.handle_select_none();
+            // 'n' to deselect all in current context
+            if app.active_panel == app::Panel::Strategy
+                && app.strategy.focus == app::StrategyFocus::Selection
+            {
+                app.handle_strategy_select_none();
+            } else {
+                app.handle_select_none();
+            }
+            KeyResult::Continue
+        }
+
+        KeyCode::Char('e') => {
+            // 'e' to toggle ensemble mode in Strategy panel
+            if app.active_panel == app::Panel::Strategy {
+                app.handle_toggle_ensemble();
+            }
             KeyResult::Continue
         }
 
@@ -564,10 +648,11 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                 if !app.auto.pending_missing.is_empty() {
                     let missing = std::mem::take(&mut app.auto.pending_missing);
                     app.auto.stage = app::AutoStage::FetchingMissing;
+                    let (start, end) = app.fetch_range();
                     let _ = channels.command_tx.send(WorkerCommand::FetchData {
                         symbols: missing.clone(),
-                        start: chrono::NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
-                        end: chrono::NaiveDate::from_ymd_opt(2024, 12, 31).unwrap(),
+                        start,
+                        end,
                         force: false,
                     });
                     app.status_message =
@@ -786,6 +871,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                 if let Some(best) = result.best_per_strategy.get(&entry.strategy_type) {
                     strategy_curves.push(app::StrategyCurve {
                         strategy_type: entry.strategy_type,
+                        config_display: best.config_id.display(),
                         equity: best.equity_curve.clone(),
                         metrics: best.metrics.clone(),
                     });

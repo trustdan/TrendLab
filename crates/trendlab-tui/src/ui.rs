@@ -121,18 +121,34 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let help_text = match app.active_panel {
-        Panel::Data => "↑↓: Select symbol  Enter: Load data  Tab: Next panel",
-        Panel::Strategy => "↑↓: Select field  ←→: Adjust value  Tab: Next panel",
-        Panel::Sweep => "Enter: Start sweep  Esc: Cancel  ↑↓: Select param",
-        Panel::Results => "↑↓: Select result  Enter: View chart  Tab: Next panel",
-        Panel::Chart => "←→: Scroll  ↑↓: Zoom  Esc: Reset view",
+        Panel::Data => "↑↓: Select symbol  Enter: Load data  R: Reset defaults  Tab: Next panel",
+        Panel::Strategy => "↑↓: Select field  ←→: Adjust value  R: Reset defaults  Tab: Next panel",
+        Panel::Sweep => "Enter: Start sweep  Esc: Cancel  ↑↓: Select param  R: Reset defaults",
+        Panel::Results => {
+            "↑↓: Select result  Enter: View chart  R: Reset defaults  Tab: Next panel"
+        }
+        Panel::Chart => {
+            "←→: Scroll  ↑↓: Zoom  m: Mode  v: Volume  c: Crosshair  d: Drawdown  R: Reset defaults"
+        }
     };
 
-    let status_line = Line::from(vec![
-        Span::styled(&app.status_message, Style::default().fg(colors::GREEN)),
-        Span::styled(" | ", Style::default().fg(colors::FG_DARK)),
-        Span::styled(help_text, Style::default().fg(colors::FG_DARK)),
-    ]);
+    let mut spans = vec![Span::styled(
+        &app.status_message,
+        Style::default().fg(colors::GREEN),
+    )];
+    if app.random_defaults.enabled {
+        spans.push(Span::styled(
+            format!("  [seed {}]", app.random_defaults.seed),
+            Style::default().fg(colors::YELLOW),
+        ));
+    }
+    spans.push(Span::styled(" | ", Style::default().fg(colors::FG_DARK)));
+    spans.push(Span::styled(
+        help_text,
+        Style::default().fg(colors::FG_DARK),
+    ));
+
+    let status_line = Line::from(spans);
 
     let status = Paragraph::new(status_line).block(
         Block::default()
@@ -305,7 +321,10 @@ fn draw_startup_modal(f: &mut Frame, app: &App) {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled("[ ]", Style::default().fg(colors::CYAN)),
-            Span::styled(" to change sweep depth", Style::default().fg(colors::FG_DARK)),
+            Span::styled(
+                " to change sweep depth",
+                Style::default().fg(colors::FG_DARK),
+            ),
         ]));
         lines.push(Line::from(""));
 

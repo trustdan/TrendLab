@@ -3,8 +3,11 @@
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::NaiveDate;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use ratatui::layout::Rect;
 use trendlab_core::{
     BacktestConfig, Bar, CostModel, FillModel, Metrics, MultiStrategyGrid,
@@ -13,6 +16,293 @@ use trendlab_core::{
 };
 
 use crate::worker::{WorkerChannels, WorkerCommand};
+
+/// Seeded, opt-in randomization of initial UI defaults.
+///
+/// Intended for "Monte Carlo-ish" exploration: each launch can open near defaults
+/// while remaining reproducible via the seed.
+#[derive(Debug, Clone)]
+pub struct RandomDefaults {
+    pub enabled: bool,
+    pub seed: u64,
+}
+
+impl Default for RandomDefaults {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            seed: 0,
+        }
+    }
+}
+
+fn env_truthy(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            matches!(v.as_str(), "1" | "true" | "yes" | "y" | "on")
+        }
+        Err(_) => false,
+    }
+}
+
+fn env_optional_bool(name: &str) -> Option<bool> {
+    std::env::var(name).ok().map(|v| {
+        let v = v.trim().to_ascii_lowercase();
+        // Accept common falsy values explicitly.
+        if matches!(v.as_str(), "0" | "false" | "no" | "n" | "off") {
+            false
+        } else {
+            matches!(v.as_str(), "1" | "true" | "yes" | "y" | "on")
+        }
+    })
+}
+
+fn env_u64(name: &str) -> Option<u64> {
+    std::env::var(name).ok().and_then(|v| v.trim().parse().ok())
+}
+
+fn generate_seed() -> u64 {
+    // Stable enough on all platforms; not crypto-grade (doesn't need to be).
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
+}
+
+fn read_and_increment_launch_count() -> u64 {
+    // Persist a simple counter so the "random defaults" change each time the TUI is opened,
+    // even if you open it multiple times in the same second.
+    let path = std::path::Path::new("configs").join("tui_launch_count.txt");
+    let mut count: u64 = 0;
+    if let Ok(s) = std::fs::read_to_string(&path) {
+        count = s.trim().parse::<u64>().unwrap_or(0);
+    }
+    let next = count.saturating_add(1);
+    let _ = std::fs::create_dir_all("configs");
+    let _ = std::fs::write(&path, next.to_string());
+    next
+}
+
+fn derive_nonrepeatable_seed() -> u64 {
+    // Not crypto; just "looks random" and won't repeat in normal usage.
+    let t = generate_seed();
+    let launch = read_and_increment_launch_count();
+    let pid = std::process::id() as u64;
+    // Mix bits a bit (xorshift-ish).
+    let mut x = t ^ (launch.rotate_left(17)) ^ (pid.rotate_left(7));
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    x.wrapping_mul(0x2545F4914F6CDD1D)
+}
+
+fn jitter_pct_delta(rng: &mut impl Rng, min_abs: f64, max_abs: f64) -> f64 {
+    // delta in [-max_abs, -min_abs] U [min_abs, max_abs]
+    let mag = rng.gen_range(min_abs..=max_abs);
+    let sign = if rng.gen_bool(0.5) { 1.0 } else { -1.0 };
+    sign * mag
+}
+
+fn round_to_step_f64(value: f64, step: f64) -> f64 {
+    if step <= 0.0 {
+        return value;
+    }
+    (value / step).round() * step
+}
+
+fn jitter_usize_percent(
+    rng: &mut impl Rng,
+    base: usize,
+    min_pct: f64,
+    max_pct: f64,
+    step: usize,
+    min: usize,
+    max: usize,
+) -> usize {
+    let delta = jitter_pct_delta(rng, min_pct, max_pct);
+    let mut candidate = (base as f64) * (1.0 + delta);
+    if step > 1 {
+        candidate = round_to_step_f64(candidate, step as f64);
+    }
+    let candidate = candidate.round().max(0.0) as usize;
+    candidate.clamp(min, max)
+}
+
+fn jitter_f64_percent(
+    rng: &mut impl Rng,
+    base: f64,
+    min_pct: f64,
+    max_pct: f64,
+    step: f64,
+    min: f64,
+    max: f64,
+) -> f64 {
+    let delta = jitter_pct_delta(rng, min_pct, max_pct);
+    let candidate = base * (1.0 + delta);
+    round_to_step_f64(candidate, step).clamp(min, max)
+}
+
+fn jitter_date_range_percent(
+    rng: &mut impl Rng,
+    start: NaiveDate,
+    end: NaiveDate,
+    min_pct: f64,
+    max_pct: f64,
+    min_date: NaiveDate,
+    max_date: NaiveDate,
+    min_span_days: i64,
+) -> (NaiveDate, NaiveDate) {
+    let span = (end - start).num_days().abs().max(1);
+    let mag_start = rng.gen_range(min_pct..=max_pct);
+    let mag_end = rng.gen_range(min_pct..=max_pct);
+    let shift_start =
+        (span as f64 * mag_start).round() as i64 * if rng.gen_bool(0.5) { 1 } else { -1 };
+    let shift_end = (span as f64 * mag_end).round() as i64 * if rng.gen_bool(0.5) { 1 } else { -1 };
+
+    let mut s = start
+        .checked_add_signed(chrono::Duration::days(shift_start))
+        .unwrap_or(start)
+        .clamp(min_date, max_date);
+    let mut e = end
+        .checked_add_signed(chrono::Duration::days(shift_end))
+        .unwrap_or(end)
+        .clamp(min_date, max_date);
+
+    if e < s {
+        std::mem::swap(&mut s, &mut e);
+    }
+    if (e - s).num_days() < min_span_days {
+        e = s
+            .checked_add_signed(chrono::Duration::days(min_span_days))
+            .unwrap_or(e)
+            .clamp(min_date, max_date);
+    }
+    (s, e)
+}
+
+/// Strategy category for grouped checkboxes in the TUI.
+/// Each category groups related strategy types for easier navigation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StrategyCategory {
+    /// Channel-based breakout strategies (Donchian, Keltner, STARC, Bollinger, Supertrend)
+    ChannelBreakouts,
+    /// Momentum and direction strategies (MA Cross, TSMOM, DMI/ADX, Aroon, Heikin-Ashi)
+    MomentumDirection,
+    /// Price structure breakouts (Darvas, 52-Week High, Larry Williams, ORB)
+    PriceBreakouts,
+    /// Classic preset strategies (Turtle S1, Turtle S2, Parabolic SAR)
+    ClassicPresets,
+}
+
+impl StrategyCategory {
+    /// All categories in display order.
+    pub fn all() -> &'static [StrategyCategory] {
+        &[
+            StrategyCategory::ChannelBreakouts,
+            StrategyCategory::MomentumDirection,
+            StrategyCategory::PriceBreakouts,
+            StrategyCategory::ClassicPresets,
+        ]
+    }
+
+    /// Display name for the category.
+    pub fn name(&self) -> &'static str {
+        match self {
+            StrategyCategory::ChannelBreakouts => "Channel Breakouts",
+            StrategyCategory::MomentumDirection => "Momentum/Direction",
+            StrategyCategory::PriceBreakouts => "Price Breakouts",
+            StrategyCategory::ClassicPresets => "Classic Presets",
+        }
+    }
+
+    /// Get all strategy types in this category.
+    pub fn strategies(&self) -> &'static [StrategyType] {
+        match self {
+            StrategyCategory::ChannelBreakouts => &[
+                StrategyType::Donchian,
+                StrategyType::Keltner,
+                StrategyType::STARC,
+                StrategyType::Supertrend,
+            ],
+            StrategyCategory::MomentumDirection => {
+                &[StrategyType::MACrossover, StrategyType::Tsmom]
+            }
+            StrategyCategory::PriceBreakouts => &[StrategyType::OpeningRange],
+            StrategyCategory::ClassicPresets => &[
+                StrategyType::TurtleS1,
+                StrategyType::TurtleS2,
+                StrategyType::ParabolicSar,
+            ],
+        }
+    }
+
+    /// Check if category has any strategies (for display purposes).
+    pub fn is_empty(&self) -> bool {
+        self.strategies().is_empty()
+    }
+
+    /// Count of strategies in this category.
+    pub fn len(&self) -> usize {
+        self.strategies().len()
+    }
+}
+
+/// Voting method for ensemble strategies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VotingMethod {
+    /// Simple majority: > 50% agreement takes that signal
+    #[default]
+    Majority,
+    /// Longer horizons weighted more heavily
+    WeightedByHorizon,
+    /// Only enter if ALL horizons agree; exit on ANY exit signal
+    UnanimousEntry,
+}
+
+impl VotingMethod {
+    /// All voting methods.
+    pub fn all() -> &'static [VotingMethod] {
+        &[
+            VotingMethod::Majority,
+            VotingMethod::WeightedByHorizon,
+            VotingMethod::UnanimousEntry,
+        ]
+    }
+
+    /// Display name.
+    pub fn name(&self) -> &'static str {
+        match self {
+            VotingMethod::Majority => "Majority",
+            VotingMethod::WeightedByHorizon => "Weighted by Horizon",
+            VotingMethod::UnanimousEntry => "Unanimous Entry",
+        }
+    }
+}
+
+/// Ensemble configuration for multi-horizon voting.
+#[derive(Debug, Clone)]
+pub struct EnsembleConfig {
+    /// Whether ensemble mode is enabled
+    pub enabled: bool,
+    /// Base strategy type for the ensemble
+    pub base_strategy: StrategyType,
+    /// Lookback horizons to use (e.g., [10, 20, 55] for Donchian)
+    pub horizons: Vec<usize>,
+    /// Voting method for combining signals
+    pub voting: VotingMethod,
+}
+
+impl Default for EnsembleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_strategy: StrategyType::Donchian,
+            horizons: vec![10, 20, 55],
+            voting: VotingMethod::Majority,
+        }
+    }
+}
 
 /// Startup flow mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -334,7 +624,7 @@ impl DataState {
 }
 
 /// Strategy type selection
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum StrategyType {
     #[default]
     Donchian,
@@ -342,6 +632,13 @@ pub enum StrategyType {
     TurtleS2,
     MACrossover,
     Tsmom,
+    // Phase 1: ATR-Based Channels
+    Keltner,
+    STARC,
+    Supertrend,
+    // Phase 4: Complex Stateful + Ensemble
+    ParabolicSar,
+    OpeningRange,
 }
 
 impl StrategyType {
@@ -352,6 +649,11 @@ impl StrategyType {
             StrategyType::TurtleS2,
             StrategyType::MACrossover,
             StrategyType::Tsmom,
+            StrategyType::Keltner,
+            StrategyType::STARC,
+            StrategyType::Supertrend,
+            StrategyType::ParabolicSar,
+            StrategyType::OpeningRange,
         ]
     }
 
@@ -362,6 +664,11 @@ impl StrategyType {
             StrategyType::TurtleS2 => "Turtle System 2",
             StrategyType::MACrossover => "MA Crossover",
             StrategyType::Tsmom => "TSMOM",
+            StrategyType::Keltner => "Keltner Channel",
+            StrategyType::STARC => "STARC Bands",
+            StrategyType::Supertrend => "Supertrend",
+            StrategyType::ParabolicSar => "Parabolic SAR",
+            StrategyType::OpeningRange => "Opening Range Breakout",
         }
     }
 
@@ -372,6 +679,11 @@ impl StrategyType {
             StrategyType::TurtleS2 => "Turtle variant: 55-day entry, 20-day exit",
             StrategyType::MACrossover => "Enter on golden cross, exit on death cross",
             StrategyType::Tsmom => "Time-series momentum: long when return > 0",
+            StrategyType::Keltner => "Breakout above EMA + k*ATR channel",
+            StrategyType::STARC => "Breakout above SMA + k*ATR bands",
+            StrategyType::Supertrend => "Follow ATR-based trailing trend line",
+            StrategyType::ParabolicSar => "Wilder's SAR: trailing stop with acceleration",
+            StrategyType::OpeningRange => "Entry on breakout above opening range high",
         }
     }
 
@@ -383,6 +695,26 @@ impl StrategyType {
             StrategyType::TurtleS2 => 0, // Fixed params
             StrategyType::MACrossover => 3,
             StrategyType::Tsmom => 1,
+            StrategyType::Keltner => 3, // ema_period, atr_period, multiplier
+            StrategyType::STARC => 3,   // sma_period, atr_period, multiplier
+            StrategyType::Supertrend => 2, // atr_period, multiplier
+            StrategyType::ParabolicSar => 3, // af_start, af_step, af_max
+            StrategyType::OpeningRange => 2, // range_bars, period
+        }
+    }
+
+    /// Get the category this strategy belongs to.
+    pub fn category(&self) -> StrategyCategory {
+        match self {
+            StrategyType::Donchian
+            | StrategyType::Keltner
+            | StrategyType::STARC
+            | StrategyType::Supertrend => StrategyCategory::ChannelBreakouts,
+            StrategyType::MACrossover | StrategyType::Tsmom => StrategyCategory::MomentumDirection,
+            StrategyType::OpeningRange => StrategyCategory::PriceBreakouts,
+            StrategyType::TurtleS1 | StrategyType::TurtleS2 | StrategyType::ParabolicSar => {
+                StrategyCategory::ClassicPresets
+            }
         }
     }
 }
@@ -429,6 +761,11 @@ impl MACrossoverConfig {
             "EMA"
         }
     }
+
+    // Convenience alias used by some UI helpers.
+    pub fn ma_type_label(&self) -> &'static str {
+        self.ma_type_name()
+    }
 }
 
 /// TSMOM strategy configuration
@@ -443,28 +780,327 @@ impl Default for TsmomConfig {
     }
 }
 
-/// Strategy panel state
+/// Keltner Channel strategy configuration
+#[derive(Debug, Clone)]
+pub struct KeltnerConfig {
+    pub ema_period: usize,
+    pub atr_period: usize,
+    pub multiplier: f64,
+}
+
+impl Default for KeltnerConfig {
+    fn default() -> Self {
+        Self {
+            ema_period: 20,
+            atr_period: 10,
+            multiplier: 2.0,
+        }
+    }
+}
+
+/// STARC Bands strategy configuration
+#[derive(Debug, Clone)]
+pub struct STARCConfig {
+    pub sma_period: usize,
+    pub atr_period: usize,
+    pub multiplier: f64,
+}
+
+impl Default for STARCConfig {
+    fn default() -> Self {
+        Self {
+            sma_period: 20,
+            atr_period: 15,
+            multiplier: 2.0,
+        }
+    }
+}
+
+/// Supertrend strategy configuration
+#[derive(Debug, Clone)]
+pub struct SupertrendConfig {
+    pub atr_period: usize,
+    pub multiplier: f64,
+}
+
+impl Default for SupertrendConfig {
+    fn default() -> Self {
+        Self {
+            atr_period: 10,
+            multiplier: 3.0,
+        }
+    }
+}
+
+/// Parabolic SAR strategy configuration
+#[derive(Debug, Clone)]
+pub struct ParabolicSarConfig {
+    pub af_start: f64,
+    pub af_step: f64,
+    pub af_max: f64,
+}
+
+impl Default for ParabolicSarConfig {
+    fn default() -> Self {
+        Self {
+            af_start: 0.02,
+            af_step: 0.02,
+            af_max: 0.20,
+        }
+    }
+}
+
+/// Opening Range Breakout strategy configuration
+#[derive(Debug, Clone)]
+pub struct OpeningRangeConfig {
+    pub range_bars: usize,
+    pub period: usize, // 0 = Weekly, 1 = Monthly, 2 = Rolling
+}
+
+impl Default for OpeningRangeConfig {
+    fn default() -> Self {
+        Self {
+            range_bars: 5,
+            period: 0, // Weekly
+        }
+    }
+}
+
+impl OpeningRangeConfig {
+    pub fn period_name(&self) -> &'static str {
+        match self.period {
+            0 => "Weekly",
+            1 => "Monthly",
+            _ => "Rolling",
+        }
+    }
+
+    // Convenience alias used by some UI helpers.
+    pub fn timeframe_label(&self) -> &'static str {
+        self.period_name()
+    }
+}
+
+/// Focus mode within the strategy panel
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StrategyFocus {
+    /// Navigating categories and strategy checkboxes (left panel)
+    #[default]
+    Selection,
+    /// Editing parameters for a specific strategy (right panel)
+    Parameters,
+}
+
+/// Strategy panel state with grouped checkbox support
 #[derive(Debug)]
 pub struct StrategyState {
+    // === Grouped checkbox state ===
+    /// Categories that are currently expanded (show their strategies)
+    pub expanded_categories: HashSet<StrategyCategory>,
+    /// Strategies that are currently selected (checked)
+    pub selected_strategies: HashSet<StrategyType>,
+    /// Currently focused category index
+    pub focused_category_index: usize,
+    /// Currently focused strategy index within the focused category
+    pub focused_strategy_in_category: usize,
+    /// Whether we're focused on a category header or a strategy within it
+    pub focus_on_category: bool,
+
+    // === Ensemble configuration ===
+    pub ensemble: EnsembleConfig,
+
+    // === Legacy fields for parameter editing ===
     pub selected_type: StrategyType,
     pub selected_type_index: usize,
     pub donchian_config: DonchianConfig,
     pub ma_config: MACrossoverConfig,
     pub tsmom_config: TsmomConfig,
+    pub keltner_config: KeltnerConfig,
+    pub starc_config: STARCConfig,
+    pub supertrend_config: SupertrendConfig,
+    pub parabolic_sar_config: ParabolicSarConfig,
+    pub opening_range_config: OpeningRangeConfig,
     pub selected_field: usize,
-    pub editing_strategy: bool, // true = selecting strategy (left), false = editing params (right)
+    /// Current focus mode: Selection (left) or Parameters (right)
+    pub focus: StrategyFocus,
+
+    // Legacy alias for backwards compatibility
+    pub editing_strategy: bool,
 }
 
 impl Default for StrategyState {
     fn default() -> Self {
+        // Start with non-empty categories expanded
+        let mut expanded = HashSet::new();
+        for cat in StrategyCategory::all() {
+            if !cat.is_empty() {
+                expanded.insert(*cat);
+            }
+        }
+
+        // Start with Donchian selected by default
+        let mut selected = HashSet::new();
+        selected.insert(StrategyType::Donchian);
+
         Self {
+            expanded_categories: expanded,
+            selected_strategies: selected,
+            focused_category_index: 0,
+            focused_strategy_in_category: 0,
+            focus_on_category: true,
+            ensemble: EnsembleConfig::default(),
             selected_type: StrategyType::default(),
             selected_type_index: 0,
             donchian_config: DonchianConfig::default(),
             ma_config: MACrossoverConfig::default(),
             tsmom_config: TsmomConfig::default(),
+            keltner_config: KeltnerConfig::default(),
+            starc_config: STARCConfig::default(),
+            supertrend_config: SupertrendConfig::default(),
+            parabolic_sar_config: ParabolicSarConfig::default(),
+            opening_range_config: OpeningRangeConfig::default(),
             selected_field: 0,
-            editing_strategy: true, // Start on strategy selection (left panel)
+            focus: StrategyFocus::Selection,
+            editing_strategy: true, // Legacy: true = selection mode
+        }
+    }
+}
+
+impl StrategyState {
+    /// Get the currently focused category.
+    pub fn focused_category(&self) -> Option<StrategyCategory> {
+        StrategyCategory::all()
+            .get(self.focused_category_index)
+            .copied()
+    }
+
+    /// Check if a category is expanded.
+    pub fn is_expanded(&self, cat: StrategyCategory) -> bool {
+        self.expanded_categories.contains(&cat)
+    }
+
+    /// Toggle category expansion.
+    pub fn toggle_category(&mut self, cat: StrategyCategory) {
+        if self.expanded_categories.contains(&cat) {
+            self.expanded_categories.remove(&cat);
+        } else {
+            self.expanded_categories.insert(cat);
+        }
+    }
+
+    /// Check if a strategy is selected.
+    pub fn is_selected(&self, strat: StrategyType) -> bool {
+        self.selected_strategies.contains(&strat)
+    }
+
+    /// Toggle strategy selection.
+    pub fn toggle_strategy(&mut self, strat: StrategyType) {
+        if self.selected_strategies.contains(&strat) {
+            self.selected_strategies.remove(&strat);
+        } else {
+            self.selected_strategies.insert(strat);
+        }
+    }
+
+    /// Select all strategies in a category.
+    pub fn select_all_in_category(&mut self, cat: StrategyCategory) {
+        for strat in cat.strategies() {
+            self.selected_strategies.insert(*strat);
+        }
+    }
+
+    /// Deselect all strategies in a category.
+    pub fn deselect_all_in_category(&mut self, cat: StrategyCategory) {
+        for strat in cat.strategies() {
+            self.selected_strategies.remove(strat);
+        }
+    }
+
+    /// Count selected strategies in a category.
+    pub fn selected_count_in_category(&self, cat: StrategyCategory) -> usize {
+        cat.strategies()
+            .iter()
+            .filter(|s| self.selected_strategies.contains(s))
+            .count()
+    }
+
+    /// Get the currently focused strategy (if focus is on a strategy, not category header).
+    pub fn focused_strategy(&self) -> Option<StrategyType> {
+        if self.focus_on_category {
+            return None;
+        }
+        let cat = self.focused_category()?;
+        cat.strategies()
+            .get(self.focused_strategy_in_category)
+            .copied()
+    }
+
+    /// Get all selected strategies as a sorted vector.
+    pub fn selected_strategies_sorted(&self) -> Vec<StrategyType> {
+        let mut strats: Vec<StrategyType> = self.selected_strategies.iter().copied().collect();
+        strats.sort_by_key(|s| s.name());
+        strats
+    }
+
+    /// Format the current strategy config as a display string for Pine export
+    pub fn config_display_string(&self) -> String {
+        match self.selected_type {
+            StrategyType::Donchian => {
+                format!(
+                    "Entry={}, Exit={}",
+                    self.donchian_config.entry_lookback, self.donchian_config.exit_lookback
+                )
+            }
+            StrategyType::MACrossover => {
+                format!(
+                    "Fast={}, Slow={}, Type={}",
+                    self.ma_config.fast_period,
+                    self.ma_config.slow_period,
+                    self.ma_config.ma_type_name()
+                )
+            }
+            StrategyType::Tsmom => {
+                format!("Lookback={}", self.tsmom_config.lookback)
+            }
+            StrategyType::Keltner => {
+                format!(
+                    "EMA={}, ATR={}, Mult={:.1}",
+                    self.keltner_config.ema_period,
+                    self.keltner_config.atr_period,
+                    self.keltner_config.multiplier
+                )
+            }
+            StrategyType::STARC => {
+                format!(
+                    "SMA={}, ATR={}, Mult={:.1}",
+                    self.starc_config.sma_period,
+                    self.starc_config.atr_period,
+                    self.starc_config.multiplier
+                )
+            }
+            StrategyType::Supertrend => {
+                format!(
+                    "ATR={}, Mult={:.1}",
+                    self.supertrend_config.atr_period, self.supertrend_config.multiplier
+                )
+            }
+            StrategyType::ParabolicSar => {
+                format!(
+                    "Start={:.2}, Step={:.2}, Max={:.2}",
+                    self.parabolic_sar_config.af_start,
+                    self.parabolic_sar_config.af_step,
+                    self.parabolic_sar_config.af_max
+                )
+            }
+            StrategyType::OpeningRange => {
+                format!(
+                    "Bars={}, Period={}",
+                    self.opening_range_config.range_bars,
+                    self.opening_range_config.period_name()
+                )
+            }
+            StrategyType::TurtleS1 => "System 1 (20/10)".to_string(),
+            StrategyType::TurtleS2 => "System 2 (55/20)".to_string(),
         }
     }
 }
@@ -626,6 +1262,7 @@ pub enum ChartViewMode {
 #[derive(Debug, Clone)]
 pub struct CandleData {
     /// Index in the data series (for X position)
+    #[allow(dead_code)]
     pub index: usize,
     /// Open price
     pub open: f64,
@@ -641,6 +1278,7 @@ pub struct CandleData {
     pub date: String,
 }
 
+#[allow(dead_code)]
 impl CandleData {
     /// Returns true if this is a bullish (up) candle
     pub fn is_bullish(&self) -> bool {
@@ -704,6 +1342,7 @@ pub struct TickerCurve {
 #[allow(dead_code)]
 pub struct StrategyCurve {
     pub strategy_type: StrategyTypeId,
+    pub config_display: String,
     pub equity: Vec<f64>,
     pub metrics: Metrics,
 }
@@ -752,6 +1391,16 @@ pub struct ChartState {
     pub show_crosshair: bool,
     /// Last chart rendering area (for hit-testing)
     pub chart_area: Cell<Option<Rect>>,
+    /// Winning config display string (for Pine Script export)
+    pub winning_config: Option<WinningConfig>,
+}
+
+/// Winning configuration info for display and Pine export
+#[derive(Debug, Clone, Default)]
+pub struct WinningConfig {
+    pub strategy_name: String,
+    pub config_display: String,
+    pub symbol: Option<String>,
 }
 
 impl ChartState {
@@ -877,6 +1526,11 @@ pub struct App {
     pub operation: OperationState,
     pub startup: StartupState,
     pub auto: AutoRunState,
+    pub random_defaults: RandomDefaults,
+    /// Default date range used for data fetches in the TUI.
+    pub fetch_range: (NaiveDate, NaiveDate),
+    /// Canonical default (un-jittered) date range used for reference/reset.
+    pub fetch_range_default: (NaiveDate, NaiveDate),
 }
 
 impl App {
@@ -891,29 +1545,268 @@ impl App {
         };
         data_state.load_universe_from_config();
 
+        // Randomize initial UI defaults.
+        // Default: enabled (can be disabled).
+        //
+        // Env:
+        // - TRENDLAB_RANDOM_DEFAULTS=0/false/off (disable)
+        // - TRENDLAB_RANDOM_DEFAULTS=1/true/on  (enable)
+        // - TRENDLAB_RANDOM_SEED=12345 (optional; overrides the non-repeatable seed)
+        let random_enabled = env_optional_bool("TRENDLAB_RANDOM_DEFAULTS").unwrap_or(true);
+        let seed = if random_enabled {
+            env_u64("TRENDLAB_RANDOM_SEED").unwrap_or_else(derive_nonrepeatable_seed)
+        } else {
+            0
+        };
+        let mut rng = StdRng::seed_from_u64(seed);
+
+        let mut strategy_state = StrategyState::default();
+        let mut sweep_state = SweepState {
+            param_ranges: vec![
+                (
+                    "entry_lookback".to_string(),
+                    vec!["10", "20", "30", "40", "50"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                (
+                    "exit_lookback".to_string(),
+                    vec!["5", "10", "15", "20", "25"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+            ],
+            ..Default::default()
+        };
+
+        // Fetch date defaults used by TUI fetches.
+        let fetch_default_start = NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
+        let fetch_default_end = NaiveDate::from_ymd_opt(2024, 12, 31).unwrap();
+        let today = chrono::Local::now().date_naive();
+        let fetch_default_end = fetch_default_end.min(today);
+
+        let mut fetch_range = (fetch_default_start, fetch_default_end);
+
+        if random_enabled {
+            // Percent-based jitter: 2%..40% (signed), rounded to the same step sizes
+            // the UI uses, so "R to reset" + a few arrows gets you back quickly.
+            let min_pct = 0.02;
+            let max_pct = 0.40;
+
+            strategy_state.donchian_config.entry_lookback = jitter_usize_percent(
+                &mut rng,
+                strategy_state.donchian_config.entry_lookback,
+                min_pct,
+                max_pct,
+                5,
+                5,
+                500,
+            );
+            strategy_state.donchian_config.exit_lookback = jitter_usize_percent(
+                &mut rng,
+                strategy_state.donchian_config.exit_lookback,
+                min_pct,
+                max_pct,
+                5,
+                5,
+                500,
+            );
+
+            strategy_state.ma_config.fast_period = jitter_usize_percent(
+                &mut rng,
+                strategy_state.ma_config.fast_period,
+                min_pct,
+                max_pct,
+                5,
+                5,
+                500,
+            );
+            // Keep slow > fast by ensuring it's at least fast+5 after jitter.
+            let slow = jitter_usize_percent(
+                &mut rng,
+                strategy_state.ma_config.slow_period,
+                min_pct,
+                max_pct,
+                10,
+                10,
+                1000,
+            );
+            strategy_state.ma_config.slow_period =
+                slow.max(strategy_state.ma_config.fast_period + 5);
+
+            strategy_state.tsmom_config.lookback = jitter_usize_percent(
+                &mut rng,
+                strategy_state.tsmom_config.lookback,
+                min_pct,
+                max_pct,
+                21,
+                21,
+                2000,
+            );
+
+            strategy_state.keltner_config.ema_period = jitter_usize_percent(
+                &mut rng,
+                strategy_state.keltner_config.ema_period,
+                min_pct,
+                max_pct,
+                5,
+                5,
+                500,
+            );
+            strategy_state.keltner_config.atr_period = jitter_usize_percent(
+                &mut rng,
+                strategy_state.keltner_config.atr_period,
+                min_pct,
+                max_pct,
+                5,
+                5,
+                500,
+            );
+            strategy_state.keltner_config.multiplier = jitter_f64_percent(
+                &mut rng,
+                strategy_state.keltner_config.multiplier,
+                min_pct,
+                max_pct,
+                0.1,
+                0.5,
+                10.0,
+            );
+
+            strategy_state.starc_config.sma_period = jitter_usize_percent(
+                &mut rng,
+                strategy_state.starc_config.sma_period,
+                min_pct,
+                max_pct,
+                5,
+                5,
+                500,
+            );
+            strategy_state.starc_config.atr_period = jitter_usize_percent(
+                &mut rng,
+                strategy_state.starc_config.atr_period,
+                min_pct,
+                max_pct,
+                5,
+                5,
+                500,
+            );
+            strategy_state.starc_config.multiplier = jitter_f64_percent(
+                &mut rng,
+                strategy_state.starc_config.multiplier,
+                min_pct,
+                max_pct,
+                0.1,
+                0.5,
+                10.0,
+            );
+
+            strategy_state.supertrend_config.atr_period = jitter_usize_percent(
+                &mut rng,
+                strategy_state.supertrend_config.atr_period,
+                min_pct,
+                max_pct,
+                5,
+                5,
+                500,
+            );
+            strategy_state.supertrend_config.multiplier = jitter_f64_percent(
+                &mut rng,
+                strategy_state.supertrend_config.multiplier,
+                min_pct,
+                max_pct,
+                0.1,
+                0.5,
+                10.0,
+            );
+
+            strategy_state.parabolic_sar_config.af_start = jitter_f64_percent(
+                &mut rng,
+                strategy_state.parabolic_sar_config.af_start,
+                min_pct,
+                max_pct,
+                0.01,
+                0.01,
+                1.0,
+            );
+            strategy_state.parabolic_sar_config.af_step = jitter_f64_percent(
+                &mut rng,
+                strategy_state.parabolic_sar_config.af_step,
+                min_pct,
+                max_pct,
+                0.01,
+                0.01,
+                1.0,
+            );
+            strategy_state.parabolic_sar_config.af_max = jitter_f64_percent(
+                &mut rng,
+                strategy_state.parabolic_sar_config.af_max,
+                min_pct,
+                max_pct,
+                0.01,
+                0.05,
+                2.0,
+            );
+
+            strategy_state.opening_range_config.range_bars = jitter_usize_percent(
+                &mut rng,
+                strategy_state.opening_range_config.range_bars,
+                min_pct,
+                max_pct,
+                1,
+                1,
+                50,
+            );
+
+            // Ensemble horizons: jitter each horizon by percent, rounded to 5-day steps.
+            strategy_state.ensemble.horizons = strategy_state
+                .ensemble
+                .horizons
+                .iter()
+                .map(|h| jitter_usize_percent(&mut rng, *h, min_pct, max_pct, 5, 5, 2000))
+                .collect();
+
+            // Sweep grid: apply one percent factor per axis so it stays coherent.
+            let entry_factor = 1.0 + jitter_pct_delta(&mut rng, min_pct, max_pct);
+            let exit_factor = 1.0 + jitter_pct_delta(&mut rng, min_pct, max_pct);
+            for (name, values) in &mut sweep_state.param_ranges {
+                if name == "entry_lookback" {
+                    *values = values
+                        .iter()
+                        .filter_map(|v| v.parse::<i32>().ok())
+                        .map(|n| round_to_step_f64((n as f64) * entry_factor, 5.0).max(5.0) as i32)
+                        .map(|n| n.to_string())
+                        .collect();
+                } else if name == "exit_lookback" {
+                    *values = values
+                        .iter()
+                        .filter_map(|v| v.parse::<i32>().ok())
+                        .map(|n| round_to_step_f64((n as f64) * exit_factor, 5.0).max(5.0) as i32)
+                        .map(|n| n.to_string())
+                        .collect();
+                }
+            }
+
+            // Fetch date range: jitter start/end by 2%..40% of the default span.
+            let min_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+            fetch_range = jitter_date_range_percent(
+                &mut rng,
+                fetch_default_start,
+                fetch_default_end,
+                min_pct,
+                max_pct,
+                min_date,
+                today,
+                30,
+            );
+        }
+
         Self {
             active_panel: Panel::Data,
             data: data_state,
-            strategy: StrategyState::default(),
-            sweep: SweepState {
-                param_ranges: vec![
-                    (
-                        "entry_lookback".to_string(),
-                        vec!["10", "20", "30", "40", "50"]
-                            .into_iter()
-                            .map(String::from)
-                            .collect(),
-                    ),
-                    (
-                        "exit_lookback".to_string(),
-                        vec!["5", "10", "15", "20", "25"]
-                            .into_iter()
-                            .map(String::from)
-                            .collect(),
-                    ),
-                ],
-                ..Default::default()
-            },
+            strategy: strategy_state,
+            sweep: sweep_state,
             results: ResultsState::default(),
             chart: ChartState {
                 zoom_level: 1.0,
@@ -924,7 +1817,54 @@ impl App {
             operation: OperationState::Idle,
             startup: StartupState::default(),
             auto: AutoRunState::default(),
+            random_defaults: RandomDefaults {
+                enabled: random_enabled,
+                seed,
+            },
+            fetch_range,
+            fetch_range_default: (fetch_default_start, fetch_default_end),
         }
+    }
+
+    pub fn fetch_range(&self) -> (NaiveDate, NaiveDate) {
+        self.fetch_range
+    }
+
+    /// Reset configurable lookbacks/params and fetch date range back to their canonical defaults.
+    ///
+    /// This does not change which strategies are selected/focused; it only resets values.
+    pub fn reset_ui_defaults(&mut self) {
+        self.strategy.donchian_config = DonchianConfig::default();
+        self.strategy.ma_config = MACrossoverConfig::default();
+        self.strategy.tsmom_config = TsmomConfig::default();
+        self.strategy.keltner_config = KeltnerConfig::default();
+        self.strategy.starc_config = STARCConfig::default();
+        self.strategy.supertrend_config = SupertrendConfig::default();
+        self.strategy.parabolic_sar_config = ParabolicSarConfig::default();
+        self.strategy.opening_range_config = OpeningRangeConfig::default();
+
+        // Reset ensemble horizons while preserving toggle + voting/base strategy.
+        self.strategy.ensemble.horizons = EnsembleConfig::default().horizons;
+
+        self.sweep.param_ranges = vec![
+            (
+                "entry_lookback".to_string(),
+                vec!["10", "20", "30", "40", "50"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
+            ),
+            (
+                "exit_lookback".to_string(),
+                vec!["5", "10", "15", "20", "25"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
+            ),
+        ];
+
+        self.fetch_range = self.fetch_range_default;
+        self.status_message = "Reset defaults.".to_string();
     }
 
     pub fn next_panel(&mut self) {
@@ -962,16 +1902,232 @@ impl App {
     /// Returns true if toggle was handled (i.e., we're in Strategy panel)
     pub fn toggle_strategy_focus(&mut self) -> bool {
         if self.active_panel == Panel::Strategy {
-            // Don't toggle to params if strategy has no configurable params
-            let param_count = self.strategy.selected_type.param_count();
-            if self.strategy.editing_strategy && param_count == 0 {
-                self.status_message = "This strategy has fixed parameters.".to_string();
-                return true;
+            match self.strategy.focus {
+                StrategyFocus::Selection => {
+                    // Don't toggle to params if strategy has no configurable params
+                    let param_count = self.strategy.selected_type.param_count();
+                    if param_count == 0 {
+                        self.status_message = "This strategy has fixed parameters.".to_string();
+                        return true;
+                    }
+                    self.strategy.focus = StrategyFocus::Parameters;
+                    self.strategy.editing_strategy = false;
+                }
+                StrategyFocus::Parameters => {
+                    self.strategy.focus = StrategyFocus::Selection;
+                    self.strategy.editing_strategy = true;
+                }
             }
-            self.strategy.editing_strategy = !self.strategy.editing_strategy;
             true
         } else {
             false
+        }
+    }
+
+    /// Navigate up in the grouped strategy list.
+    fn navigate_strategy_up(&mut self) {
+        if self.strategy.focus_on_category {
+            // Move to previous category
+            if self.strategy.focused_category_index > 0 {
+                self.strategy.focused_category_index -= 1;
+                // If the new category is expanded and has strategies, go to last strategy
+                if let Some(cat) = self.strategy.focused_category() {
+                    if self.strategy.is_expanded(cat) && !cat.is_empty() {
+                        self.strategy.focus_on_category = false;
+                        self.strategy.focused_strategy_in_category = cat.len().saturating_sub(1);
+                    }
+                }
+            }
+        } else {
+            // Currently on a strategy
+            if self.strategy.focused_strategy_in_category > 0 {
+                self.strategy.focused_strategy_in_category -= 1;
+            } else {
+                // Move to category header
+                self.strategy.focus_on_category = true;
+            }
+        }
+        // Update selected_type to match focused strategy (for parameter panel)
+        self.sync_selected_type_to_focus();
+    }
+
+    /// Navigate down in the grouped strategy list.
+    fn navigate_strategy_down(&mut self) {
+        let num_categories = StrategyCategory::all().len();
+
+        if self.strategy.focus_on_category {
+            // Check if current category is expanded
+            if let Some(cat) = self.strategy.focused_category() {
+                if self.strategy.is_expanded(cat) && !cat.is_empty() {
+                    // Move into the category's strategies
+                    self.strategy.focus_on_category = false;
+                    self.strategy.focused_strategy_in_category = 0;
+                    // Update selected_type to match focused strategy (for parameter panel)
+                    self.sync_selected_type_to_focus();
+                    return;
+                }
+            }
+            // Move to next category
+            if self.strategy.focused_category_index < num_categories.saturating_sub(1) {
+                self.strategy.focused_category_index += 1;
+                self.strategy.focus_on_category = true;
+            }
+        } else {
+            // Currently on a strategy
+            if let Some(cat) = self.strategy.focused_category() {
+                if self.strategy.focused_strategy_in_category < cat.len().saturating_sub(1) {
+                    self.strategy.focused_strategy_in_category += 1;
+                } else {
+                    // Move to next category
+                    if self.strategy.focused_category_index < num_categories.saturating_sub(1) {
+                        self.strategy.focused_category_index += 1;
+                        self.strategy.focus_on_category = true;
+                    }
+                }
+            }
+        }
+        // Update selected_type to match focused strategy (for parameter panel)
+        self.sync_selected_type_to_focus();
+    }
+
+    /// Sync selected_type to match the currently focused strategy.
+    /// This keeps the parameter panel in sync as the user navigates.
+    fn sync_selected_type_to_focus(&mut self) {
+        if let Some(strat) = self.strategy.focused_strategy() {
+            self.strategy.selected_type = strat;
+            self.strategy.selected_type_index = StrategyType::all()
+                .iter()
+                .position(|s| *s == strat)
+                .unwrap_or(0);
+            self.strategy.selected_field = 0;
+        }
+    }
+
+    /// Handle Space key in Strategy panel (toggle strategy checkbox).
+    pub fn handle_strategy_space(&mut self) {
+        if self.active_panel != Panel::Strategy {
+            return;
+        }
+        if self.strategy.focus != StrategyFocus::Selection {
+            return;
+        }
+
+        if self.strategy.focus_on_category {
+            // Toggle all strategies in category
+            if let Some(cat) = self.strategy.focused_category() {
+                let all_selected = cat
+                    .strategies()
+                    .iter()
+                    .all(|s| self.strategy.is_selected(*s));
+                if all_selected {
+                    self.strategy.deselect_all_in_category(cat);
+                    self.status_message = format!("Deselected all in {}", cat.name());
+                } else {
+                    self.strategy.select_all_in_category(cat);
+                    self.status_message = format!("Selected all in {}", cat.name());
+                }
+            }
+        } else {
+            // Toggle single strategy
+            if let Some(strat) = self.strategy.focused_strategy() {
+                self.strategy.toggle_strategy(strat);
+                let selected = self.strategy.is_selected(strat);
+                self.status_message = format!(
+                    "{} {}",
+                    if selected { "Selected" } else { "Deselected" },
+                    strat.name()
+                );
+            }
+        }
+    }
+
+    /// Handle Enter key in Strategy panel (expand/collapse category or select strategy for param editing).
+    pub fn handle_strategy_enter(&mut self) {
+        if self.active_panel != Panel::Strategy {
+            return;
+        }
+        if self.strategy.focus != StrategyFocus::Selection {
+            return;
+        }
+
+        if self.strategy.focus_on_category {
+            // Toggle category expansion
+            if let Some(cat) = self.strategy.focused_category() {
+                self.strategy.toggle_category(cat);
+                let expanded = self.strategy.is_expanded(cat);
+                self.status_message = format!(
+                    "{} {}",
+                    if expanded { "Expanded" } else { "Collapsed" },
+                    cat.name()
+                );
+            }
+        } else {
+            // Select strategy for parameter editing
+            if let Some(strat) = self.strategy.focused_strategy() {
+                self.strategy.selected_type = strat;
+                self.strategy.selected_type_index = StrategyType::all()
+                    .iter()
+                    .position(|s| *s == strat)
+                    .unwrap_or(0);
+                self.strategy.selected_field = 0;
+
+                // If strategy has params, switch to param editing
+                if strat.param_count() > 0 {
+                    self.strategy.focus = StrategyFocus::Parameters;
+                    self.strategy.editing_strategy = false;
+                    self.status_message = format!("Editing {} parameters", strat.name());
+                } else {
+                    self.status_message = format!("{} has fixed parameters", strat.name());
+                }
+            }
+        }
+    }
+
+    /// Handle 'a' key in Strategy panel (select all in category).
+    pub fn handle_strategy_select_all(&mut self) {
+        if self.active_panel != Panel::Strategy {
+            return;
+        }
+        if self.strategy.focus != StrategyFocus::Selection {
+            return;
+        }
+
+        if let Some(cat) = self.strategy.focused_category() {
+            self.strategy.select_all_in_category(cat);
+            let count = cat.len();
+            self.status_message = format!("Selected all {} strategies in {}", count, cat.name());
+        }
+    }
+
+    /// Handle 'n' key in Strategy panel (deselect all in category).
+    pub fn handle_strategy_select_none(&mut self) {
+        if self.active_panel != Panel::Strategy {
+            return;
+        }
+        if self.strategy.focus != StrategyFocus::Selection {
+            return;
+        }
+
+        if let Some(cat) = self.strategy.focused_category() {
+            self.strategy.deselect_all_in_category(cat);
+            self.status_message = format!("Deselected all in {}", cat.name());
+        }
+    }
+
+    /// Handle 'e' key in Strategy panel (toggle ensemble mode).
+    pub fn handle_toggle_ensemble(&mut self) {
+        if self.active_panel != Panel::Strategy {
+            return;
+        }
+
+        self.strategy.ensemble.enabled = !self.strategy.ensemble.enabled;
+        if self.strategy.ensemble.enabled {
+            self.status_message = format!(
+                "Ensemble mode ON ({} voting)",
+                self.strategy.ensemble.voting.name()
+            );
+        } else {
+            self.status_message = "Ensemble mode OFF".to_string();
         }
     }
 
@@ -990,14 +2146,9 @@ impl App {
                 }
             },
             Panel::Strategy => {
-                if self.strategy.editing_strategy {
-                    // Up/Down cycles through strategy types (left panel)
-                    if self.strategy.selected_type_index > 0 {
-                        self.strategy.selected_type_index -= 1;
-                        self.strategy.selected_type =
-                            StrategyType::all()[self.strategy.selected_type_index];
-                        self.strategy.selected_field = 0;
-                    }
+                if self.strategy.focus == StrategyFocus::Selection {
+                    // Navigate grouped checkboxes
+                    self.navigate_strategy_up();
                 } else {
                     // Up/Down cycles through parameters (right panel)
                     let param_count = self.strategy.selected_type.param_count();
@@ -1039,15 +2190,9 @@ impl App {
                 }
             },
             Panel::Strategy => {
-                if self.strategy.editing_strategy {
-                    // Up/Down cycles through strategy types (left panel)
-                    let max_idx = StrategyType::all().len() - 1;
-                    if self.strategy.selected_type_index < max_idx {
-                        self.strategy.selected_type_index += 1;
-                        self.strategy.selected_type =
-                            StrategyType::all()[self.strategy.selected_type_index];
-                        self.strategy.selected_field = 0;
-                    }
+                if self.strategy.focus == StrategyFocus::Selection {
+                    // Navigate grouped checkboxes
+                    self.navigate_strategy_down();
                 } else {
                     // Up/Down cycles through parameters (right panel)
                     let param_count = self.strategy.selected_type.param_count();
@@ -1175,6 +2320,92 @@ impl App {
                     self.strategy.tsmom_config.lookback = new_val;
                 }
             }
+            StrategyType::Keltner => match field {
+                0 => {
+                    let new_val = (self.strategy.keltner_config.ema_period as i32 + delta * 5)
+                        .max(5) as usize;
+                    self.strategy.keltner_config.ema_period = new_val;
+                }
+                1 => {
+                    let new_val = (self.strategy.keltner_config.atr_period as i32 + delta * 5)
+                        .max(5) as usize;
+                    self.strategy.keltner_config.atr_period = new_val;
+                }
+                2 => {
+                    let new_val =
+                        (self.strategy.keltner_config.multiplier + delta as f64 * 0.5).max(0.5);
+                    self.strategy.keltner_config.multiplier = new_val;
+                }
+                _ => {}
+            },
+            StrategyType::STARC => match field {
+                0 => {
+                    let new_val =
+                        (self.strategy.starc_config.sma_period as i32 + delta * 5).max(5) as usize;
+                    self.strategy.starc_config.sma_period = new_val;
+                }
+                1 => {
+                    let new_val =
+                        (self.strategy.starc_config.atr_period as i32 + delta * 5).max(5) as usize;
+                    self.strategy.starc_config.atr_period = new_val;
+                }
+                2 => {
+                    let new_val =
+                        (self.strategy.starc_config.multiplier + delta as f64 * 0.5).max(0.5);
+                    self.strategy.starc_config.multiplier = new_val;
+                }
+                _ => {}
+            },
+            StrategyType::Supertrend => match field {
+                0 => {
+                    let new_val = (self.strategy.supertrend_config.atr_period as i32 + delta * 5)
+                        .max(5) as usize;
+                    self.strategy.supertrend_config.atr_period = new_val;
+                }
+                1 => {
+                    let new_val =
+                        (self.strategy.supertrend_config.multiplier + delta as f64 * 0.5).max(0.5);
+                    self.strategy.supertrend_config.multiplier = new_val;
+                }
+                _ => {}
+            },
+            StrategyType::ParabolicSar => match field {
+                0 => {
+                    let new_val = (self.strategy.parabolic_sar_config.af_start
+                        + delta as f64 * 0.01)
+                        .max(0.01);
+                    self.strategy.parabolic_sar_config.af_start = new_val;
+                }
+                1 => {
+                    let new_val = (self.strategy.parabolic_sar_config.af_step
+                        + delta as f64 * 0.01)
+                        .max(0.01);
+                    self.strategy.parabolic_sar_config.af_step = new_val;
+                }
+                2 => {
+                    let new_val =
+                        (self.strategy.parabolic_sar_config.af_max + delta as f64 * 0.05).max(0.05);
+                    self.strategy.parabolic_sar_config.af_max = new_val;
+                }
+                _ => {}
+            },
+            StrategyType::OpeningRange => match field {
+                0 => {
+                    let new_val = (self.strategy.opening_range_config.range_bars as i32 + delta)
+                        .max(1) as usize;
+                    self.strategy.opening_range_config.range_bars = new_val;
+                }
+                1 => {
+                    // Cycle through periods: 0=Weekly, 1=Monthly, 2=Rolling
+                    let current = self.strategy.opening_range_config.period;
+                    self.strategy.opening_range_config.period = if delta > 0 {
+                        (current + 1) % 3
+                    } else {
+                        (current + 2) % 3
+                    };
+                }
+                _ => {}
+            },
         }
     }
 
@@ -1210,6 +2441,12 @@ impl App {
                             .collect();
                         // Calculate drawdown curve
                         self.chart.drawdown_curve = calculate_drawdown(&self.chart.equity_curve);
+                        // Set winning config for Pine export display
+                        self.chart.winning_config = Some(WinningConfig {
+                            strategy_name: self.strategy.selected_type.name().to_string(),
+                            config_display: self.strategy.config_display_string(),
+                            symbol: self.data.selected_symbol().cloned(),
+                        });
                     }
                     self.active_panel = Panel::Chart;
                 }
@@ -1263,15 +2500,21 @@ impl App {
             return;
         }
 
+        let (start, end) = self.fetch_range();
         let cmd = WorkerCommand::FetchData {
             symbols: symbols.clone(),
-            start: NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
-            end: NaiveDate::from_ymd_opt(2024, 12, 31).unwrap(),
+            start,
+            end,
             force: false,
         };
 
         if channels.command_tx.send(cmd).is_ok() {
-            self.status_message = format!("Fetching {} symbols...", symbols.len());
+            self.status_message = format!(
+                "Fetching {} symbols ({} to {})...",
+                symbols.len(),
+                start.format("%Y-%m-%d"),
+                end.format("%Y-%m-%d")
+            );
         }
     }
 
@@ -1427,8 +2670,7 @@ impl App {
                 self.chart.cursor.in_chart = true;
 
                 // Calculate data index from x position
-                self.chart.cursor.data_index =
-                    self.calculate_data_index(rel_x, chart_area.width);
+                self.chart.cursor.data_index = self.calculate_data_index(rel_x, chart_area.width);
             } else {
                 self.chart.cursor.in_chart = false;
                 self.chart.cursor.chart_pos = None;
@@ -1476,8 +2718,7 @@ impl App {
             let ease = 0.15;
 
             let zoom_diff = self.chart.animation.target_zoom - self.chart.zoom_level;
-            let scroll_diff =
-                self.chart.animation.target_scroll - self.chart.scroll_offset as f64;
+            let scroll_diff = self.chart.animation.target_scroll - self.chart.scroll_offset as f64;
 
             if zoom_diff.abs() < 0.001 && scroll_diff.abs() < 0.5 {
                 // Close enough, snap to target

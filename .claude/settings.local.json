@@ -31,7 +31,23 @@
       "Bash(find:*)",
       "Bash(cargo tree:*)",
       "Bash(cargo clean:*)",
-      "Bash(cargo doc:*)"
+      "Bash(cargo doc:*)",
+      "Bash(grep:*)",
+      "Bash(xargs:*)",
+      "Bash(StrategyConfigId::Ensemble { .. } = ')",
+      "Bash(Set-Content sweep.rs \")",
+      "Bash(RUST_MIN_STACK=8000000 cargo test:*)",
+      "Bash(timeout 60 cargo test:*)",
+      "Bash(powershell -Command \"\\(Get-Content ''c:\\\\Users\\\\Dan\\\\TrendLab\\\\crates\\\\trendlab-bdd\\\\tests\\\\bdd.rs''\\).Count\")",
+      "Bash(git stash:*)",
+      "Bash($env:RUST_MIN_STACK=16777216)",
+      "Bash(RUST_MIN_STACK=16777216 cargo test:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(python:*)",
+      "Bash(cargo fix:*)",
+      "Bash(rustfmt:*)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc --noEmit)"
     ]
   }
 }

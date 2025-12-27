@@ -16,12 +16,14 @@ This is NOT a live-trading engine. Favor correctness, reproducibility, and speed
 ```
 TrendLab/
 ├── .claude/
-│   ├── agents/           # Subagent definitions (7 agents)
+│   ├── agents/           # Subagent definitions (10 agents)
 │   ├── commands/         # Slash command skills (9 skills)
 │   └── rules.md          # Operational rules for Claude
 ├── crates/
 │   ├── trendlab-core/    # Domain types, strategies, metrics
 │   ├── trendlab-cli/     # CLI interface
+│   ├── trendlab-tui/     # Terminal UI (ratatui)
+│   ├── trendlab-gui/     # Desktop GUI (Tauri + React)
 │   └── trendlab-bdd/     # Cucumber-rs runner + step definitions
 │       └── tests/
 │           ├── bdd.rs    # Runner (harness=false)
@@ -57,6 +59,9 @@ Delegate immediately when a task matches an agent's domain. Agents are in `.clau
 | **bdd-test-author** | Gherkin feature files + cucumber-rs step definitions |
 | **metrics-analyst** | CAGR, Sharpe, drawdown, turnover, ranking logic, cost sensitivity |
 | **pine-artifact-writer** | StrategyArtifact schema, Pine-friendly DSL, parity test vectors |
+| **tauri-expert** | Tauri desktop apps, Rust backend commands, IPC, window management |
+| **financial-charts-expert** | Candlestick charts, indicators, TradingView Lightweight Charts |
+| **web-frontend-expert** | TypeScript/web frontends for Tauri, component architecture, state management |
 
 ---
 
@@ -101,6 +106,14 @@ Assumptions and contracts are documented in `docs/`:
 - `docs/assumptions.md` — Fill conventions, adjusted vs unadjusted, timezone, missing bars
 - `docs/schema.md` — Canonical bar schema with field types and units
 - `docs/bdd-style.md` — How to write scenarios, tag conventions, step naming
+
+---
+
+## Roadmaps
+
+Active development roadmaps:
+- `docs/roadmap-v2-strategies.md` — V2 strategy implementation plan (Polars-native backtest engine)
+- `docs/roadmap-tauri-gui.md` — Tauri GUI implementation plan (React + TradingView charts)
 
 ---
 
