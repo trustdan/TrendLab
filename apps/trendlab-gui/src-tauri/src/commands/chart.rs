@@ -260,10 +260,7 @@ pub fn get_candle_data(
                                     // Parse YYYY-MM-DD to unix timestamp
                                     chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
                                         .map(|d| {
-                                            d.and_hms_opt(0, 0, 0)
-                                                .unwrap()
-                                                .and_utc()
-                                                .timestamp()
+                                            d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp()
                                         })
                                         .unwrap_or(0)
                                 } else {
@@ -399,8 +396,10 @@ pub fn get_multi_ticker_curves(
     let results_state = state.get_results_state();
 
     // Get best result per ticker
-    let mut best_by_ticker: std::collections::HashMap<String, &crate::commands::results::ResultRow> =
-        std::collections::HashMap::new();
+    let mut best_by_ticker: std::collections::HashMap<
+        String,
+        &crate::commands::results::ResultRow,
+    > = std::collections::HashMap::new();
 
     for r in &results_state.results {
         if let Some(existing) = best_by_ticker.get(&r.symbol) {
@@ -464,8 +463,10 @@ pub fn get_portfolio_curve(state: State<'_, AppState>) -> Result<Vec<EquityPoint
     }
 
     // Get best result per ticker
-    let mut best_by_ticker: std::collections::HashMap<String, &crate::commands::results::ResultRow> =
-        std::collections::HashMap::new();
+    let mut best_by_ticker: std::collections::HashMap<
+        String,
+        &crate::commands::results::ResultRow,
+    > = std::collections::HashMap::new();
 
     for r in &results_state.results {
         if let Some(existing) = best_by_ticker.get(&r.symbol) {
@@ -520,14 +521,14 @@ pub fn get_portfolio_curve(state: State<'_, AppState>) -> Result<Vec<EquityPoint
 
 /// Get strategy comparison curves.
 #[tauri::command]
-pub fn get_strategy_curves(
-    state: State<'_, AppState>,
-) -> Result<Vec<NamedEquityCurve>, GuiError> {
+pub fn get_strategy_curves(state: State<'_, AppState>) -> Result<Vec<NamedEquityCurve>, GuiError> {
     let results_state = state.get_results_state();
 
     // Get best result per strategy
-    let mut best_by_strategy: std::collections::HashMap<String, &crate::commands::results::ResultRow> =
-        std::collections::HashMap::new();
+    let mut best_by_strategy: std::collections::HashMap<
+        String,
+        &crate::commands::results::ResultRow,
+    > = std::collections::HashMap::new();
 
     for r in &results_state.results {
         if let Some(existing) = best_by_strategy.get(&r.strategy) {

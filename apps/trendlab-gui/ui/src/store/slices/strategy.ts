@@ -7,7 +7,7 @@ import type {
   StrategyFocus,
   ParamValue,
 } from '../../types';
-import { STRATEGY_CATEGORIES } from '../../types';
+import { STRATEGY_CATEGORIES, getAllStrategies } from '../../types';
 
 /** Strategy panel state */
 export interface StrategySlice {
@@ -102,7 +102,7 @@ export const createStrategySlice: SliceCreator<StrategySlice> = (set, get) => ({
   // Initial state
   categories: STRATEGY_CATEGORIES,
   expandedCategories: new Set(['channel']), // First category expanded by default
-  selectedStrategies: new Set(),
+  selectedStrategies: new Set(getAllStrategies().map((s) => s.id)), // All selected by default
   focusedCategoryIndex: 0,
   focusedStrategyIndex: -1, // -1 = on category header
   focus: 'selection',

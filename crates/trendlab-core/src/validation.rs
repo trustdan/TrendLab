@@ -48,11 +48,11 @@ pub struct WalkForwardConfig {
 impl Default for WalkForwardConfig {
     fn default() -> Self {
         Self {
-            in_sample_bars: 252,       // ~1 year daily
-            out_of_sample_bars: 63,    // ~3 months daily
-            gap_bars: 5,               // Small gap to avoid edge effects
-            step_bars: 63,             // Roll quarterly
-            min_folds: 3,              // At least 3 folds
+            in_sample_bars: 252,    // ~1 year daily
+            out_of_sample_bars: 63, // ~3 months daily
+            gap_bars: 5,            // Small gap to avoid edge effects
+            step_bars: 63,          // Roll quarterly
+            min_folds: 3,           // At least 3 folds
         }
     }
 }
@@ -82,6 +82,28 @@ impl WalkForwardConfig {
             gap_bars: 5,
             step_bars: 126,
             min_folds: 2,
+        }
+    }
+
+    /// Create a fast config suitable for YOLO mode.
+    ///
+    /// Uses smaller windows and fewer folds for speed while still providing
+    /// meaningful out-of-sample validation:
+    /// - 6-month IS (126 bars)
+    /// - 1-month OOS (21 bars)
+    /// - 3-bar gap
+    /// - ~2-month step (42 bars) for faster iteration
+    /// - Only 3 minimum folds required
+    ///
+    /// This config is designed to be fast enough to run on every config tested
+    /// in YOLO mode while still detecting egregious overfitting.
+    pub fn yolo_quick() -> Self {
+        Self {
+            in_sample_bars: 126,    // 6 months
+            out_of_sample_bars: 21, // 1 month
+            gap_bars: 3,            // Small gap
+            step_bars: 42,          // ~2 months (faster than half_year_monthly)
+            min_folds: 3,           // Minimum for statistical validity
         }
     }
 
@@ -555,7 +577,10 @@ mod tests {
 
         // Only 120 bars, need 155 for first fold
         let result = generate_walk_forward_folds(120, &config);
-        assert!(matches!(result, Err(ValidationError::InsufficientData { .. })));
+        assert!(matches!(
+            result,
+            Err(ValidationError::InsufficientData { .. })
+        ));
     }
 
     #[test]
@@ -691,10 +716,7 @@ mod tests {
 
     #[test]
     fn test_slice_by_index() {
-        let df = DataFrame::new(vec![
-            Series::new("x".into(), vec![1, 2, 3, 4, 5]).into(),
-        ])
-        .unwrap();
+        let df = DataFrame::new(vec![Series::new("x".into(), vec![1, 2, 3, 4, 5]).into()]).unwrap();
 
         let sliced = slice_by_index(&df, 1, 4).unwrap();
         assert_eq!(sliced.height(), 3);

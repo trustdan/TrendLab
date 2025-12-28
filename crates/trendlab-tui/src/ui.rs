@@ -414,14 +414,12 @@ fn draw_yolo_config_modal(f: &mut Frame, app: &App) {
     let focused = config.focused_field;
 
     let mut lines: Vec<Line> = vec![
-        Line::from(vec![
-            Span::styled(
-                "YOLO Mode Configuration",
-                Style::default()
-                    .fg(colors::MAGENTA)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
+        Line::from(vec![Span::styled(
+            "YOLO Mode Configuration",
+            Style::default()
+                .fg(colors::MAGENTA)
+                .add_modifier(Modifier::BOLD),
+        )]),
         Line::from(""),
     ];
 
@@ -485,7 +483,10 @@ fn draw_yolo_config_modal(f: &mut Frame, app: &App) {
     lines.push(Line::from(vec![
         Span::styled(random_marker, random_style),
         Span::styled("Randomize:  ", Style::default().fg(colors::FG_DARK)),
-        Span::styled(format!("{:.0}%", config.randomization_pct * 100.0), random_style),
+        Span::styled(
+            format!("{:.0}%", config.randomization_pct * 100.0),
+            random_style,
+        ),
     ]));
 
     // Sweep depth

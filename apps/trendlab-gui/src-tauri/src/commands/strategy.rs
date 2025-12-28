@@ -453,10 +453,7 @@ fn get_strategy_param_defs(strategy_id: &str) -> Vec<ParamDef> {
 /// Get default parameter values for a strategy.
 fn get_default_values(strategy_id: &str) -> StrategyParamValues {
     let defs = get_strategy_param_defs(strategy_id);
-    let values = defs
-        .into_iter()
-        .map(|d| (d.key, d.default))
-        .collect();
+    let values = defs.into_iter().map(|d| (d.key, d.default)).collect();
     StrategyParamValues { values }
 }
 

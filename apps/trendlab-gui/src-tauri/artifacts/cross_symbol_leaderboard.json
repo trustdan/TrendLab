@@ -1,0 +1,9 @@
+{
+  "entries": [],
+  "max_entries": 4,
+  "rank_by": "AvgSharpe",
+  "total_iterations": 1,
+  "started_at": "2025-12-28T18:25:18.703167800Z",
+  "last_updated": "2025-12-28T18:25:18.703167800Z",
+  "total_configs_tested": 950
+}

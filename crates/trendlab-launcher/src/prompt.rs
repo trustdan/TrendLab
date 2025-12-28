@@ -43,7 +43,11 @@ fn show_inner() -> io::Result<Option<LaunchMode>> {
     let mut stdout = io::stdout();
 
     // Clear screen
-    execute!(stdout, terminal::Clear(ClearType::All), cursor::MoveTo(0, 0))?;
+    execute!(
+        stdout,
+        terminal::Clear(ClearType::All),
+        cursor::MoveTo(0, 0)
+    )?;
 
     // Print banner
     execute!(stdout, SetForegroundColor(Color::Cyan))?;
@@ -112,7 +116,9 @@ fn show_inner() -> io::Result<Option<LaunchMode>> {
                             clear_and_reset(&mut stdout)?;
                             return Ok(Some(LaunchMode::Gui));
                         }
-                        KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                        KeyCode::Char('c')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
                             clear_and_reset(&mut stdout)?;
                             return Ok(None);
                         }
@@ -154,7 +160,11 @@ fn show_logging_prompt_inner() -> io::Result<bool> {
     let mut stdout = io::stdout();
 
     // Clear screen
-    execute!(stdout, terminal::Clear(ClearType::All), cursor::MoveTo(0, 0))?;
+    execute!(
+        stdout,
+        terminal::Clear(ClearType::All),
+        cursor::MoveTo(0, 0)
+    )?;
 
     // Print banner
     execute!(stdout, SetForegroundColor(Color::Cyan))?;
@@ -213,7 +223,9 @@ fn show_logging_prompt_inner() -> io::Result<bool> {
                             clear_and_reset(&mut stdout)?;
                             return Ok(true);
                         }
-                        KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                        KeyCode::Char('c')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
                             // Ctrl+C - treat as no logging
                             clear_and_reset(&mut stdout)?;
                             return Ok(false);

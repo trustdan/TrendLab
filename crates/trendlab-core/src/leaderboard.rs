@@ -8,7 +8,7 @@
 //! - Persistence to/from JSON
 
 use crate::metrics::Metrics;
-use crate::statistics::ConfidenceGrade;
+use crate::statistics::{benjamini_hochberg, ConfidenceGrade};
 use crate::sweep::{StrategyConfigId, StrategyTypeId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -102,6 +102,39 @@ pub struct LeaderboardEntry {
     /// None if not computed yet or insufficient data
     #[serde(default)]
     pub confidence_grade: Option<ConfidenceGrade>,
+
+    // =========================================================================
+    // Walk-Forward Validation Fields (Phase 1)
+    // =========================================================================
+    /// Walk-forward validation result for this config/symbol pair.
+    /// Contains fold-by-fold IS/OOS performance for robustness assessment.
+    #[serde(default)]
+    pub walk_forward_grade: Option<char>,
+
+    /// Mean out-of-sample Sharpe ratio across walk-forward folds.
+    /// This is the primary anti-overfit metric - should be positive and stable.
+    #[serde(default)]
+    pub mean_oos_sharpe: Option<f64>,
+
+    /// Sharpe degradation ratio: mean_oos_sharpe / mean_is_sharpe.
+    /// Values close to 1.0 indicate good generalization; < 0.5 suggests overfit.
+    #[serde(default)]
+    pub sharpe_degradation: Option<f64>,
+
+    /// Percentage of walk-forward folds with positive OOS Sharpe.
+    /// High values (>70%) indicate consistent performance across time periods.
+    #[serde(default)]
+    pub pct_profitable_folds: Option<f64>,
+
+    /// P-value from one-sided test of OOS Sharpe > 0.
+    /// Used as input for FDR correction across all tested configs.
+    #[serde(default)]
+    pub oos_p_value: Option<f64>,
+
+    /// FDR-adjusted p-value after Benjamini-Hochberg correction.
+    /// Accounts for multiple comparisons in YOLO mode.
+    #[serde(default)]
+    pub fdr_adjusted_p_value: Option<f64>,
 }
 
 impl LeaderboardEntry {
@@ -208,15 +241,16 @@ pub fn compute_cross_symbol_confidence_from_metrics(
     // Tail/robustness guardrails.
     // These thresholds are intentionally conservative: YOLO should avoid strategies
     // that have strong averages but catastrophic tails.
-    let min_symbol_sharpe = sharpes
-        .iter()
-        .copied()
-        .fold(f64::INFINITY, f64::min);
+    let min_symbol_sharpe = sharpes.iter().copied().fold(f64::INFINITY, f64::min);
     let positive_frac = sharpes.iter().filter(|&&x| x > 0.0).count() as f64 / sharpes.len() as f64;
 
     // Bootstrap the mean Sharpe across symbols.
     let cfg = BootstrapConfig::quick();
-    let result = match bootstrap_ci(&sharpes, |xs| xs.iter().sum::<f64>() / xs.len() as f64, &cfg) {
+    let result = match bootstrap_ci(
+        &sharpes,
+        |xs| xs.iter().sum::<f64>() / xs.len() as f64,
+        &cfg,
+    ) {
         Ok(r) => r,
         Err(_) => return ConfidenceGrade::Insufficient,
     };
@@ -267,7 +301,10 @@ pub fn compute_cross_sector_confidence_from_metrics(
         let Some(sector_id) = per_symbol_sectors.get(sym) else {
             continue;
         };
-        by_sector.entry(sector_id.clone()).or_default().push(metrics.sharpe);
+        by_sector
+            .entry(sector_id.clone())
+            .or_default()
+            .push(metrics.sharpe);
     }
 
     // Need enough distinct sectors to talk about "cross-sector" robustness.
@@ -289,17 +326,18 @@ pub fn compute_cross_sector_confidence_from_metrics(
         return None;
     }
 
-    let worst_sector_mean = sector_means
-        .iter()
-        .copied()
-        .fold(f64::INFINITY, f64::min);
+    let worst_sector_mean = sector_means.iter().copied().fold(f64::INFINITY, f64::min);
     let positive_sectors = sector_means.iter().filter(|&&x| x > 0.0).count();
     let positive_frac = positive_sectors as f64 / sector_means.len() as f64;
 
     // Bootstrap the mean across sectors (equal-weighted by sector).
     let cfg = BootstrapConfig::quick();
-    let result = bootstrap_ci(&sector_means, |xs| xs.iter().sum::<f64>() / xs.len() as f64, &cfg)
-        .ok()?;
+    let result = bootstrap_ci(
+        &sector_means,
+        |xs| xs.iter().sum::<f64>() / xs.len() as f64,
+        &cfg,
+    )
+    .ok()?;
 
     // Sector-aware grading:
     // - High: significantly strong, tight, and no sector is outright bad
@@ -504,8 +542,7 @@ impl Leaderboard {
     /// Load leaderboard from a JSON file.
     pub fn load(path: &Path) -> io::Result<Self> {
         let content = std::fs::read_to_string(path)?;
-        serde_json::from_str(&content)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        serde_json::from_str(&content).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     /// Load leaderboard from file, or create new if file doesn't exist.
@@ -530,6 +567,8 @@ pub enum CrossSymbolRankMetric {
     GeoMeanCagr,
     /// Hit rate: fraction of symbols where strategy was profitable
     HitRate,
+    /// Mean out-of-sample Sharpe from walk-forward validation (anti-overfit ranking)
+    MeanOosSharpe,
 }
 
 /// Aggregated metrics computed across multiple symbols.
@@ -592,10 +631,7 @@ impl AggregatedMetrics {
 
         // Geometric mean of (1 + CAGR): product^(1/n) - 1
         // Use log-sum to avoid overflow
-        let log_sum: f64 = cagrs
-            .iter()
-            .map(|&c| (1.0 + c).max(1e-10).ln())
-            .sum();
+        let log_sum: f64 = cagrs.iter().map(|&c| (1.0 + c).max(1e-10).ln()).sum();
         let geo_mean_cagr = (log_sum / n as f64).exp() - 1.0;
 
         let worst_max_drawdown = drawdowns.iter().cloned().fold(0.0, f64::max);
@@ -625,6 +661,9 @@ impl AggregatedMetrics {
             CrossSymbolRankMetric::MinSharpe => self.min_sharpe,
             CrossSymbolRankMetric::GeoMeanCagr => self.geo_mean_cagr,
             CrossSymbolRankMetric::HitRate => self.hit_rate,
+            // MeanOosSharpe falls back to avg_sharpe for AggregatedMetrics
+            // (actual OOS data is in AggregatedConfigResult)
+            CrossSymbolRankMetric::MeanOosSharpe => self.avg_sharpe,
         }
     }
 }
@@ -675,6 +714,42 @@ pub struct AggregatedConfigResult {
     /// None if not computed yet or insufficient data
     #[serde(default)]
     pub confidence_grade: Option<ConfidenceGrade>,
+
+    // =========================================================================
+    // Walk-Forward Validation Fields (Phase 1)
+    // =========================================================================
+    /// Walk-forward grade (A-F) aggregated across symbols.
+    /// A/B = robust, C = marginal, D/F = likely overfit.
+    #[serde(default)]
+    pub walk_forward_grade: Option<char>,
+
+    /// Mean out-of-sample Sharpe ratio across all symbols and folds.
+    /// This is the primary anti-overfit ranking metric.
+    #[serde(default)]
+    pub mean_oos_sharpe: Option<f64>,
+
+    /// Standard deviation of OOS Sharpe across folds.
+    /// Lower values indicate more consistent performance.
+    #[serde(default)]
+    pub std_oos_sharpe: Option<f64>,
+
+    /// Sharpe degradation ratio: mean_oos / mean_is.
+    /// Values close to 1.0 indicate good generalization.
+    #[serde(default)]
+    pub sharpe_degradation: Option<f64>,
+
+    /// Percentage of folds with positive OOS Sharpe (aggregated across symbols).
+    /// High values (>70%) indicate robustness across time.
+    #[serde(default)]
+    pub pct_profitable_folds: Option<f64>,
+
+    /// P-value from one-sided test of mean OOS Sharpe > 0.
+    #[serde(default)]
+    pub oos_p_value: Option<f64>,
+
+    /// FDR-adjusted p-value after Benjamini-Hochberg correction.
+    #[serde(default)]
+    pub fdr_adjusted_p_value: Option<f64>,
 }
 
 impl AggregatedConfigResult {
@@ -695,6 +770,23 @@ impl AggregatedConfigResult {
     /// Returns None if there's insufficient data for reliable analysis.
     pub fn compute_confidence_grade(&self) -> Option<ConfidenceGrade> {
         compute_confidence_from_equity(&self.combined_equity_curve)
+    }
+
+    /// Get the ranking value for a given metric.
+    ///
+    /// This handles both traditional metrics (from AggregatedMetrics) and
+    /// walk-forward metrics (from the entry itself).
+    pub fn rank_value(&self, metric: CrossSymbolRankMetric) -> f64 {
+        match metric {
+            CrossSymbolRankMetric::AvgSharpe => self.aggregate_metrics.avg_sharpe,
+            CrossSymbolRankMetric::MinSharpe => self.aggregate_metrics.min_sharpe,
+            CrossSymbolRankMetric::GeoMeanCagr => self.aggregate_metrics.geo_mean_cagr,
+            CrossSymbolRankMetric::HitRate => self.aggregate_metrics.hit_rate,
+            CrossSymbolRankMetric::MeanOosSharpe => {
+                // Use OOS Sharpe if available, otherwise fall back to avg_sharpe
+                self.mean_oos_sharpe.unwrap_or(f64::NEG_INFINITY)
+            }
+        }
     }
 }
 
@@ -890,13 +982,77 @@ impl CrossSymbolLeaderboard {
     /// Load cross-symbol leaderboard from a JSON file.
     pub fn load(path: &Path) -> io::Result<Self> {
         let content = std::fs::read_to_string(path)?;
-        serde_json::from_str(&content)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        serde_json::from_str(&content).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     /// Load from file or create new if file doesn't exist.
     pub fn load_or_new(path: &Path, max_entries: usize, rank_by: CrossSymbolRankMetric) -> Self {
         Self::load(path).unwrap_or_else(|_| Self::new(max_entries, rank_by))
+    }
+
+    // =========================================================================
+    // FDR Correction
+    // =========================================================================
+
+    /// Apply Benjamini-Hochberg FDR correction to all entries with p-values.
+    ///
+    /// This method:
+    /// 1. Collects OOS p-values from entries that have them
+    /// 2. Applies Benjamini-Hochberg FDR correction
+    /// 3. Updates `fdr_adjusted_p_value` on each entry
+    /// 4. Optionally downgrades confidence grades for non-significant results
+    ///
+    /// # Arguments
+    /// * `alpha` - Significance level (typically 0.05)
+    /// * `downgrade_confidence` - If true, downgrade confidence grade for entries
+    ///   where adjusted p-value >= alpha
+    ///
+    /// # Returns
+    /// Number of entries that remain significant after FDR correction
+    pub fn apply_fdr_correction(&mut self, alpha: f64, downgrade_confidence: bool) -> usize {
+        // Collect indices and p-values for entries that have OOS p-values
+        let entries_with_pvals: Vec<(usize, f64)> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(i, entry)| entry.oos_p_value.map(|p| (i, p)))
+            .collect();
+
+        if entries_with_pvals.is_empty() {
+            return 0;
+        }
+
+        let p_values: Vec<f64> = entries_with_pvals.iter().map(|(_, p)| *p).collect();
+
+        // Apply Benjamini-Hochberg correction
+        let fdr_result = match benjamini_hochberg(&p_values, alpha) {
+            Ok(result) => result,
+            Err(_) => return 0, // Should not happen if p_values is non-empty
+        };
+
+        let mut n_significant = 0;
+
+        // Update entries with adjusted p-values
+        for (local_idx, (entry_idx, _)) in entries_with_pvals.iter().enumerate() {
+            let entry = &mut self.entries[*entry_idx];
+            let adjusted_p = fdr_result.adjusted_p_values[local_idx];
+            let is_significant = fdr_result.rejections[local_idx];
+
+            entry.fdr_adjusted_p_value = Some(adjusted_p);
+
+            if is_significant {
+                n_significant += 1;
+            } else if downgrade_confidence {
+                // Downgrade confidence grade for non-significant results
+                entry.confidence_grade = match entry.confidence_grade {
+                    Some(ConfidenceGrade::High) => Some(ConfidenceGrade::Medium),
+                    Some(ConfidenceGrade::Medium) => Some(ConfidenceGrade::Low),
+                    other => other, // Low stays Low, None stays None
+                };
+            }
+        }
+
+        n_significant
     }
 }
 
@@ -929,6 +1085,13 @@ mod tests {
             iteration,
             session_id: None,
             confidence_grade: None,
+            // Walk-forward / FDR fields (None for basic tests)
+            walk_forward_grade: None,
+            mean_oos_sharpe: None,
+            sharpe_degradation: None,
+            pct_profitable_folds: None,
+            oos_p_value: None,
+            fdr_adjusted_p_value: None,
         }
     }
 
@@ -1036,5 +1199,95 @@ mod tests {
 
         // Cleanup
         let _ = std::fs::remove_file(&path);
+    }
+
+    fn make_cross_symbol_entry(sharpe: f64, oos_p_value: Option<f64>) -> AggregatedConfigResult {
+        AggregatedConfigResult {
+            rank: 0,
+            strategy_type: StrategyTypeId::Donchian,
+            config_id: StrategyConfigId::Donchian {
+                entry_lookback: 20,
+                exit_lookback: 10,
+            },
+            symbols: vec!["AAPL".to_string(), "MSFT".to_string()],
+            per_symbol_sectors: HashMap::new(),
+            per_symbol_metrics: HashMap::new(),
+            aggregate_metrics: AggregatedMetrics {
+                avg_sharpe: sharpe,
+                min_sharpe: sharpe - 0.5,
+                max_sharpe: sharpe + 0.5,
+                geo_mean_cagr: 0.15,
+                avg_cagr: 0.15,
+                worst_max_drawdown: 0.15,
+                avg_max_drawdown: 0.10,
+                profitable_count: 3,
+                total_symbols: 5,
+                hit_rate: 0.6,
+                avg_trades: 50.0,
+            },
+            combined_equity_curve: vec![100.0, 110.0, 120.0],
+            dates: vec![],
+            discovered_at: Utc::now(),
+            iteration: 1,
+            session_id: None,
+            confidence_grade: Some(ConfidenceGrade::High),
+            // Walk-forward fields
+            walk_forward_grade: Some('B'),
+            mean_oos_sharpe: Some(sharpe * 0.8),
+            std_oos_sharpe: Some(0.3),
+            sharpe_degradation: Some(0.2),
+            pct_profitable_folds: Some(0.75),
+            oos_p_value,
+            fdr_adjusted_p_value: None,
+        }
+    }
+
+    #[test]
+    fn test_apply_fdr_correction() {
+        let mut lb = CrossSymbolLeaderboard::new(10, CrossSymbolRankMetric::AvgSharpe);
+
+        // Add entries with varying p-values
+        // Entry with significant p-value (should remain significant after FDR)
+        let mut e1 = make_cross_symbol_entry(2.0, Some(0.001));
+        e1.confidence_grade = Some(ConfidenceGrade::High);
+        lb.entries.push(e1);
+
+        // Entry with marginal p-value (should remain significant after FDR at 0.05)
+        let mut e2 = make_cross_symbol_entry(1.8, Some(0.02));
+        e2.confidence_grade = Some(ConfidenceGrade::High);
+        lb.entries.push(e2);
+
+        // Entry with non-significant p-value (should be downgraded)
+        let mut e3 = make_cross_symbol_entry(1.5, Some(0.3));
+        e3.confidence_grade = Some(ConfidenceGrade::High);
+        lb.entries.push(e3);
+
+        // Entry without p-value (should be unchanged)
+        let mut e4 = make_cross_symbol_entry(1.2, None);
+        e4.confidence_grade = Some(ConfidenceGrade::High);
+        lb.entries.push(e4);
+
+        // Apply FDR correction with confidence downgrade
+        let n_significant = lb.apply_fdr_correction(0.05, true);
+
+        // Should have some significant results
+        assert!(n_significant >= 1, "Expected at least 1 significant result");
+
+        // Entry with 0.001 p-value should still be significant
+        assert!(lb.entries[0].fdr_adjusted_p_value.is_some());
+        assert!(lb.entries[0].fdr_adjusted_p_value.unwrap() < 0.05);
+        assert_eq!(lb.entries[0].confidence_grade, Some(ConfidenceGrade::High));
+
+        // Entry with 0.3 p-value should be downgraded (High -> Medium)
+        assert!(lb.entries[2].fdr_adjusted_p_value.is_some());
+        assert!(lb.entries[2].fdr_adjusted_p_value.unwrap() >= 0.05);
+        assert_eq!(
+            lb.entries[2].confidence_grade,
+            Some(ConfidenceGrade::Medium)
+        );
+
+        // Entry without p-value should be unchanged
+        assert!(lb.entries[3].fdr_adjusted_p_value.is_none());
+        assert_eq!(lb.entries[3].confidence_grade, Some(ConfidenceGrade::High));
     }
 }

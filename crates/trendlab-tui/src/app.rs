@@ -2044,11 +2044,14 @@ impl App {
             auto: AutoRunState::default(),
             yolo: {
                 // Load existing leaderboards on startup for persistence
-                let all_time_per_symbol = Leaderboard::load(std::path::Path::new("artifacts/leaderboard.json"))
-                    .ok()
-                    .unwrap_or_else(|| Leaderboard::new(4));
-                let all_time_cross_symbol = CrossSymbolLeaderboard::load(std::path::Path::new("artifacts/cross_symbol_leaderboard.json"))
-                    .ok();
+                let all_time_per_symbol =
+                    Leaderboard::load(std::path::Path::new("artifacts/leaderboard.json"))
+                        .ok()
+                        .unwrap_or_else(|| Leaderboard::new(4));
+                let all_time_cross_symbol = CrossSymbolLeaderboard::load(std::path::Path::new(
+                    "artifacts/cross_symbol_leaderboard.json",
+                ))
+                .ok();
                 YoloState {
                     // Session leaderboards start fresh each launch
                     session_leaderboard: Leaderboard::new(10),
@@ -2743,12 +2746,8 @@ impl App {
                             .map(|p| p.equity)
                             .collect();
                         // Extract dates from backtest result
-                        self.chart.equity_dates = result
-                            .backtest_result
-                            .equity
-                            .iter()
-                            .map(|p| p.ts)
-                            .collect();
+                        self.chart.equity_dates =
+                            result.backtest_result.equity.iter().map(|p| p.ts).collect();
                         // Calculate drawdown curve
                         self.chart.drawdown_curve = calculate_drawdown(&self.chart.equity_curve);
                         // Set winning config for Pine export display
@@ -3148,14 +3147,16 @@ impl App {
                                 bars: Arc::new(bars.clone()),
                                 config: trendlab_core::AnalysisConfig::default(),
                             });
-                            self.status_message = format!("Computing analysis for {}...", analysis_id);
+                            self.status_message =
+                                format!("Computing analysis for {}...", analysis_id);
                         } else {
                             self.status_message =
                                 "Cannot compute analysis: no bars loaded for symbol".to_string();
                             self.results.show_analysis = false;
                         }
                     } else {
-                        self.status_message = "Cannot compute analysis: no symbol selected".to_string();
+                        self.status_message =
+                            "Cannot compute analysis: no symbol selected".to_string();
                         self.results.show_analysis = false;
                     }
                 }
@@ -3512,14 +3513,20 @@ impl App {
         // Try to load existing leaderboards
         let existing_per_symbol_leaderboard =
             Leaderboard::load(std::path::Path::new("artifacts/leaderboard.json")).ok();
-        let existing_cross_symbol_leaderboard =
-            CrossSymbolLeaderboard::load(std::path::Path::new("artifacts/cross_symbol_leaderboard.json")).ok();
+        let existing_cross_symbol_leaderboard = CrossSymbolLeaderboard::load(std::path::Path::new(
+            "artifacts/cross_symbol_leaderboard.json",
+        ))
+        .ok();
 
         // Provide symbol -> sector_id mapping so YOLO can do sector-aware validation.
         let sector_lookup = self.data.universe.build_sector_id_lookup();
         let symbol_sector_ids: HashMap<String, String> = selected
             .iter()
-            .filter_map(|sym| sector_lookup.get(sym).map(|sector| (sym.clone(), sector.clone())))
+            .filter_map(|sym| {
+                sector_lookup
+                    .get(sym)
+                    .map(|sector| (sym.clone(), sector.clone()))
+            })
             .collect();
 
         let cmd = WorkerCommand::StartYoloMode {

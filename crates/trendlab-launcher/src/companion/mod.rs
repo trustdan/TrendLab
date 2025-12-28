@@ -113,9 +113,7 @@ fn is_process_running(pid: u32) -> bool {
     #[cfg(unix)]
     {
         // On Unix, we can use kill with signal 0 to check if process exists
-        unsafe {
-            libc::kill(pid as i32, 0) == 0
-        }
+        unsafe { libc::kill(pid as i32, 0) == 0 }
     }
 
     #[cfg(windows)]
@@ -132,8 +130,8 @@ fn is_process_running(pid: u32) -> bool {
             }
 
             let mut exit_code: u32 = 0;
-            let result = GetExitCodeProcess(handle, &mut exit_code) != 0
-                && exit_code == STILL_ACTIVE as u32;
+            let result =
+                GetExitCodeProcess(handle, &mut exit_code) != 0 && exit_code == STILL_ACTIVE as u32;
             CloseHandle(handle);
             result
         }

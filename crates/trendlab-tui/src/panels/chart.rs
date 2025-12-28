@@ -83,7 +83,13 @@ fn date_format_for_span(start: &DateTime<Utc>, end: &DateTime<Utc>) -> &'static 
 /// Generate X-axis date labels from dates vector (5 labels across the span)
 fn generate_date_labels(dates: &[DateTime<Utc>]) -> Vec<Span<'static>> {
     if dates.is_empty() {
-        return vec![Span::raw(""), Span::raw(""), Span::raw(""), Span::raw(""), Span::raw("")];
+        return vec![
+            Span::raw(""),
+            Span::raw(""),
+            Span::raw(""),
+            Span::raw(""),
+            Span::raw(""),
+        ];
     }
 
     let format = date_format_for_span(dates.first().unwrap(), dates.last().unwrap());
@@ -211,9 +217,7 @@ fn draw_single_equity_chart(f: &mut Frame, app: &App, area: Rect, is_active: boo
     let end_idx = (start_idx + visible_count).min(total_bars);
 
     // Prepare visible equity data (re-indexed from 0)
-    let equity_data: Vec<(f64, f64)> = app
-        .chart
-        .equity_curve[start_idx..end_idx]
+    let equity_data: Vec<(f64, f64)> = app.chart.equity_curve[start_idx..end_idx]
         .iter()
         .enumerate()
         .map(|(i, v)| (i as f64, *v))
@@ -247,8 +251,7 @@ fn draw_single_equity_chart(f: &mut Frame, app: &App, area: Rect, is_active: boo
         if app.chart.show_drawdown && app.chart.drawdown_curve.len() > end_idx {
             // Scale drawdown to fit in the same chart (inverted, as percentage)
             let dd_scale = (y_max - y_min) / 50.0; // Max 50% drawdown fills chart
-            app.chart
-                .drawdown_curve[start_idx..end_idx]
+            app.chart.drawdown_curve[start_idx..end_idx]
                 .iter()
                 .enumerate()
                 .map(|(i, dd)| (i as f64, y_max + dd * dd_scale))
@@ -280,7 +283,7 @@ fn draw_single_equity_chart(f: &mut Frame, app: &App, area: Rect, is_active: boo
 
     // Use dates if available (sliced to visible range), otherwise fall back to day indices
     let x_labels: Vec<Span> = if app.chart.equity_dates.len() >= end_idx {
-        generate_date_labels(&app.chart.equity_dates[start_idx..end_idx].to_vec())
+        generate_date_labels(&app.chart.equity_dates[start_idx..end_idx])
     } else if !app.chart.equity_dates.is_empty() {
         // Fallback: use available dates
         generate_date_labels(&app.chart.equity_dates)
@@ -407,7 +410,7 @@ fn draw_multi_ticker_chart(f: &mut Frame, app: &App, area: Rect, is_active: bool
         .ticker_curves
         .first()
         .filter(|c| c.dates.len() >= end_idx)
-        .map(|c| generate_date_labels(&c.dates[start_idx..end_idx].to_vec()))
+        .map(|c| generate_date_labels(&c.dates[start_idx..end_idx]))
         .or_else(|| {
             app.chart
                 .ticker_curves
@@ -465,9 +468,7 @@ fn draw_portfolio_chart(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
     let end_idx = (start_idx + visible_count).min(total_bars);
 
     // Prepare visible portfolio data (re-indexed from 0)
-    let portfolio_data: Vec<(f64, f64)> = app
-        .chart
-        .portfolio_curve[start_idx..end_idx]
+    let portfolio_data: Vec<(f64, f64)> = app.chart.portfolio_curve[start_idx..end_idx]
         .iter()
         .enumerate()
         .map(|(i, v)| (i as f64, *v))
@@ -501,7 +502,7 @@ fn draw_portfolio_chart(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
         .ticker_curves
         .first()
         .filter(|c| c.dates.len() >= end_idx)
-        .map(|c| generate_date_labels(&c.dates[start_idx..end_idx].to_vec()))
+        .map(|c| generate_date_labels(&c.dates[start_idx..end_idx]))
         .or_else(|| {
             app.chart
                 .ticker_curves
@@ -639,8 +640,8 @@ fn draw_strategy_comparison_chart(f: &mut Frame, app: &App, area: Rect, is_activ
         .split(area);
 
     // Render legend with strategy names and Sharpe ratios
-    let legend = Paragraph::new(strategy_legend_line(&top_curves))
-        .style(Style::default().bg(colors::BG));
+    let legend =
+        Paragraph::new(strategy_legend_line(&top_curves)).style(Style::default().bg(colors::BG));
     f.render_widget(legend, chunks[0]);
 
     // Prepare curve data for top strategies only (sliced to visible range)
@@ -684,7 +685,11 @@ fn draw_strategy_comparison_chart(f: &mut Frame, app: &App, area: Rect, is_activ
         .map(|(data, curve)| {
             let color = strategy_color(curve.strategy_type);
             // Concise name with Sharpe for chart legend
-            let name = format!("{} ({:.2})", curve.strategy_type.name(), curve.metrics.sharpe);
+            let name = format!(
+                "{} ({:.2})",
+                curve.strategy_type.name(),
+                curve.metrics.sharpe
+            );
             Dataset::default()
                 .name(name)
                 .marker(Marker::Braille)
@@ -698,7 +703,7 @@ fn draw_strategy_comparison_chart(f: &mut Frame, app: &App, area: Rect, is_activ
     let x_labels: Vec<Span> = top_curves
         .first()
         .filter(|c| c.dates.len() >= end_idx)
-        .map(|c| generate_date_labels(&c.dates[start_idx..end_idx].to_vec()))
+        .map(|c| generate_date_labels(&c.dates[start_idx..end_idx]))
         .or_else(|| {
             top_curves
                 .first()
@@ -831,7 +836,7 @@ fn draw_per_ticker_best_chart(f: &mut Frame, app: &App, area: Rect, is_active: b
         .ticker_best_strategies
         .first()
         .filter(|t| t.dates.len() >= end_idx)
-        .map(|t| generate_date_labels(&t.dates[start_idx..end_idx].to_vec()))
+        .map(|t| generate_date_labels(&t.dates[start_idx..end_idx]))
         .or_else(|| {
             app.chart
                 .ticker_best_strategies

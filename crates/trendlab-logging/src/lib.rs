@@ -45,10 +45,16 @@ pub struct LogConfig {
 
 impl Default for LogConfig {
     fn default() -> Self {
+        // Use absolute path based on current working directory
+        let log_dir = std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("data")
+            .join("logs");
+
         Self {
             enabled: false,
             filter: "info,trendlab=debug,polars=warn".to_string(),
-            log_dir: PathBuf::from("data/logs"),
+            log_dir,
             rotate_daily: true,
         }
     }
@@ -78,9 +84,24 @@ impl LogConfig {
         let filter = std::env::var("TRENDLAB_LOG_FILTER")
             .unwrap_or_else(|_| "info,trendlab=debug".to_string());
 
+        // Use absolute path for log directory
         let log_dir = std::env::var("TRENDLAB_LOG_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("data/logs"));
+            .unwrap_or_else(|_| {
+                std::env::current_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join("data")
+                    .join("logs")
+            });
+
+        // Ensure the path is absolute
+        let log_dir = if log_dir.is_absolute() {
+            log_dir
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(&log_dir)
+        };
 
         Self {
             enabled,
@@ -125,9 +146,19 @@ impl LogGuard {
 
 /// Create a file appender with optional daily rotation.
 fn create_file_appender(config: &LogConfig) -> RollingFileAppender {
+    // Debug: Show log path being used
+    eprintln!(
+        "[trendlab-logging] Initializing file logging at: {}",
+        config.log_dir.display()
+    );
+
     // Ensure log directory exists
-    if let Err(e) = std::fs::create_dir_all(&config.log_dir) {
-        eprintln!("Warning: Failed to create log directory: {}", e);
+    match std::fs::create_dir_all(&config.log_dir) {
+        Ok(_) => eprintln!("[trendlab-logging] Log directory created/verified"),
+        Err(e) => eprintln!(
+            "[trendlab-logging] Warning: Failed to create log directory: {}",
+            e
+        ),
     }
 
     let rotation = if config.rotate_daily {
@@ -269,7 +300,12 @@ mod tests {
         let config = LogConfig::default();
         assert!(!config.enabled);
         assert_eq!(config.filter, "info,trendlab=debug,polars=warn");
-        assert_eq!(config.log_dir, PathBuf::from("data/logs"));
+        // log_dir is an absolute path based on current_dir, verify it ends with data/logs
+        assert!(
+            config.log_dir.ends_with("data/logs"),
+            "log_dir should end with data/logs, got: {:?}",
+            config.log_dir
+        );
         assert!(config.rotate_daily);
     }
 

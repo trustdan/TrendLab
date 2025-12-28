@@ -91,7 +91,7 @@ mod tests {
 
         // Should be localhost with a non-zero port
         assert!(addr.starts_with("127.0.0.1:"));
-        let port: u16 = addr.split(':').last().unwrap().parse().unwrap();
+        let port: u16 = addr.split(':').next_back().unwrap().parse().unwrap();
         assert!(port > 0);
     }
 }

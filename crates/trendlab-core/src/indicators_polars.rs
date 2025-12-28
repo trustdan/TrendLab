@@ -1143,7 +1143,8 @@ pub fn cci_expr(period: usize) -> Expr {
 ///
 /// Adds columns: typical_price, cci
 pub fn apply_cci_exprs(lf: LazyFrame, period: usize) -> LazyFrame {
-    lf.with_column(typical_price_expr()).with_column(cci_expr(period))
+    lf.with_column(typical_price_expr())
+        .with_column(cci_expr(period))
 }
 
 /// ROC (Rate of Change) expression.
@@ -1239,13 +1240,9 @@ pub fn apply_ichimoku_exprs(
         .with_columns([cloud_top, cloud_bottom])
         .with_columns([
             // is_above_cloud: close > cloud_top
-            col("close")
-                .gt(col("cloud_top"))
-                .alias("is_above_cloud"),
+            col("close").gt(col("cloud_top")).alias("is_above_cloud"),
             // is_below_cloud: close < cloud_bottom
-            col("close")
-                .lt(col("cloud_bottom"))
-                .alias("is_below_cloud"),
+            col("close").lt(col("cloud_bottom")).alias("is_below_cloud"),
         ])
         .with_column(
             // is_inside_cloud: not above and not below

@@ -190,10 +190,7 @@ pub fn cluster_strategies(
     })?;
 
     // Convert centers to Vec<Vec<f64>>
-    let centers_vec: Vec<Vec<f64>> = centers
-        .outer_iter()
-        .map(|row| row.to_vec())
-        .collect();
+    let centers_vec: Vec<Vec<f64>> = centers.outer_iter().map(|row| row.to_vec()).collect();
 
     Ok(ClusteringResult {
         k: config.k,
@@ -343,8 +340,8 @@ pub fn cluster_summary(
     let mut agg_exprs: Vec<Expr> = vec![len().alias("n_members")];
 
     for metric in metrics {
-        agg_exprs.push(col(*metric).mean().alias(&format!("avg_{}", metric)));
-        agg_exprs.push(col(*metric).std(0).alias(&format!("std_{}", metric)));
+        agg_exprs.push(col(*metric).mean().alias(format!("avg_{}", metric)));
+        agg_exprs.push(col(*metric).std(0).alias(format!("std_{}", metric)));
     }
 
     df_with_clusters
@@ -402,7 +399,8 @@ pub fn cluster_representatives(
             }
         }
 
-        let id = ids.str()
+        let id = ids
+            .str()
             .map_err(|_| ClusteringError::MissingColumn(format!("{} is not string", id_column)))?
             .get(best_idx)
             .unwrap_or("unknown")
@@ -424,7 +422,11 @@ mod tests {
             // Two clusters: high performers (c1, c2, c3) and low performers (c4, c5, c6)
             Series::new("sharpe".into(), vec![1.5, 1.4, 1.6, 0.3, 0.4, 0.2]).into(),
             Series::new("cagr".into(), vec![0.15, 0.14, 0.16, 0.03, 0.04, 0.02]).into(),
-            Series::new("max_drawdown".into(), vec![0.10, 0.11, 0.09, 0.30, 0.28, 0.32]).into(),
+            Series::new(
+                "max_drawdown".into(),
+                vec![0.10, 0.11, 0.09, 0.30, 0.28, 0.32],
+            )
+            .into(),
             Series::new("sortino".into(), vec![2.0, 1.9, 2.1, 0.4, 0.5, 0.3]).into(),
             Series::new("calmar".into(), vec![1.5, 1.3, 1.8, 0.1, 0.14, 0.06]).into(),
             Series::new("win_rate".into(), vec![0.55, 0.54, 0.56, 0.42, 0.43, 0.41]).into(),

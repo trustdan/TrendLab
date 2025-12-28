@@ -77,6 +77,51 @@ export function Leaderboard({ isActive }: LeaderboardProps) {
     }
   };
 
+  const getWfGradeBadge = (grade?: string | null) => {
+    if (!grade) return { text: '-', className: 'wf-none' };
+    const g = grade.toUpperCase();
+    switch (g) {
+      case 'A':
+        return { text: 'A', className: 'wf-a' };
+      case 'B':
+        return { text: 'B', className: 'wf-b' };
+      case 'C':
+        return { text: 'C', className: 'wf-c' };
+      case 'D':
+        return { text: 'D', className: 'wf-d' };
+      case 'F':
+        return { text: 'F', className: 'wf-f' };
+      default:
+        return { text: g, className: 'wf-none' };
+    }
+  };
+
+  const formatOosSharpe = (val?: number | null) => {
+    if (val === undefined || val === null) return '-';
+    return val.toFixed(2);
+  };
+
+  const getOosSharpeClass = (val?: number | null) => {
+    if (val === undefined || val === null) return '';
+    if (val > 0.5) return 'oos-excellent';
+    if (val > 0) return 'oos-good';
+    return 'oos-bad';
+  };
+
+  const formatFdrPValue = (val?: number | null) => {
+    if (val === undefined || val === null) return '-';
+    if (val < 0.01) return `**${val.toFixed(3)}`;
+    if (val < 0.05) return `*${val.toFixed(3)}`;
+    return val.toFixed(3);
+  };
+
+  const getFdrClass = (val?: number | null) => {
+    if (val === undefined || val === null) return '';
+    if (val < 0.01) return 'fdr-highly-sig';
+    if (val < 0.05) return 'fdr-sig';
+    return 'fdr-not-sig';
+  };
+
   const scopeLabel = leaderboardScope === 'session' ? 'Session' : 'All-Time';
   const ScopeIcon = leaderboardScope === 'session' ? VscWatch : VscHistory;
 
@@ -135,11 +180,13 @@ export function Leaderboard({ isActive }: LeaderboardProps) {
                 <th>#</th>
                 <th>Strategy</th>
                 <th>Config</th>
-                <th>Symbols</th>
+                <th>Sym</th>
                 <th>Avg Sharpe</th>
-                <th>Min Sharpe</th>
+                <th>WF</th>
+                <th>OOS Sharpe</th>
+                <th>FDR p</th>
                 <th>CAGR</th>
-                <th>Hit Rate</th>
+                <th>Hit</th>
                 <th>Conf</th>
               </tr>
             </thead>
@@ -163,8 +210,14 @@ export function Leaderboard({ isActive }: LeaderboardProps) {
                   <td className="metric-cell positive">
                     {formatRatio(entry.aggregateMetrics.avgSharpe)}
                   </td>
-                  <td className="metric-cell">
-                    {formatRatio(entry.aggregateMetrics.minSharpe)}
+                  <td className={`wf-cell ${getWfGradeBadge(entry.walkForwardGrade).className}`}>
+                    {getWfGradeBadge(entry.walkForwardGrade).text}
+                  </td>
+                  <td className={`metric-cell ${getOosSharpeClass(entry.meanOosSharpe)}`}>
+                    {formatOosSharpe(entry.meanOosSharpe)}
+                  </td>
+                  <td className={`fdr-cell ${getFdrClass(entry.fdrAdjustedPValue)}`}>
+                    {formatFdrPValue(entry.fdrAdjustedPValue)}
                   </td>
                   <td className="metric-cell positive">
                     {formatPct(entry.aggregateMetrics.geoMeanCagr)}
@@ -192,10 +245,12 @@ export function Leaderboard({ isActive }: LeaderboardProps) {
                 <th>Strategy</th>
                 <th>Config</th>
                 <th>Sharpe</th>
+                <th>WF</th>
+                <th>OOS Sharpe</th>
+                <th>FDR p</th>
                 <th>CAGR</th>
                 <th>Max DD</th>
                 <th>Conf</th>
-                <th>Iter</th>
               </tr>
             </thead>
             <tbody>
@@ -218,6 +273,15 @@ export function Leaderboard({ isActive }: LeaderboardProps) {
                   <td className="metric-cell positive">
                     {formatRatio(entry.sharpe)}
                   </td>
+                  <td className={`wf-cell ${getWfGradeBadge(entry.walkForwardGrade).className}`}>
+                    {getWfGradeBadge(entry.walkForwardGrade).text}
+                  </td>
+                  <td className={`metric-cell ${getOosSharpeClass(entry.meanOosSharpe)}`}>
+                    {formatOosSharpe(entry.meanOosSharpe)}
+                  </td>
+                  <td className={`fdr-cell ${getFdrClass(entry.fdrAdjustedPValue)}`}>
+                    {formatFdrPValue(entry.fdrAdjustedPValue)}
+                  </td>
                   <td className="metric-cell positive">
                     {formatPct(entry.cagr)}
                   </td>
@@ -227,7 +291,6 @@ export function Leaderboard({ isActive }: LeaderboardProps) {
                   <td className={`conf-cell ${getConfidenceBadge(entry.confidenceGrade).className}`}>
                     {getConfidenceBadge(entry.confidenceGrade).text}
                   </td>
-                  <td className="iteration-cell">{entry.iteration}</td>
                 </tr>
               ))}
             </tbody>
@@ -507,6 +570,70 @@ export function Leaderboard({ isActive }: LeaderboardProps) {
         }
 
         .conf-cell.conf-insufficient {
+          color: var(--muted);
+        }
+
+        /* Walk-Forward Grade Styles */
+        .wf-cell {
+          text-align: center;
+          font-weight: 700;
+          font-size: var(--font-size-sm);
+        }
+
+        .wf-cell.wf-a {
+          color: #22c55e; /* bright green */
+        }
+
+        .wf-cell.wf-b {
+          color: var(--green);
+        }
+
+        .wf-cell.wf-c {
+          color: var(--yellow);
+        }
+
+        .wf-cell.wf-d {
+          color: var(--orange, #f39c12);
+        }
+
+        .wf-cell.wf-f {
+          color: var(--red);
+        }
+
+        .wf-cell.wf-none {
+          color: var(--muted);
+        }
+
+        /* OOS Sharpe Styles */
+        .oos-excellent {
+          color: var(--green);
+        }
+
+        .oos-good {
+          color: var(--yellow);
+        }
+
+        .oos-bad {
+          color: var(--red);
+        }
+
+        /* FDR p-value Styles */
+        .fdr-cell {
+          text-align: right;
+          font-family: var(--font-mono);
+          font-size: var(--font-size-xs);
+        }
+
+        .fdr-cell.fdr-highly-sig {
+          color: var(--green);
+          font-weight: 600;
+        }
+
+        .fdr-cell.fdr-sig {
+          color: var(--yellow);
+        }
+
+        .fdr-cell.fdr-not-sig {
           color: var(--muted);
         }
       `}</style>

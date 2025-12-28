@@ -732,8 +732,7 @@ mod tests {
 
         // Create a simple DataFrame with symbols
         let df = DataFrame::new(vec![
-            Series::new("symbol".into(), vec!["AAPL", "JPM", "XOM", "UNKNOWN"])
-                .into(),
+            Series::new("symbol".into(), vec!["AAPL", "JPM", "XOM", "UNKNOWN"]).into(),
             Series::new("value".into(), vec![1.0, 2.0, 3.0, 4.0]).into(),
         ])
         .unwrap();
@@ -762,7 +761,7 @@ mod tests {
         use std::collections::HashMap;
 
         let df = DataFrame::new(vec![
-            Series::new("symbol".into(), vec!["AAPL", "MSFT"]).into(),
+            Series::new("symbol".into(), vec!["AAPL", "MSFT"]).into()
         ])
         .unwrap();
 

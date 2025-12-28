@@ -13,16 +13,14 @@
 
 use crate::bar::Bar;
 use crate::indicators::{
-    aroon, atr, bollinger_bands, cci, darvas_boxes, dmi, donchian_channel, ema_close, heikin_ashi,
-    ichimoku, keltner_channel, macd, opening_range, parabolic_sar, range_breakout_levels, roc, rsi,
-    sma_close, starc_bands, stochastic, supertrend, williams_r, MACDEntryMode, MAType,
-    OpeningPeriod,
+    aroon, atr, darvas_boxes, dmi, donchian_channel, ema_close, heikin_ashi, keltner_channel,
+    opening_range, parabolic_sar, range_breakout_levels, sma_close, starc_bands, supertrend,
+    MACDEntryMode, MAType, OpeningPeriod,
 };
 use crate::indicators_polars::{
-    apply_aroon_exprs, apply_dmi_exprs, apply_heikin_ashi_exprs, apply_ichimoku_exprs,
-    apply_keltner_exprs, apply_macd_exprs, apply_opening_range_exprs, apply_parabolic_sar_exprs,
-    apply_starc_exprs, apply_stochastic_exprs, apply_supertrend_exprs, cci_expr,
-    donchian_channel_exprs, ema_close_expr, roc_expr, rsi_expr, sma_close_expr, williams_r_expr,
+    apply_aroon_exprs, apply_dmi_exprs, apply_heikin_ashi_exprs, apply_keltner_exprs,
+    apply_opening_range_exprs, apply_parabolic_sar_exprs, apply_starc_exprs,
+    apply_supertrend_exprs, donchian_channel_exprs, ema_close_expr, sma_close_expr,
 };
 use crate::strategy::{Position, Signal, TradingMode, VotingMethod};
 use polars::prelude::*;
@@ -199,7 +197,6 @@ pub enum StrategySpec {
     // =========================================================================
     // Phase 5: Oscillator Strategies
     // =========================================================================
-
     /// RSI (Relative Strength Index) strategy.
     ///
     /// Entry: RSI crosses above oversold threshold from below

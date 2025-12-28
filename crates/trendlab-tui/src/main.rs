@@ -31,13 +31,41 @@ use app::{App, Panel};
 use worker::{spawn_worker, WorkerChannels, WorkerCommand, WorkerUpdate};
 
 fn main() -> Result<()> {
+    // Debug: Show what environment variables we're reading
+    eprintln!(
+        "[trendlab-tui] TRENDLAB_LOG_ENABLED={:?}",
+        std::env::var("TRENDLAB_LOG_ENABLED").ok()
+    );
+    eprintln!(
+        "[trendlab-tui] TRENDLAB_LOG_FILTER={:?}",
+        std::env::var("TRENDLAB_LOG_FILTER").ok()
+    );
+
     // Initialize logging from environment (set by launcher)
     // TUI logs to file only to avoid interfering with the terminal UI
     let log_config = LogConfig::from_env();
+    eprintln!(
+        "[trendlab-tui] LogConfig: enabled={}, filter={}, log_dir={}",
+        log_config.enabled,
+        log_config.filter,
+        log_config.log_dir.display()
+    );
+
     let _log_guard = if log_config.enabled {
-        tracing::info!("TUI starting with logging enabled");
-        trendlab_logging::init_tui_logging(&log_config)
+        eprintln!("[trendlab-tui] Initializing TUI logging...");
+        let guard = trendlab_logging::init_tui_logging(&log_config);
+        eprintln!(
+            "[trendlab-tui] Logging initialized, guard={:?}",
+            guard.is_some()
+        );
+        tracing::info!(
+            filter = %log_config.filter,
+            log_dir = %log_config.log_dir.display(),
+            "TUI starting with logging enabled"
+        );
+        guard
     } else {
+        eprintln!("[trendlab-tui] Logging disabled");
         None
     };
 
@@ -274,7 +302,8 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
             } else if app.yolo.enabled {
                 app.status_message = "YOLO mode running. Press ESC to stop.".to_string();
             } else if app.sweep.is_running {
-                app.status_message = "Sweep already running. Press ESC to cancel first.".to_string();
+                app.status_message =
+                    "Sweep already running. Press ESC to cancel first.".to_string();
             }
             KeyResult::Continue
         }
@@ -940,12 +969,8 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                         .iter()
                         .map(|p| p.equity)
                         .collect();
-                    let dates: Vec<chrono::DateTime<chrono::Utc>> = best
-                        .backtest_result
-                        .equity
-                        .iter()
-                        .map(|p| p.ts)
-                        .collect();
+                    let dates: Vec<chrono::DateTime<chrono::Utc>> =
+                        best.backtest_result.equity.iter().map(|p| p.ts).collect();
                     curves.push(app::TickerCurve {
                         symbol: symbol.clone(),
                         equity,

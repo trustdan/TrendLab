@@ -40,7 +40,11 @@ export const MultiSeriesChart = memo(function MultiSeriesChart({
       if (!currentNames.has(name)) {
         const series = seriesRefs.current.get(name);
         if (series) {
-          chart.removeSeries(series);
+          try {
+            chart.removeSeries(series);
+          } catch {
+            // Series may already be removed if chart was destroyed
+          }
           seriesRefs.current.delete(name);
         }
       }
@@ -98,22 +102,9 @@ export const MultiSeriesChart = memo(function MultiSeriesChart({
     }
   }, [chart, hoveredSeries, curves]);
 
-  if (loading) {
-    return (
-      <div className={styles.container} style={{ height }}>
-        <div className={styles.loading}>Loading chart data...</div>
-      </div>
-    );
-  }
+  const hasCurves = curves.length > 0;
 
-  if (curves.length === 0) {
-    return (
-      <div className={styles.container} style={{ height }}>
-        <div className={styles.empty}>No data available</div>
-      </div>
-    );
-  }
-
+  // Always render container with ref to allow chart initialization
   return (
     <div className={styles.multiSeriesContainer} style={{ height }}>
       {title && (
@@ -125,44 +116,56 @@ export const MultiSeriesChart = memo(function MultiSeriesChart({
       )}
       <div className={styles.chartArea}>
         <div ref={containerRef} className={styles.chart} />
+        {loading && (
+          <div className={styles.overlay}>
+            <div className={styles.loading}>Loading chart data...</div>
+          </div>
+        )}
+        {!loading && !hasCurves && (
+          <div className={styles.overlay}>
+            <div className={styles.empty}>No data available</div>
+          </div>
+        )}
       </div>
-      <div className={styles.legendBar}>
-        {curves.map((curve) => {
-          // Calculate return for this curve
-          const firstValue = curve.data[0]?.value ?? 0;
-          const lastValue = curve.data[curve.data.length - 1]?.value ?? 0;
-          const returnPct =
-            firstValue > 0 ? ((lastValue - firstValue) / firstValue) * 100 : 0;
+      {hasCurves && (
+        <div className={styles.legendBar}>
+          {curves.map((curve) => {
+            // Calculate return for this curve
+            const firstValue = curve.data[0]?.value ?? 0;
+            const lastValue = curve.data[curve.data.length - 1]?.value ?? 0;
+            const returnPct =
+              firstValue > 0 ? ((lastValue - firstValue) / firstValue) * 100 : 0;
 
-          return (
-            <div
-              key={curve.name}
-              className={styles.legendChip}
-              onMouseEnter={() => setHoveredSeries(curve.name)}
-              onMouseLeave={() => setHoveredSeries(null)}
-              style={{
-                opacity: hoveredSeries === null || hoveredSeries === curve.name ? 1 : 0.5,
-                cursor: 'pointer',
-              }}
-            >
+            return (
               <div
-                className={styles.legendDot}
-                style={{ backgroundColor: curve.color }}
-              />
-              <span>{curve.name}</span>
-              <span
+                key={curve.name}
+                className={styles.legendChip}
+                onMouseEnter={() => setHoveredSeries(curve.name)}
+                onMouseLeave={() => setHoveredSeries(null)}
                 style={{
-                  color: returnPct >= 0 ? '#9ece6a' : '#f7768e',
-                  marginLeft: 4,
+                  opacity: hoveredSeries === null || hoveredSeries === curve.name ? 1 : 0.5,
+                  cursor: 'pointer',
                 }}
               >
-                {returnPct >= 0 ? '+' : ''}
-                {returnPct.toFixed(1)}%
-              </span>
-            </div>
-          );
-        })}
-      </div>
+                <div
+                  className={styles.legendDot}
+                  style={{ backgroundColor: curve.color }}
+                />
+                <span>{curve.name}</span>
+                <span
+                  style={{
+                    color: returnPct >= 0 ? '#9ece6a' : '#f7768e',
+                    marginLeft: 4,
+                  }}
+                >
+                  {returnPct >= 0 ? '+' : ''}
+                  {returnPct.toFixed(1)}%
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 });

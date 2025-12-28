@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Cell, Paragraph, Row, Table},
+    widgets::{Cell, Paragraph, Row, Table, Wrap},
     Frame,
 };
 
@@ -41,7 +41,18 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
             draw_aggregated_view(f, app, chunks[0], is_active);
         }
         ResultsViewMode::Leaderboard => {
-            draw_leaderboard_table(f, app, chunks[0], is_active);
+            // When a row is expanded, reserve a dedicated details pane so the content
+            // is always visible (inline expanded rows can be clipped off-screen).
+            if app.results.expanded_leaderboard_index.is_some() {
+                let inner = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Min(5), Constraint::Length(8)])
+                    .split(chunks[0]);
+                draw_leaderboard_table(f, app, inner[0], is_active, false);
+                draw_leaderboard_details(f, app, inner[1], is_active);
+            } else {
+                draw_leaderboard_table(f, app, chunks[0], is_active, true);
+            }
         }
     }
 
@@ -532,7 +543,13 @@ fn draw_aggregated_view(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
 }
 
 /// Draw YOLO leaderboard table (cross-symbol aggregated results)
-fn draw_leaderboard_table(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
+fn draw_leaderboard_table(
+    f: &mut Frame,
+    app: &App,
+    area: Rect,
+    is_active: bool,
+    show_inline_expansion: bool,
+) {
     // Check if we have cross-symbol leaderboard data
     let cross_symbol = match app.yolo.cross_symbol_leaderboard() {
         Some(lb) if !lb.entries.is_empty() => lb,
@@ -571,16 +588,18 @@ fn draw_leaderboard_table(f: &mut Frame, app: &App, area: Rect, is_active: bool)
     let header = Row::new(vec![
         Cell::from("#").style(header_style),
         Cell::from("Conf").style(header_style), // Confidence grade
+        Cell::from("WF").style(header_style),   // Walk-forward grade
         Cell::from("Strategy").style(header_style),
         Cell::from("Config").style(header_style),
         Cell::from("Syms").style(header_style),
         Cell::from("Avg Sharpe").style(header_style),
+        Cell::from("OOS Sharpe").style(header_style), // Walk-forward OOS Sharpe
         Cell::from("Min Sharpe").style(header_style),
         Cell::from("Hit Rate").style(header_style),
-        Cell::from("Avg CAGR%").style(header_style),
+        Cell::from("FDR p").style(header_style), // FDR-adjusted p-value
     ]);
 
-    // Build rows with expansion support
+    // Build rows with expansion support (optional)
     let expanded_idx = app.results.expanded_leaderboard_index;
     let mut rows: Vec<Row> = Vec::new();
 
@@ -628,27 +647,58 @@ fn draw_leaderboard_table(f: &mut Frame, app: &App, area: Rect, is_active: bool)
             None => ("-", base_style),
         };
 
+        // Walk-forward grade with color
+        let (wf_text, wf_style) = match entry.walk_forward_grade {
+            Some('A') => ("A", Style::default().fg(colors::GREEN)),
+            Some('B') => ("B", Style::default().fg(colors::GREEN)),
+            Some('C') => ("C", Style::default().fg(colors::YELLOW)),
+            Some('D') => ("D", Style::default().fg(colors::ORANGE)),
+            Some('F') => ("F", Style::default().fg(colors::RED)),
+            Some(_) => ("?", base_style), // Unexpected grade
+            None => ("-", Style::default().fg(colors::FG_DARK)),
+        };
+
+        // OOS Sharpe with color
+        let (oos_text, oos_style) = match entry.mean_oos_sharpe {
+            Some(s) if s > 0.5 => (format!("{:.2}", s), Style::default().fg(colors::GREEN)),
+            Some(s) if s > 0.0 => (format!("{:.2}", s), Style::default().fg(colors::YELLOW)),
+            Some(s) => (format!("{:.2}", s), Style::default().fg(colors::RED)),
+            None => ("-".to_string(), Style::default().fg(colors::FG_DARK)),
+        };
+
+        // FDR p-value with significance indicator
+        let (fdr_text, fdr_style) = match entry.fdr_adjusted_p_value {
+            Some(p) if p < 0.01 => (format!("{:.3}**", p), Style::default().fg(colors::GREEN)),
+            Some(p) if p < 0.05 => (format!("{:.3}*", p), Style::default().fg(colors::GREEN)),
+            Some(p) if p < 0.10 => (format!("{:.3}", p), Style::default().fg(colors::YELLOW)),
+            Some(p) => (format!("{:.3}", p), Style::default().fg(colors::FG_DARK)),
+            None => ("-".to_string(), Style::default().fg(colors::FG_DARK)),
+        };
+
         // Main row
         rows.push(Row::new(vec![
             rank_cell,
             Cell::from(conf_text).style(conf_style),
+            Cell::from(wf_text).style(wf_style),
             Cell::from(entry.strategy_type.name()).style(base_style),
             Cell::from(truncate_config(&entry.config_id.display(), 18)).style(base_style),
             Cell::from(format!("{}", entry.symbols.len())).style(base_style),
             Cell::from(format!("{:.3}", entry.aggregate_metrics.avg_sharpe)).style(sharpe_style),
+            Cell::from(oos_text).style(oos_style),
             Cell::from(format!("{:.3}", entry.aggregate_metrics.min_sharpe)).style(base_style),
-            Cell::from(format!("{:.1}%", entry.aggregate_metrics.hit_rate * 100.0)).style(hit_style),
-            Cell::from(format!("{:.1}%", entry.aggregate_metrics.avg_cagr * 100.0)).style(base_style),
+            Cell::from(format!("{:.1}%", entry.aggregate_metrics.hit_rate * 100.0))
+                .style(hit_style),
+            Cell::from(fdr_text).style(fdr_style),
         ]));
 
         // If expanded, add detail rows
-        if is_expanded {
+        if show_inline_expansion && is_expanded {
             let detail_style = Style::default().fg(colors::FG_DARK);
             let highlight_style = Style::default().fg(colors::CYAN);
 
-            // Row 1: Full config parameters
-            let config_detail = format!("     \u{251c}\u{2500} {}", entry.config_id.display());
-            rows.push(Row::new(vec![Cell::from(config_detail).style(highlight_style)]));
+            // Row 1: Full config parameters (add "Params:" label for parsing)
+            let config_detail = format!("\u{251c}\u{2500} Params: {}", entry.config_id.display());
+            rows.push(detail_row(config_detail, highlight_style));
 
             // Row 2: Date range for this config
             let entry_date_range = entry
@@ -658,14 +708,14 @@ fn draw_leaderboard_table(f: &mut Frame, app: &App, area: Rect, is_active: bool)
                 .map(|(s, e)| {
                     let years = (*e - *s).num_days() as f64 / 365.25;
                     format!(
-                        "     \u{251c}\u{2500} Date Range: {} -> {} ({:.1} years)",
+                        "\u{251c}\u{2500} Range: {} \u{2192} {} ({:.1}y)",
                         s.format("%Y-%m-%d"),
                         e.format("%Y-%m-%d"),
                         years
                     )
                 })
-                .unwrap_or_else(|| "     \u{251c}\u{2500} Date Range: N/A".to_string());
-            rows.push(Row::new(vec![Cell::from(entry_date_range).style(detail_style)]));
+                .unwrap_or_else(|| "\u{251c}\u{2500} Range: N/A".to_string());
+            rows.push(detail_row(entry_date_range, detail_style));
 
             // Row 3: Best symbols by Sharpe
             let mut sorted_symbols: Vec<_> = entry.per_symbol_metrics.iter().collect();
@@ -676,9 +726,9 @@ fn draw_leaderboard_table(f: &mut Frame, app: &App, area: Rect, is_active: bool)
                 .take(3)
                 .map(|(sym, m)| format!("{} ({:.2})", sym, m.sharpe))
                 .collect::<Vec<_>>()
-                .join("  ");
-            let best_line = format!("     \u{251c}\u{2500} Best:  {}", best_symbols);
-            rows.push(Row::new(vec![Cell::from(best_line).style(Style::default().fg(colors::GREEN))]));
+                .join(" ");
+            let best_line = format!("\u{251c}\u{2500} Best: {}", best_symbols);
+            rows.push(detail_row(best_line, Style::default().fg(colors::GREEN)));
 
             // Row 4: Worst symbols by Sharpe
             let worst_symbols: String = sorted_symbols
@@ -687,23 +737,24 @@ fn draw_leaderboard_table(f: &mut Frame, app: &App, area: Rect, is_active: bool)
                 .take(3)
                 .map(|(sym, m)| format!("{} ({:.2})", sym, m.sharpe))
                 .collect::<Vec<_>>()
-                .join("  ");
-            let worst_line = format!("     \u{251c}\u{2500} Worst: {}", worst_symbols);
-            rows.push(Row::new(vec![Cell::from(worst_line).style(Style::default().fg(colors::RED))]));
+                .join(" ");
+            let worst_line = format!("\u{251c}\u{2500} Worst: {}", worst_symbols);
+            rows.push(detail_row(worst_line, Style::default().fg(colors::RED)));
 
             // Row 5: Sector breakdown (if available)
             if !entry.per_symbol_sectors.is_empty() {
-                let sector_stats = compute_sector_stats(&entry.per_symbol_metrics, &entry.per_symbol_sectors);
-                let sector_line = format!("     \u{2514}\u{2500} Sectors: {}", sector_stats);
-                rows.push(Row::new(vec![Cell::from(sector_line).style(detail_style)]));
+                let sector_stats =
+                    compute_sector_stats(&entry.per_symbol_metrics, &entry.per_symbol_sectors);
+                let sector_line = format!("\u{2514}\u{2500} Sectors: {}", sector_stats);
+                rows.push(detail_row(sector_line, detail_style));
             } else {
                 // Closing line without sectors
                 let close_line = format!(
-                    "     \u{2514}\u{2500} Trades: {:.0} avg | MaxDD: {:.1}%",
+                    "\u{2514}\u{2500} Stats: {:.0} trades avg | {:.1}% maxDD",
                     entry.aggregate_metrics.avg_trades,
                     entry.aggregate_metrics.worst_max_drawdown * 100.0
                 );
-                rows.push(Row::new(vec![Cell::from(close_line).style(detail_style)]));
+                rows.push(detail_row(close_line, detail_style));
             }
         }
     }
@@ -711,26 +762,34 @@ fn draw_leaderboard_table(f: &mut Frame, app: &App, area: Rect, is_active: bool)
     let widths = [
         Constraint::Length(3),  // Rank
         Constraint::Length(4),  // Confidence
+        Constraint::Length(3),  // WF (Walk-forward grade)
         Constraint::Length(14), // Strategy
-        Constraint::Length(20), // Config
+        Constraint::Length(18), // Config
         Constraint::Length(5),  // Symbols
         Constraint::Length(10), // Avg Sharpe
+        Constraint::Length(10), // OOS Sharpe
         Constraint::Length(10), // Min Sharpe
         Constraint::Length(9),  // Hit Rate
-        Constraint::Length(10), // Avg CAGR
+        Constraint::Length(7),  // FDR p
     ];
 
     let scope_label = app.yolo.view_scope.display_name();
+    let expanded_debug = match expanded_idx {
+        Some(i) => format!(" [EXP:{}]", i),
+        None => String::new(),
+    };
     let title = if date_range_str.is_empty() {
         format!(
-            "YOLO Leaderboard [{}] ({} configs)",
+            "YOLO Leaderboard [{}]{} ({} configs)",
             scope_label,
+            expanded_debug,
             app.yolo.configs_tested()
         )
     } else {
         format!(
-            "YOLO Leaderboard [{}] | {} ({} configs)",
+            "YOLO Leaderboard [{}]{} | {} ({} configs)",
             scope_label,
+            expanded_debug,
             date_range_str,
             app.yolo.configs_tested()
         )
@@ -741,6 +800,137 @@ fn draw_leaderboard_table(f: &mut Frame, app: &App, area: Rect, is_active: bool)
         .block(panel_block(&title, is_active));
 
     f.render_widget(table, area);
+}
+
+fn draw_leaderboard_details(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
+    let expanded_idx = match app.results.expanded_leaderboard_index {
+        Some(i) => i,
+        None => return,
+    };
+
+    // Prefer cross-symbol leaderboard (primary), fallback to per-symbol leaderboard.
+    let lines: Vec<Line> = if let Some(lb) = app.yolo.cross_symbol_leaderboard() {
+        if let Some(entry) = lb.entries.get(expanded_idx) {
+            let mut out = Vec::new();
+            out.push(Line::from(vec![
+                Span::styled("Config: ", Style::default().fg(colors::FG_DARK)),
+                Span::styled(entry.config_id.display(), Style::default().fg(colors::CYAN)),
+            ]));
+
+            // Date range
+            let range = entry
+                .dates
+                .first()
+                .zip(entry.dates.last())
+                .map(|(s, e)| {
+                    let years = (*e - *s).num_days() as f64 / 365.25;
+                    format!(
+                        "{} → {} ({:.1}y)",
+                        s.format("%Y-%m-%d"),
+                        e.format("%Y-%m-%d"),
+                        years
+                    )
+                })
+                .unwrap_or_else(|| "N/A".to_string());
+            out.push(Line::from(vec![
+                Span::styled("Range:  ", Style::default().fg(colors::FG_DARK)),
+                Span::styled(range, Style::default().fg(colors::FG)),
+            ]));
+
+            // Summary stats
+            out.push(Line::from(vec![
+                Span::styled("Syms:   ", Style::default().fg(colors::FG_DARK)),
+                Span::styled(
+                    format!("{}", entry.symbols.len()),
+                    Style::default().fg(colors::FG),
+                ),
+                Span::styled("  Avg Sharpe: ", Style::default().fg(colors::FG_DARK)),
+                Span::styled(
+                    format!("{:.3}", entry.aggregate_metrics.avg_sharpe),
+                    Style::default().fg(colors::FG),
+                ),
+                Span::styled("  Min: ", Style::default().fg(colors::FG_DARK)),
+                Span::styled(
+                    format!("{:.3}", entry.aggregate_metrics.min_sharpe),
+                    Style::default().fg(colors::FG),
+                ),
+                Span::styled("  Hit: ", Style::default().fg(colors::FG_DARK)),
+                Span::styled(
+                    format!("{:.1}%", entry.aggregate_metrics.hit_rate * 100.0),
+                    Style::default().fg(colors::FG),
+                ),
+            ]));
+
+            // Best/Worst symbols
+            let mut sorted_symbols: Vec<_> = entry.per_symbol_metrics.iter().collect();
+            sorted_symbols.sort_by(|a, b| b.1.sharpe.partial_cmp(&a.1.sharpe).unwrap());
+
+            let best_symbols = sorted_symbols
+                .iter()
+                .take(5)
+                .map(|(sym, m)| format!("{}({:.2})", sym, m.sharpe))
+                .collect::<Vec<_>>()
+                .join("  ");
+            out.push(Line::from(vec![
+                Span::styled("Best:   ", Style::default().fg(colors::FG_DARK)),
+                Span::styled(best_symbols, Style::default().fg(colors::GREEN)),
+            ]));
+
+            let worst_symbols = sorted_symbols
+                .iter()
+                .rev()
+                .take(5)
+                .map(|(sym, m)| format!("{}({:.2})", sym, m.sharpe))
+                .collect::<Vec<_>>()
+                .join("  ");
+            out.push(Line::from(vec![
+                Span::styled("Worst:  ", Style::default().fg(colors::FG_DARK)),
+                Span::styled(worst_symbols, Style::default().fg(colors::RED)),
+            ]));
+
+            // Sector breakdown (if present)
+            if !entry.per_symbol_sectors.is_empty() {
+                let sector_stats =
+                    compute_sector_stats(&entry.per_symbol_metrics, &entry.per_symbol_sectors);
+                out.push(Line::from(vec![
+                    Span::styled("Sectors:", Style::default().fg(colors::FG_DARK)),
+                    Span::styled(" ", Style::default()),
+                    Span::styled(sector_stats, Style::default().fg(colors::FG)),
+                ]));
+            } else {
+                out.push(Line::from(vec![
+                    Span::styled("Stats:  ", Style::default().fg(colors::FG_DARK)),
+                    Span::styled(
+                        format!(
+                            "{:.0} trades avg | {:.1}% maxDD",
+                            entry.aggregate_metrics.avg_trades,
+                            entry.aggregate_metrics.worst_max_drawdown * 100.0
+                        ),
+                        Style::default().fg(colors::FG),
+                    ),
+                ]));
+            }
+
+            out
+        } else {
+            vec![Line::from(vec![Span::styled(
+                "Expanded selection out of range. Press ←/h to collapse.",
+                Style::default().fg(colors::FG_DARK),
+            )])]
+        }
+    } else {
+        // Per-symbol fallback does not currently support expansion;
+        // show a friendly message instead of a blank pane.
+        vec![Line::from(vec![Span::styled(
+            "Details unavailable (per-symbol fallback).",
+            Style::default().fg(colors::FG_DARK),
+        )])]
+    };
+
+    let para = Paragraph::new(lines)
+        .wrap(Wrap { trim: true })
+        .block(panel_block("Details (←/h to collapse)", is_active));
+    f.render_widget(para, area);
 }
 
 /// Compute sector hit rate statistics from per-symbol metrics.
@@ -800,7 +990,10 @@ fn draw_empty_leaderboard(f: &mut Frame, app: &App, area: Rect, is_active: bool)
         Line::from(vec![
             Span::styled("Press ", Style::default().fg(colors::FG_DARK)),
             Span::styled("'t'", Style::default().fg(colors::CYAN)),
-            Span::styled(" to toggle Session/All-Time, ", Style::default().fg(colors::FG_DARK)),
+            Span::styled(
+                " to toggle Session/All-Time, ",
+                Style::default().fg(colors::FG_DARK),
+            ),
             Span::styled("'Y'", Style::default().fg(colors::MAGENTA)),
             Span::styled(" to start YOLO mode.", Style::default().fg(colors::FG_DARK)),
         ]),
@@ -907,6 +1100,48 @@ fn truncate_config(s: &str, max_len: usize) -> String {
     }
 }
 
+/// Create a detail row with 9 cells (matching leaderboard column count).
+/// Spreads content across multiple columns to have enough display width.
+fn detail_row(text: String, style: Style) -> Row<'static> {
+    // Strip leading whitespace from tree-drawing characters
+    let text = text.trim_start();
+
+    // Split into label (before colon) and data (after colon)
+    // Format: "├─ Label: data content here"
+    let (label, data) = if let Some(idx) = text.find(':') {
+        let (l, d) = text.split_at(idx + 1);
+        (l.to_string(), d.trim().to_string())
+    } else {
+        // No colon (e.g., "├─ config_params") - use as label
+        (text.to_string(), String::new())
+    };
+
+    // For long data, split across remaining columns (approx 10 chars each)
+    // Columns available for data: Config(20) + Syms(5) + AvgSharpe(10) + MinSharpe(10) + HitRate(9) + AvgCAGR(10)
+    let (data1, data2) = if data.len() > 24 {
+        // Split at a space near the middle
+        let split_point = data[..24.min(data.len())]
+            .rfind(' ')
+            .unwrap_or(24.min(data.len()));
+        let (d1, d2) = data.split_at(split_point);
+        (d1.to_string(), d2.trim().to_string())
+    } else {
+        (data, String::new())
+    };
+
+    Row::new(vec![
+        Cell::from(""),                 // Rank (3 chars)
+        Cell::from(""),                 // Conf (4 chars)
+        Cell::from(label).style(style), // Strategy (14 chars) - label
+        Cell::from(data1).style(style), // Config (20 chars) - data part 1
+        Cell::from(""),                 // Syms (5 chars)
+        Cell::from(data2).style(style), // Avg Sharpe (10 chars) - data part 2 overflow
+        Cell::from(""),                 // Min Sharpe (10 chars)
+        Cell::from(""),                 // Hit Rate (9 chars)
+        Cell::from(""),                 // Avg CAGR (10 chars)
+    ])
+}
+
 fn draw_help(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
     let view_mode = app.results.view_mode_name();
     let scope_label = app.yolo.view_scope.display_name();
@@ -920,11 +1155,23 @@ fn draw_help(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
     // Show expand/collapse help in Leaderboard view
     if app.results.view_mode == ResultsViewMode::Leaderboard {
         if app.results.expanded_leaderboard_index.is_some() {
-            spans.push(Span::styled("h/\u{2190}: ", Style::default().fg(colors::CYAN)));
-            spans.push(Span::styled("Collapse  ", Style::default().fg(colors::FG_DARK)));
+            spans.push(Span::styled(
+                "h/\u{2190}: ",
+                Style::default().fg(colors::CYAN),
+            ));
+            spans.push(Span::styled(
+                "Collapse  ",
+                Style::default().fg(colors::FG_DARK),
+            ));
         } else {
-            spans.push(Span::styled("l/\u{2192}: ", Style::default().fg(colors::CYAN)));
-            spans.push(Span::styled("Expand  ", Style::default().fg(colors::FG_DARK)));
+            spans.push(Span::styled(
+                "l/\u{2192}: ",
+                Style::default().fg(colors::CYAN),
+            ));
+            spans.push(Span::styled(
+                "Expand  ",
+                Style::default().fg(colors::FG_DARK),
+            ));
         }
     }
 

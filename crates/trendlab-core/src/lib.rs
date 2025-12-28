@@ -18,19 +18,19 @@ pub mod bar;
 pub mod clustering;
 pub mod data;
 pub mod error;
-pub mod statistics;
-pub mod validation;
 pub mod indicators;
 pub mod indicators_polars;
 pub mod leaderboard;
 pub mod metrics;
 pub mod sector_analysis;
 pub mod sizing;
+pub mod statistics;
 pub mod strategy;
 pub mod strategy_v2;
 pub mod sweep;
 pub mod sweep_polars;
 pub mod universe;
+pub mod validation;
 
 pub use artifact::{
     create_donchian_artifact, ArtifactBuilder, ArtifactCostModel, ArtifactError, ArtifactMetadata,
@@ -48,7 +48,19 @@ pub use backtest_polars::{
     PolarsBacktestConfig, PolarsBacktestResult,
 };
 // Re-export IntoLazy trait for DataFrame.lazy() calls
+pub use analysis::{
+    AnalysisConfig, EdgeRatioStats, ExcursionStats, HoldingBucket, HoldingPeriodStats,
+    RegimeAnalysis, RegimeMetrics, ReturnDistribution, StatisticalAnalysis, TradeAnalysis,
+    TradeExcursion, VolAtEntryStats, VolRegime,
+};
+pub use analysis_polars::{
+    compute_analysis, compute_regime_analysis, compute_return_distribution, compute_trade_analysis,
+};
 pub use bar::Bar;
+pub use clustering::{
+    add_cluster_column, cluster_representatives, cluster_strategies, cluster_summary,
+    elbow_analysis, ClusteringError, ClusteringResult, KMeansConfig, DEFAULT_CLUSTER_FEATURES,
+};
 pub use data::{
     bars_to_dataframe, build_yahoo_chart_url, build_yahoo_url, dataframe_to_bars, parquet_path,
     parse_yahoo_chart_json, parse_yahoo_csv, partition_by_year, read_parquet,
@@ -86,25 +98,27 @@ pub use leaderboard::{
 };
 pub use metrics::{compute_metrics, Metrics};
 pub use polars::prelude::IntoLazy;
-pub use analysis::{
-    AnalysisConfig, EdgeRatioStats, ExcursionStats, HoldingBucket, HoldingPeriodStats,
-    RegimeAnalysis, RegimeMetrics, ReturnDistribution, StatisticalAnalysis, TradeAnalysis,
-    TradeExcursion, VolAtEntryStats, VolRegime,
-};
-pub use analysis_polars::{
-    compute_analysis, compute_regime_analysis, compute_return_distribution, compute_trade_analysis,
+pub use sector_analysis::{
+    best_strategy_per_sector, filter_sectors, sector_concentration, sector_dispersion,
+    sector_performance, sector_summary_ranked, sector_vs_universe, top_per_sector,
 };
 pub use sizing::{
     turtle_sizer, FixedSizer, PositionSizer, SizeResult, SizingConfig, VolatilitySizer,
+};
+pub use statistics::{
+    benjamini_hochberg, bonferroni, bootstrap_ci, bootstrap_sharpe, holm_bonferroni,
+    one_sided_mean_pvalue, permutation_test, sample_statistics, BootstrapConfig, BootstrapResult,
+    ConfidenceGrade, MultipleComparisonMethod, MultipleComparisonResult, PermutationResult,
+    SampleStatistics, StatisticsError, StrategyStatistics,
 };
 pub use strategy::{
     AroonCrossStrategy, BollingerSqueezeStrategy, CCIStrategy, DarvasBoxStrategy, DmiAdxStrategy,
     DonchianBreakoutStrategy, EnsembleStrategy, FiftyTwoWeekHighStrategy, HeikinAshiRegimeStrategy,
     IchimokuStrategy, KeltnerBreakoutStrategy, LarryWilliamsStrategy, MACDAdxStrategy,
     MACDStrategy, MACrossoverStrategy, NullStrategy, OpeningRangeBreakoutStrategy,
-    OscillatorConfluenceStrategy, ParabolicSARStrategy, Position, ROCStrategy, RSIBollingerStrategy,
-    RSIStrategy, STARCBreakoutStrategy, Signal, StochasticStrategy, Strategy, SupertrendStrategy,
-    TradingMode, TsmomStrategy, VotingMethod, WilliamsRStrategy,
+    OscillatorConfluenceStrategy, ParabolicSARStrategy, Position, ROCStrategy,
+    RSIBollingerStrategy, RSIStrategy, STARCBreakoutStrategy, Signal, StochasticStrategy, Strategy,
+    SupertrendStrategy, TradingMode, TsmomStrategy, VotingMethod, WilliamsRStrategy,
 };
 pub use strategy_v2::{
     create_strategy_v2, create_strategy_v2_from_config, AroonV2, BollingerSqueezeV2, DarvasBoxV2,
@@ -126,26 +140,12 @@ pub use sweep_polars::{
     multi_sweep_with_sectors, parameter_heatmap, parameter_sensitivity, read_sweep_parquet,
     sweep_to_dataframe, top_configs_by_sharpe, write_sweep_parquet, SweepAnalysis, SweepQuery,
 };
-pub use sector_analysis::{
-    best_strategy_per_sector, filter_sectors, sector_concentration, sector_dispersion,
-    sector_performance, sector_summary_ranked, sector_vs_universe, top_per_sector,
-};
-pub use clustering::{
-    add_cluster_column, cluster_representatives, cluster_strategies, cluster_summary,
-    elbow_analysis, ClusteringError, ClusteringResult, KMeansConfig, DEFAULT_CLUSTER_FEATURES,
-};
+pub use universe::{Sector, Universe, UniverseError};
 pub use validation::{
     generate_ts_cv_splits, generate_walk_forward_folds, slice_by_index, train_test_split_by_date,
     CVSplit, FoldResult, TimeSeriesCVConfig, ValidationError, WalkForwardConfig, WalkForwardFold,
     WalkForwardResult,
 };
-pub use statistics::{
-    benjamini_hochberg, bonferroni, bootstrap_ci, bootstrap_sharpe, holm_bonferroni,
-    permutation_test, sample_statistics, BootstrapConfig, BootstrapResult, ConfidenceGrade,
-    MultipleComparisonMethod, MultipleComparisonResult, PermutationResult, SampleStatistics,
-    StatisticsError, StrategyStatistics,
-};
-pub use universe::{Sector, Universe, UniverseError};
 
 /// Re-export commonly used types
 pub mod prelude {
@@ -165,12 +165,12 @@ pub mod prelude {
     };
     pub use crate::sizing::{FixedSizer, PositionSizer, VolatilitySizer};
     pub use crate::strategy::{
-        AroonCrossStrategy, BollingerSqueezeStrategy, CCIStrategy, DarvasBoxStrategy, DmiAdxStrategy,
-        DonchianBreakoutStrategy, FiftyTwoWeekHighStrategy, HeikinAshiRegimeStrategy,
-        IchimokuStrategy, KeltnerBreakoutStrategy, LarryWilliamsStrategy, MACDAdxStrategy,
-        MACDStrategy, MACrossoverStrategy, OscillatorConfluenceStrategy, Position, ROCStrategy,
-        RSIBollingerStrategy, RSIStrategy, STARCBreakoutStrategy, Signal, StochasticStrategy,
-        Strategy, SupertrendStrategy, TsmomStrategy, WilliamsRStrategy,
+        AroonCrossStrategy, BollingerSqueezeStrategy, CCIStrategy, DarvasBoxStrategy,
+        DmiAdxStrategy, DonchianBreakoutStrategy, FiftyTwoWeekHighStrategy,
+        HeikinAshiRegimeStrategy, IchimokuStrategy, KeltnerBreakoutStrategy, LarryWilliamsStrategy,
+        MACDAdxStrategy, MACDStrategy, MACrossoverStrategy, OscillatorConfluenceStrategy, Position,
+        ROCStrategy, RSIBollingerStrategy, RSIStrategy, STARCBreakoutStrategy, Signal,
+        StochasticStrategy, Strategy, SupertrendStrategy, TsmomStrategy, WilliamsRStrategy,
     };
     pub use crate::strategy_v2::{
         create_strategy_v2, DonchianBreakoutV2, MACrossoverV2, StrategySpec, StrategyV2, TsmomV2,

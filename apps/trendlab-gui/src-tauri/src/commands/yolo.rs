@@ -70,6 +70,7 @@ pub struct YoloStateResponse {
 
 /// Leaderboard entry for frontend (simplified for JSON serialization)
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LeaderboardEntryResponse {
     pub rank: usize,
     pub strategy_type: String,
@@ -80,10 +81,19 @@ pub struct LeaderboardEntryResponse {
     pub max_drawdown: f64,
     pub discovered_at: String,
     pub iteration: u32,
+    pub confidence_grade: Option<String>,
+    // Walk-Forward Validation Fields
+    pub walk_forward_grade: Option<String>,
+    pub mean_oos_sharpe: Option<f64>,
+    pub sharpe_degradation: Option<f64>,
+    pub pct_profitable_folds: Option<f64>,
+    pub oos_p_value: Option<f64>,
+    pub fdr_adjusted_p_value: Option<f64>,
 }
 
 /// Per-symbol leaderboard for frontend
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LeaderboardResponse {
     pub entries: Vec<LeaderboardEntryResponse>,
     pub max_entries: usize,
@@ -95,6 +105,7 @@ pub struct LeaderboardResponse {
 
 /// Aggregated metrics for frontend
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AggregatedMetricsResponse {
     pub avg_sharpe: f64,
     pub min_sharpe: f64,
@@ -111,6 +122,7 @@ pub struct AggregatedMetricsResponse {
 
 /// Cross-symbol leaderboard entry for frontend
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AggregatedConfigResultResponse {
     pub rank: usize,
     pub strategy_type: String,
@@ -119,10 +131,20 @@ pub struct AggregatedConfigResultResponse {
     pub aggregate_metrics: AggregatedMetricsResponse,
     pub discovered_at: String,
     pub iteration: u32,
+    pub confidence_grade: Option<String>,
+    // Walk-Forward Validation Fields
+    pub walk_forward_grade: Option<String>,
+    pub mean_oos_sharpe: Option<f64>,
+    pub std_oos_sharpe: Option<f64>,
+    pub sharpe_degradation: Option<f64>,
+    pub pct_profitable_folds: Option<f64>,
+    pub oos_p_value: Option<f64>,
+    pub fdr_adjusted_p_value: Option<f64>,
 }
 
 /// Cross-symbol leaderboard for frontend
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CrossSymbolLeaderboardResponse {
     pub entries: Vec<AggregatedConfigResultResponse>,
     pub max_entries: usize,
@@ -195,6 +217,14 @@ fn convert_leaderboard(lb: &Leaderboard) -> LeaderboardResponse {
                 max_drawdown: e.metrics.max_drawdown,
                 discovered_at: e.discovered_at.to_rfc3339(),
                 iteration: e.iteration,
+                confidence_grade: e.confidence_grade.map(|g| format!("{:?}", g)),
+                // Walk-Forward Validation Fields
+                walk_forward_grade: e.walk_forward_grade.map(|c| c.to_string()),
+                mean_oos_sharpe: e.mean_oos_sharpe,
+                sharpe_degradation: e.sharpe_degradation,
+                pct_profitable_folds: e.pct_profitable_folds,
+                oos_p_value: e.oos_p_value,
+                fdr_adjusted_p_value: e.fdr_adjusted_p_value,
             })
             .collect(),
         max_entries: lb.max_entries,
@@ -234,6 +264,15 @@ fn convert_cross_symbol_leaderboard(lb: &CrossSymbolLeaderboard) -> CrossSymbolL
                 aggregate_metrics: convert_aggregated_metrics(&e.aggregate_metrics),
                 discovered_at: e.discovered_at.to_rfc3339(),
                 iteration: e.iteration,
+                confidence_grade: e.confidence_grade.map(|g| format!("{:?}", g)),
+                // Walk-Forward Validation Fields
+                walk_forward_grade: e.walk_forward_grade.map(|c| c.to_string()),
+                mean_oos_sharpe: e.mean_oos_sharpe,
+                std_oos_sharpe: e.std_oos_sharpe,
+                sharpe_degradation: e.sharpe_degradation,
+                pct_profitable_folds: e.pct_profitable_folds,
+                oos_p_value: e.oos_p_value,
+                fdr_adjusted_p_value: e.fdr_adjusted_p_value,
             })
             .collect(),
         max_entries: lb.max_entries,
@@ -269,7 +308,10 @@ pub fn get_yolo_state(state: State<'_, AppState>) -> YoloStateResponse {
 pub fn get_leaderboard(state: State<'_, AppState>) -> LeaderboardsResponse {
     let yolo = state.yolo.read().unwrap();
     LeaderboardsResponse {
-        per_symbol: yolo.per_symbol_leaderboard.as_ref().map(convert_leaderboard),
+        per_symbol: yolo
+            .per_symbol_leaderboard
+            .as_ref()
+            .map(convert_leaderboard),
         cross_symbol: yolo
             .cross_symbol_leaderboard
             .as_ref()
@@ -543,8 +585,8 @@ async fn run_yolo_loop(
         // For now, we do a fast simulated sweep
         let mut configs_tested_this_round = 0usize;
 
-        for (_si, symbol) in symbols.iter().enumerate() {
-            for (_sti, strategy) in strategies.iter().enumerate() {
+        for symbol in symbols.iter() {
+            for strategy in strategies.iter() {
                 // Check cancellation
                 if cancel_token.is_cancelled() {
                     break;
@@ -556,7 +598,7 @@ async fn run_yolo_loop(
                     configs_tested_this_round += 1;
 
                     // Progress update every 50 configs
-                    if configs_tested_this_round % 50 == 0 {
+                    if configs_tested_this_round.is_multiple_of(50) {
                         let _ = app.emit(
                             "yolo:progress",
                             EventEnvelope::new(
@@ -578,7 +620,7 @@ async fn run_yolo_loop(
                         }
 
                         // Companion progress (less frequent)
-                        if configs_tested_this_round % 200 == 0 {
+                        if configs_tested_this_round.is_multiple_of(200) {
                             state
                                 .companion_job_progress(
                                     &job_id,

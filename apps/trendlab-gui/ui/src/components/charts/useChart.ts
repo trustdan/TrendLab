@@ -72,7 +72,9 @@ export function useChart(options: ChartOptions = {}): UseChartReturn {
 
   // Wait for container to have valid dimensions
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (!containerRef.current) {
+      return;
+    }
 
     const container = containerRef.current;
     const { clientWidth, clientHeight } = container;
@@ -100,14 +102,15 @@ export function useChart(options: ChartOptions = {}): UseChartReturn {
 
   // Create chart once dimensions are ready
   useEffect(() => {
-    if (!containerRef.current || !dimensionsReady) return;
+    if (!containerRef.current || !dimensionsReady) {
+      return;
+    }
 
     const container = containerRef.current;
     const { clientWidth, clientHeight } = container;
 
     // Double-check dimensions (defensive)
     if (clientWidth === 0 || clientHeight === 0) {
-      console.warn('[useChart] Container has 0 dimensions, skipping chart creation');
       return;
     }
 

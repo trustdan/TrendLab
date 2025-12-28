@@ -309,12 +309,13 @@ pub async fn start_sweep(
 
     if strategies.is_empty() {
         return Err(GuiError::InvalidInput {
-            message: "No strategies selected. Go to Strategy panel to select strategies.".to_string(),
+            message: "No strategies selected. Go to Strategy panel to select strategies."
+                .to_string(),
         });
     }
 
     // Get sweep config
-    let (depth, cost_model, date_range) = {
+    let (depth, _cost_model, _date_range) = {
         let sweep_state = state.sweep.read().unwrap();
         (
             sweep_state.depth,
@@ -391,7 +392,9 @@ pub async fn start_sweep(
                         s.is_running = false;
                         s.current_job_id = None;
                     });
-                    state_handle.jobs.set_status(&job_id_clone, JobStatus::Cancelled);
+                    state_handle
+                        .jobs
+                        .set_status(&job_id_clone, JobStatus::Cancelled);
 
                     let _ = app_clone.emit(
                         "sweep:cancelled",
@@ -467,7 +470,9 @@ pub async fn start_sweep(
             sweep_state.is_running = false;
             sweep_state.current_job_id = None;
         }
-        state_handle.jobs.set_status(&job_id_clone, JobStatus::Completed);
+        state_handle
+            .jobs
+            .set_status(&job_id_clone, JobStatus::Completed);
 
         let elapsed = start_time.elapsed();
         let _ = app_clone.emit(

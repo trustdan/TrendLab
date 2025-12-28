@@ -59,7 +59,13 @@
       "Bash(npm run typecheck:*)",
       "Bash(npm run:*)",
       "Bash(npm run type-check:*)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(cargo tauri dev:*)",
+      "Bash(tasklist:*)",
+      "Bash(taskkill:*)",
+      "Bash(cmd //c \"taskkill /PID 740376 /F\")",
+      "Bash(dir /b \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\apps\\\\trendlab-gui\\\\ui\\\\src\\\\components\\\\panels\")",
+      "Bash(dir /b \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\apps\\\\trendlab-gui\\\\src-tauri\\\\src\\\\commands\")"
     ]
   }
 }

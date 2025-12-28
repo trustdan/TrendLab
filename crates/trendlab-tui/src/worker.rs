@@ -13,8 +13,9 @@ use std::thread::{self, JoinHandle};
 
 use chrono::{DateTime, NaiveDate, Utc};
 use std::collections::HashMap;
+use tracing::{debug, info, trace};
 use trendlab_core::{
-    bars_to_dataframe, compute_analysis, run_donchian_sweep_polars,
+    bars_to_dataframe, compute_analysis, one_sided_mean_pvalue, run_donchian_sweep_polars,
     run_strategy_sweep_polars_parallel, scan_symbol_parquet_lazy, AggregatedConfigResult,
     AggregatedMetrics, AggregatedPortfolioResult, AnalysisConfig, BacktestConfig, BacktestResult,
     Bar, CostModel, CrossSymbolLeaderboard, CrossSymbolRankMetric, DataQualityChecker,
@@ -22,7 +23,7 @@ use trendlab_core::{
     MultiStrategyGrid, MultiStrategySweepResult, MultiSweepResult, OpeningPeriod,
     PolarsBacktestConfig, RankMetric, StatisticalAnalysis, StrategyBestResult, StrategyConfigId,
     StrategyGridConfig, StrategyParams, StrategyTypeId, SweepConfigResult, SweepGrid, SweepResult,
-    VotingMethod,
+    VotingMethod, WalkForwardConfig, WalkForwardResult,
 };
 
 /// Commands sent from TUI thread to worker thread.
@@ -463,13 +464,7 @@ fn worker_loop(
                 bars,
                 config,
             } => {
-                handle_compute_analysis(
-                    &analysis_id,
-                    &backtest_result,
-                    &bars,
-                    &config,
-                    &update_tx,
-                );
+                handle_compute_analysis(&analysis_id, &backtest_result, &bars, &config, &update_tx);
             }
 
             WorkerCommand::StartYoloMode {
@@ -1534,6 +1529,268 @@ fn handle_compute_analysis(
 }
 
 // =============================================================================
+// Walk-Forward Helpers for YOLO Mode
+// =============================================================================
+
+/// Minimum in-sample Sharpe ratio required to run walk-forward validation.
+/// Configs below this threshold are unlikely to generalize well.
+const WF_SHARPE_THRESHOLD: f64 = 0.3;
+
+/// Walk-forward configuration for YOLO mode - fast but still statistically valid.
+fn get_yolo_wf_config() -> WalkForwardConfig {
+    WalkForwardConfig::yolo_quick()
+}
+
+/// Aggregate walk-forward results across multiple symbols.
+///
+/// Returns:
+/// - Mean OOS Sharpe across all symbols and folds
+/// - Std of OOS Sharpe across folds
+/// - Percentage of folds with positive OOS Sharpe
+/// - Walk-forward grade (A-F)
+/// - Sharpe degradation (OOS/IS ratio)
+#[allow(dead_code)]
+fn aggregate_wf_results(
+    wf_results: &[(String, WalkForwardResult)],
+) -> Option<(f64, f64, f64, char, f64)> {
+    if wf_results.is_empty() {
+        return None;
+    }
+
+    // Collect all fold OOS Sharpes across all symbols
+    let mut all_oos_sharpes: Vec<f64> = Vec::new();
+    let mut all_is_sharpes: Vec<f64> = Vec::new();
+    let mut total_profitable_folds = 0usize;
+    let mut total_folds = 0usize;
+
+    for (_symbol, wf_result) in wf_results {
+        for fold in &wf_result.folds {
+            all_oos_sharpes.push(fold.oos_sharpe);
+            all_is_sharpes.push(fold.is_sharpe);
+            if fold.is_oos_profitable() {
+                total_profitable_folds += 1;
+            }
+            total_folds += 1;
+        }
+    }
+
+    if all_oos_sharpes.is_empty() {
+        return None;
+    }
+
+    // Compute statistics
+    let n = all_oos_sharpes.len() as f64;
+    let mean_oos = all_oos_sharpes.iter().sum::<f64>() / n;
+    let mean_is = all_is_sharpes.iter().sum::<f64>() / n;
+
+    let variance_oos = all_oos_sharpes
+        .iter()
+        .map(|x| (x - mean_oos).powi(2))
+        .sum::<f64>()
+        / (n - 1.0).max(1.0);
+    let std_oos = variance_oos.sqrt();
+
+    let pct_profitable = total_profitable_folds as f64 / total_folds.max(1) as f64;
+    let sharpe_degradation = if mean_is.abs() > 1e-6 {
+        mean_oos / mean_is
+    } else {
+        0.0
+    };
+
+    // Compute grade based on aggregate metrics
+    // A: OOS > 0.5, degradation > 0.7, profitable > 80%
+    // B: OOS > 0.3, degradation > 0.5, profitable > 70%
+    // C: OOS > 0.1, degradation > 0.3, profitable > 60%
+    // D: OOS > 0.0, degradation > 0.2, profitable > 50%
+    // F: Otherwise
+    let grade = if mean_oos > 0.5 && sharpe_degradation > 0.7 && pct_profitable > 0.8 {
+        'A'
+    } else if mean_oos > 0.3 && sharpe_degradation > 0.5 && pct_profitable > 0.7 {
+        'B'
+    } else if mean_oos > 0.1 && sharpe_degradation > 0.3 && pct_profitable > 0.6 {
+        'C'
+    } else if mean_oos > 0.0 && sharpe_degradation > 0.2 && pct_profitable > 0.5 {
+        'D'
+    } else {
+        'F'
+    };
+
+    Some((mean_oos, std_oos, pct_profitable, grade, sharpe_degradation))
+}
+
+/// Compute p-value for walk-forward results.
+///
+/// Tests H0: mean OOS Sharpe <= 0 vs H1: mean OOS Sharpe > 0
+/// Uses one-sided t-test via `one_sided_mean_pvalue`.
+#[allow(dead_code)]
+fn compute_wf_pvalue(wf_results: &[(String, WalkForwardResult)]) -> Option<f64> {
+    // Collect all OOS Sharpes across all symbols and folds
+    let oos_sharpes: Vec<f64> = wf_results
+        .iter()
+        .flat_map(|(_, wf)| wf.folds.iter().map(|f| f.oos_sharpe))
+        .collect();
+
+    if oos_sharpes.len() < 3 {
+        return None; // Need at least 3 samples for meaningful p-value
+    }
+
+    one_sided_mean_pvalue(&oos_sharpes).ok()
+}
+
+/// Compute simplified walk-forward metrics from equity curves.
+///
+/// This is a fast approximation that doesn't re-run backtests.
+/// Instead, it:
+/// 1. Splits each equity curve into 3 folds
+/// 2. For each fold, treats first 85% as "in-sample" and last 15% as "out-of-sample"
+/// 3. Computes Sharpe ratio for each portion
+/// 4. Aggregates across symbols and folds
+///
+/// Returns (grade, mean_oos_sharpe, std_oos_sharpe, pct_profitable, sharpe_degradation, oos_p_value)
+#[allow(clippy::type_complexity)]
+fn compute_equity_based_wf(
+    per_symbol_equity: &HashMap<String, Vec<f64>>,
+) -> (
+    Option<char>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+) {
+    const MIN_BARS_PER_FOLD: usize = 42; // ~2 months of trading days
+    const NUM_FOLDS: usize = 3;
+    const IS_RATIO: f64 = 0.85; // In-sample portion of each fold
+
+    let mut all_is_sharpes: Vec<f64> = Vec::new();
+    let mut all_oos_sharpes: Vec<f64> = Vec::new();
+    let mut profitable_folds = 0usize;
+    let mut total_folds = 0usize;
+
+    for equity in per_symbol_equity.values() {
+        if equity.len() < MIN_BARS_PER_FOLD * NUM_FOLDS {
+            continue; // Not enough data for meaningful WF
+        }
+
+        // Compute daily returns
+        let returns: Vec<f64> = equity
+            .windows(2)
+            .map(|w| {
+                if w[0] > 1e-10 {
+                    (w[1] - w[0]) / w[0]
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+
+        if returns.len() < MIN_BARS_PER_FOLD * NUM_FOLDS {
+            continue;
+        }
+
+        // Split returns into folds
+        let fold_size = returns.len() / NUM_FOLDS;
+        for fold_idx in 0..NUM_FOLDS {
+            let fold_start = fold_idx * fold_size;
+            let fold_end = if fold_idx == NUM_FOLDS - 1 {
+                returns.len()
+            } else {
+                fold_start + fold_size
+            };
+
+            let fold_returns = &returns[fold_start..fold_end];
+            let is_end = (fold_returns.len() as f64 * IS_RATIO) as usize;
+
+            if is_end < 20 || fold_returns.len() - is_end < 5 {
+                continue; // Not enough data in split
+            }
+
+            let is_returns = &fold_returns[..is_end];
+            let oos_returns = &fold_returns[is_end..];
+
+            // Compute Sharpe for each portion (annualized)
+            let is_sharpe = compute_sharpe_from_returns(is_returns);
+            let oos_sharpe = compute_sharpe_from_returns(oos_returns);
+
+            all_is_sharpes.push(is_sharpe);
+            all_oos_sharpes.push(oos_sharpe);
+
+            if oos_sharpe > 0.0 {
+                profitable_folds += 1;
+            }
+            total_folds += 1;
+        }
+    }
+
+    if all_oos_sharpes.len() < 3 {
+        return (None, None, None, None, None, None);
+    }
+
+    // Compute aggregate statistics
+    let n = all_oos_sharpes.len() as f64;
+    let mean_oos = all_oos_sharpes.iter().sum::<f64>() / n;
+    let mean_is = all_is_sharpes.iter().sum::<f64>() / n;
+
+    let variance_oos = all_oos_sharpes
+        .iter()
+        .map(|x| (x - mean_oos).powi(2))
+        .sum::<f64>()
+        / (n - 1.0).max(1.0);
+    let std_oos = variance_oos.sqrt();
+
+    let pct_profitable = profitable_folds as f64 / total_folds.max(1) as f64;
+    let sharpe_degradation = if mean_is.abs() > 1e-6 {
+        mean_oos / mean_is
+    } else {
+        0.0
+    };
+
+    // Compute p-value
+    let oos_pval = one_sided_mean_pvalue(&all_oos_sharpes).ok();
+
+    // Compute grade
+    let grade = if mean_oos > 0.5 && sharpe_degradation > 0.7 && pct_profitable > 0.8 {
+        'A'
+    } else if mean_oos > 0.3 && sharpe_degradation > 0.5 && pct_profitable > 0.7 {
+        'B'
+    } else if mean_oos > 0.1 && sharpe_degradation > 0.3 && pct_profitable > 0.6 {
+        'C'
+    } else if mean_oos > 0.0 && sharpe_degradation > 0.2 && pct_profitable > 0.5 {
+        'D'
+    } else {
+        'F'
+    };
+
+    (
+        Some(grade),
+        Some(mean_oos),
+        Some(std_oos),
+        Some(pct_profitable),
+        Some(sharpe_degradation),
+        oos_pval,
+    )
+}
+
+/// Compute annualized Sharpe ratio from daily returns.
+fn compute_sharpe_from_returns(returns: &[f64]) -> f64 {
+    if returns.is_empty() {
+        return 0.0;
+    }
+
+    let n = returns.len() as f64;
+    let mean = returns.iter().sum::<f64>() / n;
+    let variance = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (n - 1.0).max(1.0);
+    let std = variance.sqrt();
+
+    if std < 1e-10 {
+        return 0.0;
+    }
+
+    // Annualize (assuming 252 trading days)
+    (mean / std) * (252.0_f64).sqrt()
+}
+
+// =============================================================================
 // YOLO Mode Handler
 // =============================================================================
 
@@ -1544,6 +1801,7 @@ fn handle_compute_analysis(
 /// Maintains two leaderboards:
 /// - CrossSymbolLeaderboard: configs ranked by aggregate performance across symbols (primary)
 /// - Leaderboard: per-symbol best configs (secondary)
+#[allow(clippy::too_many_arguments)]
 fn handle_yolo_mode(
     symbols: &[String],
     symbol_sector_ids: &HashMap<String, String>,
@@ -1561,6 +1819,14 @@ fn handle_yolo_mode(
     use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
     use std::path::Path;
+
+    info!(
+        symbols = symbols.len(),
+        start = %start,
+        end = %end,
+        randomization_pct = %randomization_pct,
+        "Starting YOLO mode"
+    );
 
     let parquet_dir = Path::new("data/parquet");
     let per_symbol_path = Path::new("artifacts/leaderboard.json");
@@ -1649,6 +1915,8 @@ fn handle_yolo_mode(
         per_symbol_leaderboard.total_iterations = iteration;
         cross_symbol_leaderboard.total_iterations = iteration;
 
+        debug!(iteration = iteration, "Starting YOLO iteration");
+
         // 1. Jitter the grid parameters (with occasional "wide" exploration iterations)
         let wide = rng.gen_bool(0.20);
         let iter_pct = if wide {
@@ -1657,6 +1925,14 @@ fn handle_yolo_mode(
             randomization_pct
         };
         let jittered_grid = jitter_multi_strategy_grid(base_grid, iter_pct, &mut rng);
+
+        trace!(
+            iteration = iteration,
+            jitter_pct = %iter_pct,
+            wide = wide,
+            configs = jittered_grid.total_configs(),
+            "Jittered grid created"
+        );
 
         // Send progress update (include current jitter strength for visibility)
         let phase = if wide {
@@ -1733,12 +2009,8 @@ fn handle_yolo_mode(
                             .iter()
                             .map(|e| e.equity)
                             .collect();
-                        let dates: Vec<DateTime<Utc>> = result
-                            .backtest_result
-                            .equity
-                            .iter()
-                            .map(|e| e.ts)
-                            .collect();
+                        let dates: Vec<DateTime<Utc>> =
+                            result.backtest_result.equity.iter().map(|e| e.ts).collect();
 
                         per_symbol_equity.insert(symbol.clone(), equity);
                         per_symbol_dates.insert(symbol.clone(), dates);
@@ -1761,12 +2033,7 @@ fn handle_yolo_mode(
                                     .iter()
                                     .map(|e| e.equity)
                                     .collect(),
-                                dates: result
-                                    .backtest_result
-                                    .equity
-                                    .iter()
-                                    .map(|e| e.ts)
-                                    .collect(),
+                                dates: result.backtest_result.equity.iter().map(|e| e.ts).collect(),
                             });
                         }
                     }
@@ -1792,6 +2059,16 @@ fn handle_yolo_mode(
                     }
                 }
 
+                // 4. Walk-forward validation for promising configs
+                // Only run WF for configs with sufficient in-sample performance
+                let (wf_grade, mean_oos, std_oos, pct_profitable, degradation, oos_pval) =
+                    if aggregate_metrics.avg_sharpe >= WF_SHARPE_THRESHOLD {
+                        // Run simplified walk-forward using equity curve returns
+                        compute_equity_based_wf(&per_symbol_equity)
+                    } else {
+                        (None, None, None, None, None, None)
+                    };
+
                 // Confidence for YOLO cross-symbol results:
                 // Prefer sector-aware robustness when we have enough sector coverage; otherwise fall back
                 // to cross-sectional (per-symbol) bootstrap.
@@ -1801,7 +2078,9 @@ fn handle_yolo_mode(
                         &per_symbol_sectors,
                     )
                     .unwrap_or_else(|| {
-                        trendlab_core::compute_cross_symbol_confidence_from_metrics(&per_symbol_metrics)
+                        trendlab_core::compute_cross_symbol_confidence_from_metrics(
+                            &per_symbol_metrics,
+                        )
                     }),
                 );
 
@@ -1819,6 +2098,14 @@ fn handle_yolo_mode(
                     iteration,
                     session_id: None, // TODO: Pass session_id from YoloState in Phase 1
                     confidence_grade,
+                    // Walk-forward fields (computed from equity-based WF)
+                    walk_forward_grade: wf_grade,
+                    mean_oos_sharpe: mean_oos,
+                    std_oos_sharpe: std_oos,
+                    sharpe_degradation: degradation,
+                    pct_profitable_folds: pct_profitable,
+                    oos_p_value: oos_pval,
+                    fdr_adjusted_p_value: None, // Set by FDR correction at end of iteration
                 };
 
                 // Track best aggregate this round
@@ -1873,6 +2160,13 @@ fn handle_yolo_mode(
                 iteration,
                 session_id: None, // TODO: Pass session_id from YoloState in Phase 1
                 confidence_grade,
+                // Walk-forward fields (per-symbol, not used in primary YOLO flow)
+                walk_forward_grade: None,
+                mean_oos_sharpe: None,
+                sharpe_degradation: None,
+                pct_profitable_folds: None,
+                oos_p_value: None,
+                fdr_adjusted_p_value: None,
             };
             per_symbol_leaderboard.try_insert(entry);
         }
@@ -1882,11 +2176,21 @@ fn handle_yolo_mode(
         per_symbol_leaderboard.last_updated = Utc::now();
         cross_symbol_leaderboard.last_updated = Utc::now();
 
-        // 5. Persist leaderboards (every iteration for crash safety)
+        // 5. Apply FDR correction to cross-symbol leaderboard
+        // This adjusts p-values for multiple comparison burden and optionally
+        // downgrades confidence grades for non-significant entries
+        let n_significant = cross_symbol_leaderboard.apply_fdr_correction(0.05, true);
+        trace!(
+            n_significant = n_significant,
+            total_entries = cross_symbol_leaderboard.entries.len(),
+            "Applied FDR correction"
+        );
+
+        // 6. Persist leaderboards (every iteration for crash safety)
         let _ = per_symbol_leaderboard.save(per_symbol_path);
         let _ = cross_symbol_leaderboard.save(cross_symbol_path);
 
-        // 6. Send iteration complete update
+        // 7. Send iteration complete update
         let _ = update_tx.send(WorkerUpdate::YoloIterationComplete {
             iteration,
             best_aggregate: best_aggregate_this_round,
@@ -1910,7 +2214,11 @@ fn yolo_try_insert_best_per_strategy(
     let new_value = entry.aggregate_metrics.rank_value(rank_by);
 
     // If strategy already present, replace only if better.
-    if let Some(pos) = lb.entries.iter().position(|e| e.strategy_type == entry.strategy_type) {
+    if let Some(pos) = lb
+        .entries
+        .iter()
+        .position(|e| e.strategy_type == entry.strategy_type)
+    {
         let existing_value = lb.entries[pos].aggregate_metrics.rank_value(rank_by);
         if new_value > existing_value {
             lb.entries[pos] = entry;
@@ -2142,7 +2450,9 @@ fn generate_config_ids_for_strategy(strategy_config: &StrategyGridConfig) -> Vec
             }
             configs
         }
-        StrategyParams::DarvasBox { box_confirmation_bars } => box_confirmation_bars
+        StrategyParams::DarvasBox {
+            box_confirmation_bars,
+        } => box_confirmation_bars
             .iter()
             .map(|&bars| StrategyConfigId::DarvasBox {
                 box_confirmation_bars: bars,
@@ -2188,13 +2498,16 @@ fn generate_config_ids_for_strategy(strategy_config: &StrategyGridConfig) -> Vec
             }
             configs
         }
-        StrategyParams::OpeningRangeBreakout { range_bars, periods } => {
+        StrategyParams::OpeningRangeBreakout {
+            range_bars,
+            periods,
+        } => {
             let mut configs = Vec::new();
             for &bars in range_bars {
                 for period in periods {
                     configs.push(StrategyConfigId::OpeningRangeBreakout {
                         range_bars: bars,
-                        period: period.clone(),
+                        period: *period,
                     });
                 }
             }
@@ -2239,7 +2552,11 @@ fn create_single_config_grid(
         },
         StrategyConfigId::TurtleS1 => StrategyParams::TurtleS1,
         StrategyConfigId::TurtleS2 => StrategyParams::TurtleS2,
-        StrategyConfigId::MACrossover { fast, slow, ma_type } => StrategyParams::MACrossover {
+        StrategyConfigId::MACrossover {
+            fast,
+            slow,
+            ma_type,
+        } => StrategyParams::MACrossover {
             fast_periods: vec![*fast],
             slow_periods: vec![*slow],
             ma_types: vec![*ma_type],
@@ -2329,7 +2646,7 @@ fn create_single_config_grid(
         StrategyConfigId::OpeningRangeBreakout { range_bars, period } => {
             StrategyParams::OpeningRangeBreakout {
                 range_bars: vec![*range_bars],
-                periods: vec![period.clone()],
+                periods: vec![*period],
             }
         }
         StrategyConfigId::Ensemble {
@@ -2633,7 +2950,10 @@ fn jitter_strategy_params(params: &StrategyParams, pct: f64, rng: &mut impl Rng)
             af_maxs: jitter_f64_vec(af_maxs, pct, 0.01, 0.1, 0.5, rng),
         },
 
-        StrategyParams::OpeningRangeBreakout { range_bars, periods } => {
+        StrategyParams::OpeningRangeBreakout {
+            range_bars,
+            periods,
+        } => {
             StrategyParams::OpeningRangeBreakout {
                 range_bars: jitter_usize_vec(range_bars, pct, 1, 1, 20, rng),
                 periods: periods.clone(), // Don't jitter enum types

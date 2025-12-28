@@ -53,8 +53,13 @@ export const EquityChart = memo(function EquityChart({
     });
 
     return () => {
+      // Try-catch because chart.remove() may have already destroyed the series
       if (equitySeriesRef.current) {
-        chart.removeSeries(equitySeriesRef.current);
+        try {
+          chart.removeSeries(equitySeriesRef.current);
+        } catch {
+          // Series may already be removed if chart was destroyed
+        }
         equitySeriesRef.current = null;
       }
     };
@@ -87,7 +92,11 @@ export const EquityChart = memo(function EquityChart({
       }));
       drawdownSeriesRef.current.setData(toLineData(ddData));
     } else if (drawdownSeriesRef.current) {
-      chart.removeSeries(drawdownSeriesRef.current);
+      try {
+        chart.removeSeries(drawdownSeriesRef.current);
+      } catch {
+        // Series may already be removed if chart was destroyed
+      }
       drawdownSeriesRef.current = null;
     }
 
@@ -114,66 +123,64 @@ export const EquityChart = memo(function EquityChart({
     fitContent();
   }, [data, fitContent]);
 
-  if (loading) {
-    return (
-      <div className={styles.container} style={{ height }}>
-        <div className={styles.loading}>Loading equity curve...</div>
-      </div>
-    );
-  }
-
-  if (data.length === 0) {
-    return (
-      <div className={styles.container} style={{ height }}>
-        <div className={styles.empty}>No equity data available</div>
-      </div>
-    );
-  }
-
-  // Calculate stats for legend
-  const firstValue = data[0]?.value ?? 0;
-  const lastValue = data[data.length - 1]?.value ?? 0;
+  // Calculate stats for legend (only when we have data)
+  const hasData = data.length > 0;
+  const firstValue = hasData ? data[0]?.value ?? 0 : 0;
+  const lastValue = hasData ? data[data.length - 1]?.value ?? 0 : 0;
   const totalReturn = firstValue > 0 ? ((lastValue - firstValue) / firstValue) * 100 : 0;
-  const maxValue = Math.max(...data.map((d) => d.value));
-  const minValue = Math.min(...data.map((d) => d.value));
-  const maxDrawdown = drawdown ? Math.min(...drawdown.map((d) => d.drawdown)) * 100 : 0;
+  const maxValue = hasData ? Math.max(...data.map((d) => d.value)) : 0;
+  const minValue = hasData ? Math.min(...data.map((d) => d.value)) : 0;
+  const maxDrawdown = drawdown && drawdown.length > 0 ? Math.min(...drawdown.map((d) => d.drawdown)) * 100 : 0;
 
+  // Always render container with ref to allow chart initialization
   return (
     <div className={styles.container} style={{ height }}>
-      <div className={styles.legend}>
-        {title && (
+      <div ref={containerRef} className={styles.chart} />
+      {loading && (
+        <div className={styles.overlay}>
+          <div className={styles.loading}>Loading equity curve...</div>
+        </div>
+      )}
+      {!loading && !hasData && (
+        <div className={styles.overlay}>
+          <div className={styles.empty}>No equity data available</div>
+        </div>
+      )}
+      {hasData && (
+        <div className={styles.legend}>
+          {title && (
+            <div className={styles.legendItem}>
+              <span>{title}</span>
+            </div>
+          )}
           <div className={styles.legendItem}>
-            <span>{title}</span>
-          </div>
-        )}
-        <div className={styles.legendItem}>
-          <span>Return:</span>
-          <span
-            className={styles.legendValue}
-            style={{ color: totalReturn >= 0 ? CHART_COLORS.green : CHART_COLORS.red }}
-          >
-            {totalReturn >= 0 ? '+' : ''}
-            {totalReturn.toFixed(2)}%
-          </span>
-        </div>
-        <div className={styles.legendItem}>
-          <span>High:</span>
-          <span className={styles.legendValue}>${maxValue.toLocaleString()}</span>
-        </div>
-        <div className={styles.legendItem}>
-          <span>Low:</span>
-          <span className={styles.legendValue}>${minValue.toLocaleString()}</span>
-        </div>
-        {showDrawdown && drawdown && drawdown.length > 0 && (
-          <div className={styles.legendItem}>
-            <span>Max DD:</span>
-            <span className={styles.legendValue} style={{ color: CHART_COLORS.red }}>
-              {maxDrawdown.toFixed(2)}%
+            <span>Return:</span>
+            <span
+              className={styles.legendValue}
+              style={{ color: totalReturn >= 0 ? CHART_COLORS.green : CHART_COLORS.red }}
+            >
+              {totalReturn >= 0 ? '+' : ''}
+              {totalReturn.toFixed(2)}%
             </span>
           </div>
-        )}
-      </div>
-      <div ref={containerRef} className={styles.chart} />
+          <div className={styles.legendItem}>
+            <span>High:</span>
+            <span className={styles.legendValue}>${maxValue.toLocaleString()}</span>
+          </div>
+          <div className={styles.legendItem}>
+            <span>Low:</span>
+            <span className={styles.legendValue}>${minValue.toLocaleString()}</span>
+          </div>
+          {showDrawdown && drawdown && drawdown.length > 0 && (
+            <div className={styles.legendItem}>
+              <span>Max DD:</span>
+              <span className={styles.legendValue} style={{ color: CHART_COLORS.red }}>
+                {maxDrawdown.toFixed(2)}%
+              </span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 });

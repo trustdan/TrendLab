@@ -29,10 +29,10 @@ pub fn launch_tui() -> io::Result<()> {
             .status()?;
 
         if !status.success() {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("TUI exited with status: {}", status),
-            ));
+            return Err(io::Error::other(format!(
+                "TUI exited with status: {}",
+                status
+            )));
         }
         Ok(())
     }
@@ -58,9 +58,9 @@ pub fn launch_gui(companion_addr: &str) -> io::Result<u32> {
 /// Find a binary in the same directory as the current executable.
 fn find_binary(name: &str) -> io::Result<std::path::PathBuf> {
     let current_exe = std::env::current_exe()?;
-    let exe_dir = current_exe
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Cannot find executable directory"))?;
+    let exe_dir = current_exe.parent().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::NotFound, "Cannot find executable directory")
+    })?;
 
     // Try with platform-specific extension
     #[cfg(windows)]

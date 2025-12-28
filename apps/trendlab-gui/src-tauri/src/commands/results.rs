@@ -437,10 +437,7 @@ pub fn set_sort_config(state: State<'_, AppState>, sort_by: SortMetric, ascendin
 
 /// Export strategy artifact for a result.
 #[tauri::command]
-pub fn export_artifact(
-    state: State<'_, AppState>,
-    result_id: String,
-) -> Result<String, GuiError> {
+pub fn export_artifact(state: State<'_, AppState>, result_id: String) -> Result<String, GuiError> {
     let results_state = state.get_results_state();
     let result = results_state
         .results

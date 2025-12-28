@@ -28,6 +28,20 @@ export interface LeaderboardEntry {
   equityCurve?: number[];
   dates?: string[];
   confidenceGrade?: ConfidenceGrade | null;
+
+  // Walk-Forward Validation Fields
+  /** Walk-forward grade (A-F) for robustness assessment */
+  walkForwardGrade?: string | null;
+  /** Mean out-of-sample Sharpe ratio across folds */
+  meanOosSharpe?: number | null;
+  /** Sharpe degradation ratio: OOS/IS (1.0 = good generalization) */
+  sharpeDegradation?: number | null;
+  /** Percentage of folds with positive OOS Sharpe */
+  pctProfitableFolds?: number | null;
+  /** P-value from one-sided test of OOS Sharpe > 0 */
+  oosPValue?: number | null;
+  /** FDR-adjusted p-value after Benjamini-Hochberg correction */
+  fdrAdjustedPValue?: number | null;
 }
 
 /**
@@ -74,6 +88,22 @@ export interface AggregatedConfigResult {
   discoveredAt: string;
   iteration: number;
   confidenceGrade?: ConfidenceGrade | null;
+
+  // Walk-Forward Validation Fields
+  /** Walk-forward grade (A-F) aggregated across symbols */
+  walkForwardGrade?: string | null;
+  /** Mean out-of-sample Sharpe ratio across all symbols and folds */
+  meanOosSharpe?: number | null;
+  /** Standard deviation of OOS Sharpe across folds */
+  stdOosSharpe?: number | null;
+  /** Sharpe degradation ratio: mean_oos / mean_is */
+  sharpeDegradation?: number | null;
+  /** Percentage of folds with positive OOS Sharpe */
+  pctProfitableFolds?: number | null;
+  /** P-value from one-sided test of mean OOS Sharpe > 0 */
+  oosPValue?: number | null;
+  /** FDR-adjusted p-value after Benjamini-Hochberg correction */
+  fdrAdjustedPValue?: number | null;
 }
 
 /**
@@ -92,7 +122,7 @@ export interface CrossSymbolLeaderboard {
 /**
  * Ranking metric for cross-symbol leaderboard
  */
-export type CrossSymbolRankMetric = 'avgSharpe' | 'minSharpe' | 'geoMeanCagr' | 'hitRate';
+export type CrossSymbolRankMetric = 'avgSharpe' | 'minSharpe' | 'geoMeanCagr' | 'hitRate' | 'meanOosSharpe';
 
 /**
  * Statistical confidence grade for strategy results

@@ -8,8 +8,8 @@
 
 use crate::backtest::{run_backtest, BacktestConfig, BacktestResult, CostModel};
 use crate::bar::Bar;
-use crate::indicators::MAType;
 use crate::indicators::MACDEntryMode;
+use crate::indicators::MAType;
 use crate::indicators::OpeningPeriod;
 use crate::metrics::{compute_metrics, Metrics};
 use crate::strategy::{
@@ -326,11 +326,7 @@ pub fn run_sweep(bars: &[Bar], grid: &SweepGrid, backtest_config: BacktestConfig
             let config_id = ConfigId::new(entry, exit);
             let mut strategy = DonchianBreakoutStrategy::new(entry, exit);
 
-            tracing::trace!(
-                entry = entry,
-                exit = exit,
-                "Evaluating config"
-            );
+            tracing::trace!(entry = entry, exit = exit, "Evaluating config");
 
             let backtest_result =
                 run_backtest(bars, &mut strategy, backtest_config).expect("Backtest failed");
@@ -1106,14 +1102,20 @@ impl StrategyConfigId {
                 slow_period,
                 signal_period,
                 entry_mode,
-            } => format!("MACD {}/{}/{} {:?}", fast_period, slow_period, signal_period, entry_mode),
+            } => format!(
+                "MACD {}/{}/{} {:?}",
+                fast_period, slow_period, signal_period, entry_mode
+            ),
             Self::Stochastic {
                 k_period,
                 k_smooth,
                 d_period,
                 oversold,
                 overbought,
-            } => format!("Stoch {}/{}/{}/{:.0}/{:.0}", k_period, k_smooth, d_period, oversold, overbought),
+            } => format!(
+                "Stoch {}/{}/{}/{:.0}/{:.0}",
+                k_period, k_smooth, d_period, oversold, overbought
+            ),
             Self::WilliamsR {
                 period,
                 oversold,
@@ -1123,7 +1125,10 @@ impl StrategyConfigId {
                 period,
                 entry_threshold,
                 exit_threshold,
-            } => format!("CCI {}/{:.0}/{:.0}", period, entry_threshold, exit_threshold),
+            } => format!(
+                "CCI {}/{:.0}/{:.0}",
+                period, entry_threshold, exit_threshold
+            ),
             Self::Roc { period } => format!("ROC {}", period),
             Self::RsiBollinger {
                 rsi_period,
@@ -1131,14 +1136,20 @@ impl StrategyConfigId {
                 rsi_exit,
                 bb_period,
                 bb_std_mult,
-            } => format!("RSI+BB {}/{:.0}/{:.0}/{}/{:.1}", rsi_period, rsi_oversold, rsi_exit, bb_period, bb_std_mult),
+            } => format!(
+                "RSI+BB {}/{:.0}/{:.0}/{}/{:.1}",
+                rsi_period, rsi_oversold, rsi_exit, bb_period, bb_std_mult
+            ),
             Self::MacdAdx {
                 fast_period,
                 slow_period,
                 signal_period,
                 adx_period,
                 adx_threshold,
-            } => format!("MACD+ADX {}/{}/{}/{}/{:.0}", fast_period, slow_period, signal_period, adx_period, adx_threshold),
+            } => format!(
+                "MACD+ADX {}/{}/{}/{}/{:.0}",
+                fast_period, slow_period, signal_period, adx_period, adx_threshold
+            ),
             Self::OscillatorConfluence {
                 rsi_period,
                 rsi_oversold,
@@ -1150,15 +1161,23 @@ impl StrategyConfigId {
                 stoch_overbought,
             } => format!(
                 "Confluence RSI{}/{:.0}/{:.0} Stoch{}/{}/{}/{:.0}/{:.0}",
-                rsi_period, rsi_oversold, rsi_overbought,
-                stoch_k_period, stoch_k_smooth, stoch_d_period,
-                stoch_oversold, stoch_overbought
+                rsi_period,
+                rsi_oversold,
+                rsi_overbought,
+                stoch_k_period,
+                stoch_k_smooth,
+                stoch_d_period,
+                stoch_oversold,
+                stoch_overbought
             ),
             Self::Ichimoku {
                 tenkan_period,
                 kijun_period,
                 senkou_b_period,
-            } => format!("Ichimoku {}/{}/{}", tenkan_period, kijun_period, senkou_b_period),
+            } => format!(
+                "Ichimoku {}/{}/{}",
+                tenkan_period, kijun_period, senkou_b_period
+            ),
         }
     }
 
@@ -1218,9 +1237,7 @@ impl StrategyConfigId {
                 ..
             } => ConfigId::new(*fast_period, *slow_period),
             Self::Stochastic {
-                k_period,
-                d_period,
-                ..
+                k_period, d_period, ..
             } => ConfigId::new(*k_period, *d_period),
             Self::WilliamsR { period, .. } => ConfigId::new(*period, 0),
             Self::Cci { period, .. } => ConfigId::new(*period, 0),
@@ -1831,16 +1848,18 @@ impl StrategyParams {
                                     for &stoch_d_period in stoch_d_periods {
                                         for &stoch_oversold in stoch_oversolds {
                                             for &stoch_overbought in stoch_overboughts {
-                                                configs.push(StrategyConfigId::OscillatorConfluence {
-                                                    rsi_period,
-                                                    rsi_oversold,
-                                                    rsi_overbought,
-                                                    stoch_k_period,
-                                                    stoch_k_smooth,
-                                                    stoch_d_period,
-                                                    stoch_oversold,
-                                                    stoch_overbought,
-                                                });
+                                                configs.push(
+                                                    StrategyConfigId::OscillatorConfluence {
+                                                        rsi_period,
+                                                        rsi_oversold,
+                                                        rsi_overbought,
+                                                        stoch_k_period,
+                                                        stoch_k_smooth,
+                                                        stoch_d_period,
+                                                        stoch_oversold,
+                                                        stoch_overbought,
+                                                    },
+                                                );
                                             }
                                         }
                                     }

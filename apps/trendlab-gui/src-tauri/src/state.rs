@@ -299,10 +299,7 @@ impl AppState {
     /// Get parameter values for a strategy.
     pub fn get_strategy_params(&self, strategy_id: &str) -> StrategyParamValues {
         let params = self.strategy_params.read().unwrap();
-        params
-            .get(strategy_id)
-            .cloned()
-            .unwrap_or_default()
+        params.get(strategy_id).cloned().unwrap_or_default()
     }
 
     /// Set parameter values for a strategy.

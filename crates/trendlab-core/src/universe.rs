@@ -383,7 +383,7 @@ tickers = ["JPM", "GS"]
         assert_eq!(lookup.get("LLY"), Some(&"Healthcare".to_string()));
 
         // Unknown ticker should not be in lookup
-        assert!(lookup.get("UNKNOWN").is_none());
+        assert!(!lookup.contains_key("UNKNOWN"));
 
         // Should have all tickers from universe
         assert_eq!(lookup.len(), universe.ticker_count());

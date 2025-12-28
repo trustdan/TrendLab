@@ -2125,7 +2125,11 @@ pub fn cci(bars: &[Bar], period: usize) -> Vec<Option<CCIValue>> {
         let tp_sma = tp_sum / period as f64;
 
         // Mean deviation
-        let md: f64 = tp[start..=i].iter().map(|&t| (t - tp_sma).abs()).sum::<f64>() / period as f64;
+        let md: f64 = tp[start..=i]
+            .iter()
+            .map(|&t| (t - tp_sma).abs())
+            .sum::<f64>()
+            / period as f64;
 
         let cci_val = if md > 0.0 {
             (tp[i] - tp_sma) / (0.015 * md)
@@ -2243,30 +2247,18 @@ pub fn ichimoku(
 
     for i in warmup..bars.len() {
         // Tenkan-sen
-        let tenkan_start = if i + 1 >= tenkan_period {
-            i + 1 - tenkan_period
-        } else {
-            0
-        };
+        let tenkan_start = (i + 1).saturating_sub(tenkan_period);
         let tenkan_sen = midpoint(tenkan_start, i);
 
         // Kijun-sen
-        let kijun_start = if i + 1 >= kijun_period {
-            i + 1 - kijun_period
-        } else {
-            0
-        };
+        let kijun_start = (i + 1).saturating_sub(kijun_period);
         let kijun_sen = midpoint(kijun_start, i);
 
         // Senkou Span A (at current bar, not displaced)
         let senkou_span_a = (tenkan_sen + kijun_sen) / 2.0;
 
         // Senkou Span B
-        let senkou_b_start = if i + 1 >= senkou_b_period {
-            i + 1 - senkou_b_period
-        } else {
-            0
-        };
+        let senkou_b_start = (i + 1).saturating_sub(senkou_b_period);
         let senkou_span_b = midpoint(senkou_b_start, i);
 
         // Chikou Span (current close, for plotting backwards)

@@ -2278,9 +2278,18 @@ pub struct RSIStrategy {
 impl RSIStrategy {
     pub fn new(period: usize, oversold: f64, overbought: f64) -> Self {
         assert!(period > 0, "Period must be at least 1");
-        assert!(oversold > 0.0 && oversold < 100.0, "Oversold must be between 0 and 100");
-        assert!(overbought > 0.0 && overbought < 100.0, "Overbought must be between 0 and 100");
-        assert!(oversold < overbought, "Oversold must be less than overbought");
+        assert!(
+            oversold > 0.0 && oversold < 100.0,
+            "Oversold must be between 0 and 100"
+        );
+        assert!(
+            overbought > 0.0 && overbought < 100.0,
+            "Overbought must be between 0 and 100"
+        );
+        assert!(
+            oversold < overbought,
+            "Oversold must be less than overbought"
+        );
 
         Self {
             period,
@@ -2408,10 +2417,18 @@ pub struct MACDStrategy {
 }
 
 impl MACDStrategy {
-    pub fn new(fast_period: usize, slow_period: usize, signal_period: usize, entry_mode: MACDEntryMode) -> Self {
+    pub fn new(
+        fast_period: usize,
+        slow_period: usize,
+        signal_period: usize,
+        entry_mode: MACDEntryMode,
+    ) -> Self {
         assert!(fast_period > 0, "Fast period must be at least 1");
         assert!(slow_period > 0, "Slow period must be at least 1");
-        assert!(fast_period < slow_period, "Fast period must be less than slow period");
+        assert!(
+            fast_period < slow_period,
+            "Fast period must be less than slow period"
+        );
         assert!(signal_period > 0, "Signal period must be at least 1");
 
         Self {
@@ -2603,13 +2620,28 @@ pub struct StochasticStrategy {
 }
 
 impl StochasticStrategy {
-    pub fn new(k_period: usize, k_smooth: usize, d_period: usize, oversold: f64, overbought: f64) -> Self {
+    pub fn new(
+        k_period: usize,
+        k_smooth: usize,
+        d_period: usize,
+        oversold: f64,
+        overbought: f64,
+    ) -> Self {
         assert!(k_period > 0, "K period must be at least 1");
         assert!(k_smooth > 0, "K smooth must be at least 1");
         assert!(d_period > 0, "D period must be at least 1");
-        assert!(oversold > 0.0 && oversold < 100.0, "Oversold must be between 0 and 100");
-        assert!(overbought > 0.0 && overbought < 100.0, "Overbought must be between 0 and 100");
-        assert!(oversold < overbought, "Oversold must be less than overbought");
+        assert!(
+            oversold > 0.0 && oversold < 100.0,
+            "Oversold must be between 0 and 100"
+        );
+        assert!(
+            overbought > 0.0 && overbought < 100.0,
+            "Overbought must be between 0 and 100"
+        );
+        assert!(
+            oversold < overbought,
+            "Oversold must be less than overbought"
+        );
 
         Self {
             k_period,
@@ -2707,7 +2739,8 @@ impl Strategy for StochasticStrategy {
         match current_position {
             Position::Flat => {
                 // Entry: %K crosses above %D when both are in oversold territory
-                let in_oversold = current_stoch.k_smooth < self.oversold && current_stoch.d < self.oversold;
+                let in_oversold =
+                    current_stoch.k_smooth < self.oversold && current_stoch.d < self.oversold;
                 if k_above_d && !prev_k_above_d && in_oversold {
                     return Signal::EnterLong;
                 }
@@ -2715,7 +2748,8 @@ impl Strategy for StochasticStrategy {
             }
             Position::Long => {
                 // Exit: %K crosses below %D when both are in overbought territory
-                let in_overbought = current_stoch.k_smooth > self.overbought && current_stoch.d > self.overbought;
+                let in_overbought =
+                    current_stoch.k_smooth > self.overbought && current_stoch.d > self.overbought;
                 if !k_above_d && prev_k_above_d && in_overbought {
                     return Signal::ExitLong;
                 }
@@ -2753,9 +2787,18 @@ pub struct WilliamsRStrategy {
 impl WilliamsRStrategy {
     pub fn new(period: usize, oversold: f64, overbought: f64) -> Self {
         assert!(period > 0, "Period must be at least 1");
-        assert!(oversold >= -100.0 && oversold < 0.0, "Oversold must be between -100 and 0");
-        assert!(overbought > -100.0 && overbought <= 0.0, "Overbought must be between -100 and 0");
-        assert!(oversold < overbought, "Oversold must be less than overbought");
+        assert!(
+            (-100.0..0.0).contains(&oversold),
+            "Oversold must be between -100 and 0"
+        );
+        assert!(
+            overbought > -100.0 && overbought <= 0.0,
+            "Overbought must be between -100 and 0"
+        );
+        assert!(
+            oversold < overbought,
+            "Oversold must be less than overbought"
+        );
 
         Self {
             period,
@@ -2882,7 +2925,10 @@ pub struct CCIStrategy {
 impl CCIStrategy {
     pub fn new(period: usize, entry_threshold: f64, exit_threshold: f64) -> Self {
         assert!(period > 0, "Period must be at least 1");
-        assert!(entry_threshold > exit_threshold, "Entry threshold must be greater than exit threshold");
+        assert!(
+            entry_threshold > exit_threshold,
+            "Entry threshold must be greater than exit threshold"
+        );
 
         Self {
             period,
@@ -3120,10 +3166,22 @@ pub struct RSIBollingerStrategy {
 }
 
 impl RSIBollingerStrategy {
-    pub fn new(rsi_period: usize, rsi_oversold: f64, rsi_exit: f64, bb_period: usize, bb_std_mult: f64) -> Self {
+    pub fn new(
+        rsi_period: usize,
+        rsi_oversold: f64,
+        rsi_exit: f64,
+        bb_period: usize,
+        bb_std_mult: f64,
+    ) -> Self {
         assert!(rsi_period > 0, "RSI period must be at least 1");
-        assert!(rsi_oversold > 0.0 && rsi_oversold < 100.0, "RSI oversold must be between 0 and 100");
-        assert!(rsi_exit > rsi_oversold, "RSI exit must be greater than oversold");
+        assert!(
+            rsi_oversold > 0.0 && rsi_oversold < 100.0,
+            "RSI oversold must be between 0 and 100"
+        );
+        assert!(
+            rsi_exit > rsi_oversold,
+            "RSI exit must be greater than oversold"
+        );
         assert!(bb_period > 0, "BB period must be at least 1");
         assert!(bb_std_mult > 0.0, "BB std mult must be positive");
 
@@ -3258,9 +3316,18 @@ pub struct MACDAdxStrategy {
 }
 
 impl MACDAdxStrategy {
-    pub fn new(fast_period: usize, slow_period: usize, signal_period: usize, adx_period: usize, adx_threshold: f64) -> Self {
+    pub fn new(
+        fast_period: usize,
+        slow_period: usize,
+        signal_period: usize,
+        adx_period: usize,
+        adx_threshold: f64,
+    ) -> Self {
         assert!(fast_period > 0, "Fast period must be at least 1");
-        assert!(slow_period > fast_period, "Slow period must be greater than fast period");
+        assert!(
+            slow_period > fast_period,
+            "Slow period must be greater than fast period"
+        );
         assert!(signal_period > 0, "Signal period must be at least 1");
         assert!(adx_period > 0, "ADX period must be at least 1");
         assert!(adx_threshold > 0.0, "ADX threshold must be positive");
@@ -3408,9 +3475,11 @@ pub struct OscillatorConfluenceStrategy {
     stoch_k_smooth: usize,
     /// Stochastic D period
     stoch_d_period: usize,
-    /// Stochastic oversold threshold
+    /// Stochastic oversold threshold (reserved for future use)
+    #[allow(dead_code)]
     stoch_oversold: f64,
-    /// Stochastic overbought threshold
+    /// Stochastic overbought threshold (reserved for future use)
+    #[allow(dead_code)]
     stoch_overbought: f64,
 }
 
@@ -3427,9 +3496,15 @@ impl OscillatorConfluenceStrategy {
         stoch_overbought: f64,
     ) -> Self {
         assert!(rsi_period > 0, "RSI period must be at least 1");
-        assert!(rsi_oversold < rsi_overbought, "RSI oversold must be less than overbought");
+        assert!(
+            rsi_oversold < rsi_overbought,
+            "RSI oversold must be less than overbought"
+        );
         assert!(stoch_k_period > 0, "Stoch K period must be at least 1");
-        assert!(stoch_oversold < stoch_overbought, "Stoch oversold must be less than overbought");
+        assert!(
+            stoch_oversold < stoch_overbought,
+            "Stoch oversold must be less than overbought"
+        );
 
         Self {
             rsi_period,
@@ -3483,7 +3558,12 @@ impl Strategy for OscillatorConfluenceStrategy {
         }
 
         let rsi_values = rsi(bars, self.rsi_period);
-        let stoch_values = stochastic(bars, self.stoch_k_period, self.stoch_k_smooth, self.stoch_d_period);
+        let stoch_values = stochastic(
+            bars,
+            self.stoch_k_period,
+            self.stoch_k_smooth,
+            self.stoch_d_period,
+        );
 
         // Get current and previous values
         let current_rsi = match rsi_values[current_idx] {
@@ -3513,7 +3593,8 @@ impl Strategy for OscillatorConfluenceStrategy {
 
         // RSI crossover detection
         let rsi_bullish_cross = current_rsi > self.rsi_oversold && prev_rsi <= self.rsi_oversold;
-        let rsi_bearish_cross = current_rsi < self.rsi_overbought && prev_rsi >= self.rsi_overbought;
+        let rsi_bearish_cross =
+            current_rsi < self.rsi_overbought && prev_rsi >= self.rsi_overbought;
 
         // Stochastic state
         let stoch_bullish = current_stoch.k_smooth > current_stoch.d;
@@ -3576,7 +3657,10 @@ impl IchimokuStrategy {
         assert!(tenkan_period > 0, "Tenkan period must be at least 1");
         assert!(kijun_period > 0, "Kijun period must be at least 1");
         assert!(senkou_b_period > 0, "Senkou B period must be at least 1");
-        assert!(tenkan_period < kijun_period, "Tenkan period should be less than Kijun period");
+        assert!(
+            tenkan_period < kijun_period,
+            "Tenkan period should be less than Kijun period"
+        );
 
         Self {
             tenkan_period,
@@ -3638,7 +3722,12 @@ impl Strategy for IchimokuStrategy {
             return Signal::Hold;
         }
 
-        let ichimoku_values = ichimoku(bars, self.tenkan_period, self.kijun_period, self.senkou_b_period);
+        let ichimoku_values = ichimoku(
+            bars,
+            self.tenkan_period,
+            self.kijun_period,
+            self.senkou_b_period,
+        );
 
         // Get current and previous Ichimoku values
         let current_ich = match ichimoku_values[current_idx] {

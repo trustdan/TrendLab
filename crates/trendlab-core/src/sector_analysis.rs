@@ -78,8 +78,12 @@ pub fn sector_dispersion(df: DataFrame, metric: &str) -> PolarsResult<DataFrame>
             col(metric).max().alias("max"),
             (col(metric).max() - col(metric).min()).alias("range"),
             col(metric).median().alias("median"),
-            col(metric).quantile(lit(0.25), QuantileMethod::Linear).alias("q25"),
-            col(metric).quantile(lit(0.75), QuantileMethod::Linear).alias("q75"),
+            col(metric)
+                .quantile(lit(0.25), QuantileMethod::Linear)
+                .alias("q25"),
+            col(metric)
+                .quantile(lit(0.75), QuantileMethod::Linear)
+                .alias("q75"),
         ])
         .with_column(
             // Coefficient of variation = std / |mean| (handle zero mean)
@@ -126,8 +130,7 @@ pub fn top_per_sector(
         .head(Some(n))
         .sort(
             ["sector", metric],
-            SortMultipleOptions::new()
-                .with_order_descending_multi([false, descending]),
+            SortMultipleOptions::new().with_order_descending_multi([false, descending]),
         )
         .collect()
 }
@@ -144,7 +147,9 @@ pub fn top_per_sector(
 /// DataFrame with sector metrics and relative performance (diff from universe mean)
 pub fn sector_vs_universe(df: DataFrame) -> PolarsResult<DataFrame> {
     // First compute universe-wide averages
-    let universe_avg = df.clone().lazy()
+    let universe_avg = df
+        .clone()
+        .lazy()
         .select([
             col("sharpe").mean().alias("universe_sharpe"),
             col("cagr").mean().alias("universe_cagr"),
@@ -154,10 +159,26 @@ pub fn sector_vs_universe(df: DataFrame) -> PolarsResult<DataFrame> {
         .collect()?;
 
     // Extract universe values
-    let universe_sharpe = universe_avg.column("universe_sharpe")?.f64()?.get(0).unwrap_or(0.0);
-    let universe_cagr = universe_avg.column("universe_cagr")?.f64()?.get(0).unwrap_or(0.0);
-    let universe_drawdown = universe_avg.column("universe_drawdown")?.f64()?.get(0).unwrap_or(0.0);
-    let universe_sortino = universe_avg.column("universe_sortino")?.f64()?.get(0).unwrap_or(0.0);
+    let universe_sharpe = universe_avg
+        .column("universe_sharpe")?
+        .f64()?
+        .get(0)
+        .unwrap_or(0.0);
+    let universe_cagr = universe_avg
+        .column("universe_cagr")?
+        .f64()?
+        .get(0)
+        .unwrap_or(0.0);
+    let universe_drawdown = universe_avg
+        .column("universe_drawdown")?
+        .f64()?
+        .get(0)
+        .unwrap_or(0.0);
+    let universe_sortino = universe_avg
+        .column("universe_sortino")?
+        .f64()?
+        .get(0)
+        .unwrap_or(0.0);
 
     // Compute sector averages with relative differences
     df.lazy()
@@ -181,7 +202,7 @@ pub fn sector_vs_universe(df: DataFrame) -> PolarsResult<DataFrame> {
                 + col("cagr_vs_universe")
                 - col("drawdown_vs_universe") // Lower drawdown is better
                 + col("sortino_vs_universe"))
-                .alias("relative_score"),
+            .alias("relative_score"),
         )
         .sort(
             ["relative_score"],
@@ -236,7 +257,9 @@ pub fn best_strategy_per_sector(df: DataFrame, metric: &str) -> PolarsResult<Dat
 /// DataFrame with concentration statistics
 pub fn sector_concentration(df: DataFrame, metric: &str) -> PolarsResult<DataFrame> {
     // First get totals per sector and overall
-    let totals_df = df.clone().lazy()
+    let totals_df = df
+        .clone()
+        .lazy()
         .group_by([col("sector")])
         .agg([
             col(metric).sum().alias("sector_total"),
@@ -245,26 +268,25 @@ pub fn sector_concentration(df: DataFrame, metric: &str) -> PolarsResult<DataFra
         .collect()?;
 
     // Get total across all sectors
-    let total_df = totals_df.clone().lazy()
+    let total_df = totals_df
+        .clone()
+        .lazy()
         .select([col("sector_total").sum().alias("grand_total")])
         .collect()?;
 
     let total: f64 = total_df.column("grand_total")?.f64()?.get(0).unwrap_or(1.0);
 
     // Add percentage columns
-    totals_df.lazy()
-        .with_column(
-            (col("sector_total") / lit(total) * lit(100.0)).alias("pct_of_total"),
-        )
+    totals_df
+        .lazy()
+        .with_column((col("sector_total") / lit(total) * lit(100.0)).alias("pct_of_total"))
         .sort(
             ["sector_total"],
             SortMultipleOptions::new().with_order_descending(true),
         )
         .with_column(
             // Cumulative percentage for concentration curve
-            col("pct_of_total")
-                .cum_sum(false)
-                .alias("cumulative_pct"),
+            col("pct_of_total").cum_sum(false).alias("cumulative_pct"),
         )
         .collect()
 }
@@ -312,20 +334,35 @@ pub fn sector_summary_ranked(df: DataFrame) -> PolarsResult<DataFrame> {
 
     // Create rankings by sorting and assigning row numbers
     // For Sharpe: higher is better, so sort descending
-    let sharpe_ranked = perf.clone().lazy()
-        .sort(["avg_sharpe"], SortMultipleOptions::new().with_order_descending(true))
+    let sharpe_ranked = perf
+        .clone()
+        .lazy()
+        .sort(
+            ["avg_sharpe"],
+            SortMultipleOptions::new().with_order_descending(true),
+        )
         .with_row_index("sharpe_rank", Some(1))
         .collect()?;
 
     // For CAGR: higher is better
-    let cagr_ranked = perf.clone().lazy()
-        .sort(["avg_cagr"], SortMultipleOptions::new().with_order_descending(true))
+    let cagr_ranked = perf
+        .clone()
+        .lazy()
+        .sort(
+            ["avg_cagr"],
+            SortMultipleOptions::new().with_order_descending(true),
+        )
         .with_row_index("cagr_rank", Some(1))
         .collect()?;
 
     // For Drawdown: lower is better, so sort ascending
-    let dd_ranked = perf.clone().lazy()
-        .sort(["avg_drawdown"], SortMultipleOptions::new().with_order_descending(false))
+    let dd_ranked = perf
+        .clone()
+        .lazy()
+        .sort(
+            ["avg_drawdown"],
+            SortMultipleOptions::new().with_order_descending(false),
+        )
         .with_row_index("drawdown_rank", Some(1))
         .collect()?;
 
@@ -336,7 +373,11 @@ pub fn sector_summary_ranked(df: DataFrame) -> PolarsResult<DataFrame> {
 
     for i in 0..n {
         let sector = sharpe_ranked.column("sector")?.str()?.get(i).unwrap_or("");
-        let rank = sharpe_ranked.column("sharpe_rank")?.idx()?.get(i).unwrap_or(0) as f64;
+        let rank = sharpe_ranked
+            .column("sharpe_rank")?
+            .idx()?
+            .get(i)
+            .unwrap_or(0) as f64;
         sharpe_ranks.insert(sector.to_string(), rank);
 
         let sector = cagr_ranked.column("sector")?.str()?.get(i).unwrap_or("");
@@ -344,23 +385,32 @@ pub fn sector_summary_ranked(df: DataFrame) -> PolarsResult<DataFrame> {
         cagr_ranks.insert(sector.to_string(), rank);
 
         let sector = dd_ranked.column("sector")?.str()?.get(i).unwrap_or("");
-        let rank = dd_ranked.column("drawdown_rank")?.idx()?.get(i).unwrap_or(0) as f64;
+        let rank = dd_ranked
+            .column("drawdown_rank")?
+            .idx()?
+            .get(i)
+            .unwrap_or(0) as f64;
         dd_ranks.insert(sector.to_string(), rank);
     }
 
     // Add rank columns to perf DataFrame
-    let sectors: Vec<String> = perf.column("sector")?.str()?
+    let sectors: Vec<String> = perf
+        .column("sector")?
+        .str()?
         .into_iter()
         .map(|s| s.unwrap_or("").to_string())
         .collect();
 
-    let sharpe_rank_col: Vec<f64> = sectors.iter()
+    let sharpe_rank_col: Vec<f64> = sectors
+        .iter()
         .map(|s| *sharpe_ranks.get(s).unwrap_or(&(n as f64)))
         .collect();
-    let cagr_rank_col: Vec<f64> = sectors.iter()
+    let cagr_rank_col: Vec<f64> = sectors
+        .iter()
         .map(|s| *cagr_ranks.get(s).unwrap_or(&(n as f64)))
         .collect();
-    let dd_rank_col: Vec<f64> = sectors.iter()
+    let dd_rank_col: Vec<f64> = sectors
+        .iter()
         .map(|s| *dd_ranks.get(s).unwrap_or(&(n as f64)))
         .collect();
 
@@ -369,13 +419,25 @@ pub fn sector_summary_ranked(df: DataFrame) -> PolarsResult<DataFrame> {
         .collect();
 
     let mut result = perf;
-    result = result.with_column(Series::new("sharpe_rank".into(), sharpe_rank_col))?.clone();
-    result = result.with_column(Series::new("cagr_rank".into(), cagr_rank_col))?.clone();
-    result = result.with_column(Series::new("drawdown_rank".into(), dd_rank_col))?.clone();
-    result = result.with_column(Series::new("composite_rank".into(), composite_rank))?.clone();
+    result = result
+        .with_column(Series::new("sharpe_rank".into(), sharpe_rank_col))?
+        .clone();
+    result = result
+        .with_column(Series::new("cagr_rank".into(), cagr_rank_col))?
+        .clone();
+    result = result
+        .with_column(Series::new("drawdown_rank".into(), dd_rank_col))?
+        .clone();
+    result = result
+        .with_column(Series::new("composite_rank".into(), composite_rank))?
+        .clone();
 
-    result.lazy()
-        .sort(["composite_rank"], SortMultipleOptions::new().with_order_descending(false))
+    result
+        .lazy()
+        .sort(
+            ["composite_rank"],
+            SortMultipleOptions::new().with_order_descending(false),
+        )
         .collect()
 }
 
@@ -385,14 +447,39 @@ mod tests {
 
     fn create_test_df() -> DataFrame {
         DataFrame::new(vec![
-            Series::new("symbol".into(), vec!["AAPL", "MSFT", "JPM", "GS", "XOM", "CVX"]).into(),
-            Series::new("sector".into(), vec!["Technology", "Technology", "Financial", "Financial", "Energy", "Energy"]).into(),
-            Series::new("strategy_type".into(), vec!["donchian", "donchian", "donchian", "ma_cross", "donchian", "ma_cross"]).into(),
+            Series::new(
+                "symbol".into(),
+                vec!["AAPL", "MSFT", "JPM", "GS", "XOM", "CVX"],
+            )
+            .into(),
+            Series::new(
+                "sector".into(),
+                vec![
+                    "Technology",
+                    "Technology",
+                    "Financial",
+                    "Financial",
+                    "Energy",
+                    "Energy",
+                ],
+            )
+            .into(),
+            Series::new(
+                "strategy_type".into(),
+                vec![
+                    "donchian", "donchian", "donchian", "ma_cross", "donchian", "ma_cross",
+                ],
+            )
+            .into(),
             Series::new("sharpe".into(), vec![1.5, 1.2, 0.8, 0.9, 1.1, 1.0]).into(),
             Series::new("cagr".into(), vec![0.15, 0.12, 0.08, 0.09, 0.11, 0.10]).into(),
             Series::new("sortino".into(), vec![2.0, 1.8, 1.2, 1.3, 1.5, 1.4]).into(),
             Series::new("calmar".into(), vec![1.0, 0.9, 0.6, 0.7, 0.8, 0.75]).into(),
-            Series::new("max_drawdown".into(), vec![0.15, 0.18, 0.22, 0.20, 0.19, 0.21]).into(),
+            Series::new(
+                "max_drawdown".into(),
+                vec![0.15, 0.18, 0.22, 0.20, 0.19, 0.21],
+            )
+            .into(),
             Series::new("num_trades".into(), vec![20u32, 25, 15, 18, 22, 19]).into(),
             Series::new("win_rate".into(), vec![0.55, 0.52, 0.48, 0.50, 0.53, 0.51]).into(),
             Series::new("profit_factor".into(), vec![1.8, 1.6, 1.3, 1.4, 1.5, 1.45]).into(),
@@ -459,11 +546,19 @@ mod tests {
         assert!(result.column("relative_score").is_ok());
 
         // Technology should have positive vs_universe (above average)
-        let tech_row = result.clone().lazy()
+        let tech_row = result
+            .clone()
+            .lazy()
             .filter(col("sector").eq(lit("Technology")))
             .collect()
             .unwrap();
-        let sharpe_diff = tech_row.column("sharpe_vs_universe").unwrap().f64().unwrap().get(0).unwrap();
+        let sharpe_diff = tech_row
+            .column("sharpe_vs_universe")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .get(0)
+            .unwrap();
         assert!(sharpe_diff > 0.0);
     }
 
@@ -483,10 +578,13 @@ mod tests {
 
         assert_eq!(result.height(), 4); // 2 Tech + 2 Energy
 
-        let sectors: Vec<_> = result.column("sector").unwrap()
-            .str().unwrap()
+        let sectors: Vec<_> = result
+            .column("sector")
+            .unwrap()
+            .str()
+            .unwrap()
             .into_iter()
-            .filter_map(|s| s)
+            .flatten()
             .collect();
         assert!(sectors.iter().all(|s| *s == "Technology" || *s == "Energy"));
     }

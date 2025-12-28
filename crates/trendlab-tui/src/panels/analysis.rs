@@ -86,7 +86,12 @@ fn draw_return_distribution(
     let lines = vec![
         // Header row
         Line::from(vec![
-            Span::styled("Risk Metrics", Style::default().fg(colors::CYAN).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Risk Metrics",
+                Style::default()
+                    .fg(colors::CYAN)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(
                 format!("  ({} days)", rd.n_observations),
                 Style::default().fg(colors::FG_DARK),
@@ -125,7 +130,13 @@ fn draw_return_distribution(
             Span::styled("Skewness: ", Style::default().fg(colors::FG_DARK)),
             Span::styled(format!("{:.2}", rd.skewness), skew_style),
             Span::styled(
-                if rd.skewness < -0.5 { " (fat left tail)" } else if rd.skewness > 0.5 { " (fat right tail)" } else { "" },
+                if rd.skewness < -0.5 {
+                    " (fat left tail)"
+                } else if rd.skewness > 0.5 {
+                    " (fat right tail)"
+                } else {
+                    ""
+                },
                 Style::default().fg(colors::FG_DARK),
             ),
         ]),
@@ -133,7 +144,11 @@ fn draw_return_distribution(
             Span::styled("Kurtosis: ", Style::default().fg(colors::FG_DARK)),
             Span::styled(format!("{:.2}", rd.kurtosis), kurt_style),
             Span::styled(
-                if rd.kurtosis > 3.0 { " (fat tails)" } else { "" },
+                if rd.kurtosis > 3.0 {
+                    " (fat tails)"
+                } else {
+                    ""
+                },
                 Style::default().fg(colors::FG_DARK),
             ),
         ]),
@@ -176,7 +191,10 @@ fn draw_trade_analysis(f: &mut Frame, analysis: &trendlab_core::StatisticalAnaly
         let bar_len = (bucket.pct * 10.0).round() as usize; // Max 10 chars
         let bar = "\u{2588}".repeat(bar_len.min(10));
         hist_spans.push(Span::styled(
-            format!("{} ", &bucket.label[..bucket.label.find(' ').unwrap_or(bucket.label.len())]),
+            format!(
+                "{} ",
+                &bucket.label[..bucket.label.find(' ').unwrap_or(bucket.label.len())]
+            ),
             Style::default().fg(colors::FG_DARK),
         ));
         hist_spans.push(Span::styled(bar, Style::default().fg(colors::BLUE)));
@@ -195,7 +213,12 @@ fn draw_trade_analysis(f: &mut Frame, analysis: &trendlab_core::StatisticalAnaly
     let lines = vec![
         // Header
         Line::from(vec![
-            Span::styled("Trade Analysis", Style::default().fg(colors::CYAN).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Trade Analysis",
+                Style::default()
+                    .fg(colors::CYAN)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(
                 format!("  ({} trades)", ta.n_trades),
                 Style::default().fg(colors::FG_DARK),
@@ -257,7 +280,10 @@ fn draw_trade_analysis(f: &mut Frame, analysis: &trendlab_core::StatisticalAnaly
         Line::from(""),
         // Edge ratio
         Line::from(vec![
-            Span::styled("Edge Ratio (MFE/MAE): ", Style::default().fg(colors::FG_DARK)),
+            Span::styled(
+                "Edge Ratio (MFE/MAE): ",
+                Style::default().fg(colors::FG_DARK),
+            ),
             Span::styled(format!("{:.2}", ta.edge_ratio.mean), edge_style),
             Span::styled(
                 format!(
@@ -290,7 +316,11 @@ fn draw_regime_analysis(f: &mut Frame, analysis: &trendlab_core::StatisticalAnal
     let ra = &analysis.regime_analysis;
 
     // Helper to draw regime row
-    fn regime_line(name: &str, metrics: &trendlab_core::RegimeMetrics, name_color: ratatui::style::Color) -> Line<'static> {
+    fn regime_line(
+        name: &str,
+        metrics: &trendlab_core::RegimeMetrics,
+        name_color: ratatui::style::Color,
+    ) -> Line<'static> {
         let wr_style = if metrics.win_rate > 0.55 {
             Style::default().fg(colors::GREEN)
         } else if metrics.win_rate < 0.45 {
@@ -344,21 +374,25 @@ fn draw_regime_analysis(f: &mut Frame, analysis: &trendlab_core::StatisticalAnal
         Line::from(vec![
             Span::styled(
                 "Regime Analysis",
-                Style::default().fg(colors::CYAN).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(colors::CYAN)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("  (ATR {}, median {:.2}%)", ra.atr_period, ra.median_atr * 100.0),
+                format!(
+                    "  (ATR {}, median {:.2}%)",
+                    ra.atr_period,
+                    ra.median_atr * 100.0
+                ),
                 Style::default().fg(colors::FG_DARK),
             ),
         ]),
         Line::from(""),
         // Column headers
-        Line::from(vec![
-            Span::styled(
-                "Regime   % Time   |  Trades  |  Win Rate  |  Avg Ret   |  Sharpe",
-                Style::default().fg(colors::FG_DARK),
-            ),
-        ]),
+        Line::from(vec![Span::styled(
+            "Regime   % Time   |  Trades  |  Win Rate  |  Avg Ret   |  Sharpe",
+            Style::default().fg(colors::FG_DARK),
+        )]),
         Line::from(vec![Span::styled(
             "\u{2500}".repeat(70),
             Style::default().fg(colors::BORDER),

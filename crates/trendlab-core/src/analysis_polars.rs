@@ -39,7 +39,9 @@ pub fn compute_analysis(
 // =============================================================================
 
 /// Compute return distribution statistics from equity curve.
-pub fn compute_return_distribution(equity: &[EquityPoint]) -> Result<ReturnDistribution, PolarsError> {
+pub fn compute_return_distribution(
+    equity: &[EquityPoint],
+) -> Result<ReturnDistribution, PolarsError> {
     if equity.len() < 2 {
         return Ok(ReturnDistribution::default());
     }
@@ -47,24 +49,17 @@ pub fn compute_return_distribution(equity: &[EquityPoint]) -> Result<ReturnDistr
     // Extract equity values and compute daily returns
     let equities: Vec<f64> = equity.iter().map(|e| e.equity).collect();
 
-    let df = DataFrame::new(vec![
-        Column::new("equity".into(), equities),
-    ])?;
+    let df = DataFrame::new(vec![Column::new("equity".into(), equities)])?;
 
     // Compute daily returns
     let returns_df = df
         .lazy()
-        .with_column(
-            (col("equity") / col("equity").shift(lit(1)) - lit(1.0)).alias("return"),
-        )
+        .with_column((col("equity") / col("equity").shift(lit(1)) - lit(1.0)).alias("return"))
         .collect()?;
 
     // Extract returns, filtering nulls
     let returns_col = returns_df.column("return")?.f64()?;
-    let returns: Vec<f64> = returns_col
-        .into_iter()
-        .filter_map(|x| x)
-        .collect();
+    let returns: Vec<f64> = returns_col.into_iter().flatten().collect();
 
     if returns.is_empty() {
         return Ok(ReturnDistribution::default());
@@ -198,7 +193,7 @@ pub fn compute_regime_analysis(
 
     // Calculate median ATR for regime thresholds
     let atr_col = with_atr.column("atr")?.f64()?;
-    let atr_values: Vec<f64> = atr_col.into_iter().filter_map(|x| x).collect();
+    let atr_values: Vec<f64> = atr_col.into_iter().flatten().collect();
 
     if atr_values.is_empty() {
         return Ok(RegimeAnalysis::default());
@@ -263,7 +258,12 @@ pub fn compute_regime_analysis(
 
     Ok(RegimeAnalysis {
         high_vol: compute_regime_metrics(&high_trades, high_days, total_days, &high_returns),
-        neutral_vol: compute_regime_metrics(&neutral_trades, neutral_days, total_days, &neutral_returns),
+        neutral_vol: compute_regime_metrics(
+            &neutral_trades,
+            neutral_days,
+            total_days,
+            &neutral_returns,
+        ),
         low_vol: compute_regime_metrics(&low_trades, low_days, total_days, &low_returns),
         median_atr,
         atr_period: config.atr_period,
@@ -274,7 +274,12 @@ pub fn compute_regime_analysis(
 fn compute_equity_returns(equity: &[EquityPoint]) -> Vec<(i64, f64)> {
     equity
         .windows(2)
-        .map(|w| (w[1].ts.timestamp(), (w[1].equity - w[0].equity) / w[0].equity))
+        .map(|w| {
+            (
+                w[1].ts.timestamp(),
+                (w[1].equity - w[0].equity) / w[0].equity,
+            )
+        })
         .collect()
 }
 
@@ -325,7 +330,8 @@ fn compute_regime_metrics(
     // Compute Sharpe for this regime
     let sharpe = if returns.len() > 1 {
         let mean = returns.iter().sum::<f64>() / returns.len() as f64;
-        let variance = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / returns.len() as f64;
+        let variance =
+            returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / returns.len() as f64;
         let std = variance.sqrt();
         if std > 0.0 {
             (mean * 252.0) / (std * 252.0_f64.sqrt())
@@ -373,8 +379,11 @@ pub fn compute_trade_analysis(
         bars.iter().map(|b| (b.ts.timestamp(), b)).collect();
 
     // Build timestamp -> index lookup for range queries
-    let ts_to_idx: std::collections::HashMap<i64, usize> =
-        bars.iter().enumerate().map(|(i, b)| (b.ts.timestamp(), i)).collect();
+    let ts_to_idx: std::collections::HashMap<i64, usize> = bars
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.ts.timestamp(), i))
+        .collect();
 
     // Compute ATR for vol-at-entry
     let atr_values = compute_atr_series(bars, config.atr_period);
@@ -396,6 +405,7 @@ pub fn compute_trade_analysis(
             let mut max_adverse = 0.0_f64;
             let mut max_favorable = 0.0_f64;
 
+            #[allow(clippy::needless_range_loop)]
             for i in start..=end.min(bars.len() - 1) {
                 let bar = &bars[i];
                 // For long trades: adverse = how much price dropped below entry
@@ -480,7 +490,10 @@ fn compute_atr_series(bars: &[Bar], period: usize) -> Vec<f64> {
 }
 
 /// Compute holding period statistics.
-fn compute_holding_stats(excursions: &[TradeExcursion], config: &AnalysisConfig) -> HoldingPeriodStats {
+fn compute_holding_stats(
+    excursions: &[TradeExcursion],
+    config: &AnalysisConfig,
+) -> HoldingPeriodStats {
     if excursions.is_empty() {
         return HoldingPeriodStats::default();
     }

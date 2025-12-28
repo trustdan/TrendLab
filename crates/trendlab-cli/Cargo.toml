@@ -10,7 +10,7 @@ name = "trendlab_cli"
 path = "src/lib.rs"
 
 [[bin]]
-name = "trendlab"
+name = "trendlab-cli"
 path = "src/main.rs"
 
 [dependencies]

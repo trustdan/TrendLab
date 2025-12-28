@@ -162,6 +162,7 @@ where
     let mut resample: Vec<f64> = vec![0.0; n];
     for _ in 0..config.n_iterations {
         // Resample with replacement
+        #[allow(clippy::needless_range_loop)]
         for j in 0..n {
             let idx = rng.gen_range(0..n);
             resample[j] = data[idx];
@@ -177,7 +178,10 @@ where
     let lower_idx = ((alpha / 2.0) * config.n_iterations as f64).floor() as usize;
     let upper_idx = ((1.0 - alpha / 2.0) * config.n_iterations as f64).floor() as usize;
 
-    let ci_lower = bootstrap_stats.get(lower_idx).copied().unwrap_or(point_estimate);
+    let ci_lower = bootstrap_stats
+        .get(lower_idx)
+        .copied()
+        .unwrap_or(point_estimate);
     let ci_upper = bootstrap_stats
         .get(upper_idx.min(bootstrap_stats.len() - 1))
         .copied()
@@ -324,6 +328,205 @@ pub fn permutation_test(
         n_permutations,
         n_extreme,
     })
+}
+
+// =============================================================================
+// P-Value Computation for OOS Sharpe Testing
+// =============================================================================
+
+/// Compute one-sided p-value for testing if the sample mean is greater than zero.
+///
+/// Uses a t-test when sample size < 30, otherwise normal approximation.
+/// This is used for testing whether OOS Sharpe ratios are significantly positive.
+///
+/// # Arguments
+/// * `samples` - The sample data (e.g., OOS Sharpe ratios from walk-forward folds)
+///
+/// # Returns
+/// P-value for the one-sided test H0: mean <= 0 vs H1: mean > 0
+pub fn one_sided_mean_pvalue(samples: &[f64]) -> Result<f64, StatisticsError> {
+    if samples.len() < 3 {
+        return Err(StatisticsError::InsufficientSamples {
+            needed: 3,
+            available: samples.len(),
+        });
+    }
+
+    let n = samples.len() as f64;
+    let mean = samples.iter().sum::<f64>() / n;
+    let variance = samples.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    let std_error = (variance / n).sqrt();
+
+    // Handle edge cases
+    if std_error < 1e-10 {
+        // Near-zero variance: if mean > 0, extremely significant; otherwise not
+        return Ok(if mean > 0.0 { 1e-10 } else { 1.0 - 1e-10 });
+    }
+
+    let t_stat = mean / std_error;
+    let df = n - 1.0;
+
+    // Use normal approximation for df >= 30, otherwise t-distribution
+    let p_value = if df >= 30.0 {
+        1.0 - standard_normal_cdf(t_stat)
+    } else {
+        1.0 - t_distribution_cdf(t_stat, df)
+    };
+
+    Ok(p_value.clamp(1e-10, 1.0 - 1e-10))
+}
+
+/// Standard normal CDF approximation using Abramowitz & Stegun formula.
+///
+/// Maximum error: 7.5e-8
+pub fn standard_normal_cdf(x: f64) -> f64 {
+    if x < -8.0 {
+        return 0.0;
+    }
+    if x > 8.0 {
+        return 1.0;
+    }
+
+    // Use symmetry for negative values
+    let (sign, z) = if x < 0.0 { (-1.0, -x) } else { (1.0, x) };
+
+    // Abramowitz & Stegun approximation (formula 7.1.26)
+    let p = 0.2316419;
+    let b1 = 0.319381530;
+    let b2 = -0.356563782;
+    let b3 = 1.781477937;
+    let b4 = -1.821255978;
+    let b5 = 1.330274429;
+
+    let t = 1.0 / (1.0 + p * z);
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let t4 = t3 * t;
+    let t5 = t4 * t;
+
+    let pdf = (-z * z / 2.0).exp() / (2.0 * std::f64::consts::PI).sqrt();
+    let tail = pdf * (b1 * t + b2 * t2 + b3 * t3 + b4 * t4 + b5 * t5);
+
+    if sign > 0.0 {
+        1.0 - tail
+    } else {
+        tail
+    }
+}
+
+/// T-distribution CDF approximation using Hill's algorithm.
+///
+/// Accurate for all df >= 1.
+pub fn t_distribution_cdf(t: f64, df: f64) -> f64 {
+    if df <= 0.0 {
+        return 0.5; // Invalid df, return 0.5
+    }
+
+    // For very large df, use normal approximation
+    if df > 1000.0 {
+        return standard_normal_cdf(t);
+    }
+
+    // Use symmetry
+    let x = df / (df + t * t);
+
+    // Compute incomplete beta function I_x(df/2, 1/2)
+    let a = df / 2.0;
+    let b = 0.5;
+
+    let beta_inc = regularized_incomplete_beta(x, a, b);
+
+    if t >= 0.0 {
+        1.0 - 0.5 * beta_inc
+    } else {
+        0.5 * beta_inc
+    }
+}
+
+/// Regularized incomplete beta function I_x(a, b) approximation.
+///
+/// Uses continued fraction expansion for accuracy.
+fn regularized_incomplete_beta(x: f64, a: f64, b: f64) -> f64 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if x >= 1.0 {
+        return 1.0;
+    }
+
+    // Use symmetry transformation if needed for better convergence
+    if x > (a + 1.0) / (a + b + 2.0) {
+        return 1.0 - regularized_incomplete_beta(1.0 - x, b, a);
+    }
+
+    // Compute using continued fraction (Lentz's algorithm)
+    let ln_beta = ln_gamma(a) + ln_gamma(b) - ln_gamma(a + b);
+    let front = (a * x.ln() + b * (1.0 - x).ln() - ln_beta).exp() / a;
+
+    // Continued fraction coefficients
+    let mut c = 1.0;
+    let mut d = 1.0 / (1.0 - (a + b) * x / (a + 1.0)).max(1e-30);
+    let mut h = d;
+
+    for m in 1..200 {
+        let m_f64 = m as f64;
+
+        // Even term
+        let num_even = m_f64 * (b - m_f64) * x / ((a + 2.0 * m_f64 - 1.0) * (a + 2.0 * m_f64));
+        d = 1.0 / (1.0 + num_even * d).max(1e-30);
+        c = (1.0 + num_even / c).max(1e-30);
+        h *= d * c;
+
+        // Odd term
+        let num_odd =
+            -((a + m_f64) * (a + b + m_f64) * x) / ((a + 2.0 * m_f64) * (a + 2.0 * m_f64 + 1.0));
+        d = 1.0 / (1.0 + num_odd * d).max(1e-30);
+        c = (1.0 + num_odd / c).max(1e-30);
+        let delta = d * c;
+        h *= delta;
+
+        if (delta - 1.0).abs() < 1e-10 {
+            break;
+        }
+    }
+
+    front * h
+}
+
+/// Log-gamma function approximation using Stirling's formula with corrections.
+fn ln_gamma(x: f64) -> f64 {
+    if x <= 0.0 {
+        return f64::INFINITY;
+    }
+
+    // For small x, use reflection or recursion
+    if x < 0.5 {
+        // Use reflection formula: Gamma(x) * Gamma(1-x) = pi / sin(pi*x)
+        let pi = std::f64::consts::PI;
+        return pi.ln() - (pi * x).sin().ln() - ln_gamma(1.0 - x);
+    }
+
+    // Lanczos approximation (g=7, n=9)
+    let coef = [
+        0.999_999_999_999_809_9,
+        676.5203681218851,
+        -1259.1392167224028,
+        771.323_428_777_653_1,
+        -176.615_029_162_140_6,
+        12.507343278686905,
+        -0.13857109526572012,
+        9.984_369_578_019_572e-6,
+        1.5056327351493116e-7,
+    ];
+
+    let x = x - 1.0;
+    let mut ag = coef[0];
+    for (i, &c) in coef.iter().enumerate().skip(1) {
+        ag += c / (x + i as f64);
+    }
+
+    let tmp = x + 7.5;
+    (2.0 * std::f64::consts::PI).sqrt().ln() + (x + 0.5) * tmp.ln() - tmp + ag.ln()
 }
 
 /// Result of multiple comparison adjustment.
@@ -548,7 +751,7 @@ pub fn sample_statistics(data: &[f64]) -> Result<SampleStatistics, StatisticsErr
     let min = sorted[0];
     let max = sorted[n - 1];
 
-    let median = if n % 2 == 0 {
+    let median = if n.is_multiple_of(2) {
         (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
     } else {
         sorted[n / 2]
@@ -720,7 +923,8 @@ mod tests {
         let data: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
         let config = BootstrapConfig::quick();
 
-        let result = bootstrap_ci(&data, |x| x.iter().sum::<f64>() / x.len() as f64, &config).unwrap();
+        let result =
+            bootstrap_ci(&data, |x| x.iter().sum::<f64>() / x.len() as f64, &config).unwrap();
 
         // True mean is 5.5
         assert!((result.point_estimate - 5.5).abs() < 0.01);
@@ -735,9 +939,7 @@ mod tests {
     fn test_bootstrap_sharpe() {
         // Generate realistic daily returns (mean ~0, std ~1-2%)
         let mut rng = SmallRng::seed_from_u64(42);
-        let returns: Vec<f64> = (0..200)
-            .map(|_| rng.gen_range(-0.03..0.035))
-            .collect();
+        let returns: Vec<f64> = (0..200).map(|_| rng.gen_range(-0.03..0.035)).collect();
 
         let config = BootstrapConfig::quick();
         let result = bootstrap_sharpe(&returns, 252.0, &config).unwrap();
@@ -757,7 +959,8 @@ mod tests {
         let data: Vec<f64> = (1..101).map(|x| x as f64).collect();
         let config = BootstrapConfig::quick();
 
-        let result = bootstrap_ci(&data, |x| x.iter().sum::<f64>() / x.len() as f64, &config).unwrap();
+        let result =
+            bootstrap_ci(&data, |x| x.iter().sum::<f64>() / x.len() as f64, &config).unwrap();
 
         // Mean is 50.5, should be significantly positive
         assert!(result.is_significant());
@@ -806,8 +1009,8 @@ mod tests {
         assert!(!result.rejections[6]); // 0.78 should fail
 
         // All adjusted p-values should be >= original
-        for i in 0..p_values.len() {
-            assert!(result.adjusted_p_values[i] >= p_values[i] - 1e-10);
+        for (i, p_val) in p_values.iter().enumerate() {
+            assert!(result.adjusted_p_values[i] >= p_val - 1e-10);
         }
     }
 
@@ -867,9 +1070,7 @@ mod tests {
     fn test_strategy_statistics() {
         // Generate 100 daily returns with slight positive drift
         let mut rng = SmallRng::seed_from_u64(42);
-        let returns: Vec<f64> = (0..100)
-            .map(|_| rng.gen_range(-0.005..0.015))
-            .collect();
+        let returns: Vec<f64> = (0..100).map(|_| rng.gen_range(-0.005..0.015)).collect();
 
         let config = BootstrapConfig::quick();
         let stats = StrategyStatistics::from_returns(&returns, &config).unwrap();
@@ -885,5 +1086,88 @@ mod tests {
                 | ConfidenceGrade::Low
                 | ConfidenceGrade::Insufficient
         ));
+    }
+
+    #[test]
+    fn test_standard_normal_cdf() {
+        // Test known values
+        assert!((standard_normal_cdf(0.0) - 0.5).abs() < 0.001);
+        assert!((standard_normal_cdf(1.96) - 0.975).abs() < 0.001);
+        assert!((standard_normal_cdf(-1.96) - 0.025).abs() < 0.001);
+        assert!((standard_normal_cdf(2.576) - 0.995).abs() < 0.001);
+        // Extreme values
+        assert!(standard_normal_cdf(-10.0) < 0.001);
+        assert!(standard_normal_cdf(10.0) > 0.999);
+    }
+
+    #[test]
+    fn test_t_distribution_cdf() {
+        // For large df, should match normal
+        assert!((t_distribution_cdf(0.0, 100.0) - 0.5).abs() < 0.01);
+        assert!((t_distribution_cdf(1.96, 100.0) - 0.975).abs() < 0.01);
+
+        // For small df, tails should be fatter
+        // t(1.96, df=5) < normal(1.96) because t has fatter tails
+        assert!(t_distribution_cdf(1.96, 5.0) < 0.975);
+        assert!(t_distribution_cdf(1.96, 5.0) > 0.94);
+
+        // Symmetry
+        assert!(
+            (t_distribution_cdf(1.0, 10.0) + t_distribution_cdf(-1.0, 10.0) - 1.0).abs() < 0.001
+        );
+    }
+
+    #[test]
+    fn test_one_sided_mean_pvalue_positive() {
+        // Clearly positive mean should have low p-value
+        let samples = vec![0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4];
+        let p = one_sided_mean_pvalue(&samples).unwrap();
+        assert!(p < 0.01, "p-value {} should be < 0.01 for positive mean", p);
+    }
+
+    #[test]
+    fn test_one_sided_mean_pvalue_negative() {
+        // Clearly negative mean should have high p-value (testing mean > 0)
+        let samples = vec![-0.5, -0.6, -0.7, -0.8, -0.9, -1.0, -1.1, -1.2, -1.3, -1.4];
+        let p = one_sided_mean_pvalue(&samples).unwrap();
+        assert!(p > 0.99, "p-value {} should be > 0.99 for negative mean", p);
+    }
+
+    #[test]
+    fn test_one_sided_mean_pvalue_zero() {
+        // Mean near zero should have p-value around 0.5
+        let samples = vec![-0.1, 0.1, -0.2, 0.2, -0.15, 0.15, -0.05, 0.05];
+        let p = one_sided_mean_pvalue(&samples).unwrap();
+        assert!(p > 0.3 && p < 0.7, "p-value {} should be around 0.5", p);
+    }
+
+    #[test]
+    fn test_one_sided_mean_pvalue_insufficient_samples() {
+        let samples = vec![1.0, 2.0];
+        let result = one_sided_mean_pvalue(&samples);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_one_sided_mean_pvalue_realistic_oos_sharpes() {
+        // Simulate OOS Sharpe ratios from walk-forward folds
+        // Good strategy: consistently positive but variable
+        let good_oos = vec![0.8, 1.2, 0.6, 0.9, 1.1];
+        let p_good = one_sided_mean_pvalue(&good_oos).unwrap();
+        assert!(p_good < 0.05, "Good strategy p={} should be < 0.05", p_good);
+
+        // Mediocre strategy: mixed results
+        let mixed_oos = vec![0.5, -0.2, 0.3, 0.1, -0.1];
+        let p_mixed = one_sided_mean_pvalue(&mixed_oos).unwrap();
+        assert!(
+            p_mixed > 0.1,
+            "Mixed strategy p={} should be > 0.1",
+            p_mixed
+        );
+
+        // Bad strategy: mostly negative OOS
+        let bad_oos = vec![-0.3, 0.1, -0.5, -0.2, -0.4];
+        let p_bad = one_sided_mean_pvalue(&bad_oos).unwrap();
+        assert!(p_bad > 0.9, "Bad strategy p={} should be > 0.9", p_bad);
     }
 }

@@ -188,7 +188,10 @@ impl CompanionState {
                 self.job_progress = 0;
                 self.job_total = 0;
                 self.job_message.clear();
-                self.add_log(LogLevel::Info, &format!("{} started: {}", job_type, description));
+                self.add_log(
+                    LogLevel::Info,
+                    &format!("{} started: {}", job_type, description),
+                );
             }
 
             CompanionEvent::JobProgress {
@@ -262,7 +265,11 @@ impl CompanionState {
                 });
             }
 
-            CompanionEvent::Log { level, message, ts: _ } => {
+            CompanionEvent::Log {
+                level,
+                message,
+                ts: _,
+            } => {
                 self.add_log(level, &message);
             }
 

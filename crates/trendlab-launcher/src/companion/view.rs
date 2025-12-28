@@ -12,6 +12,7 @@ use super::state::CompanionState;
 use crate::ipc::LogLevel;
 
 /// Tokyo Night color palette.
+#[allow(dead_code)]
 mod colors {
     use ratatui::style::Color;
 
@@ -46,7 +47,10 @@ fn render_minimized(frame: &mut Frame, state: &CompanionState) {
         format!(
             "TrendLab | GUI PID {} | {} {:.0}% ({}/{}) | [Esc] expand | [q] quit",
             state.gui_pid(),
-            state.current_job_type().map(|t| t.to_string()).unwrap_or_default(),
+            state
+                .current_job_type()
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
             percent,
             current,
             total
@@ -79,10 +83,10 @@ fn render_full(frame: &mut Frame, state: &CompanionState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),              // Status bar
-            Constraint::Length(5),              // Progress section
-            Constraint::Min(8),                 // Results table
-            Constraint::Length(log_height),     // Logs (dynamic)
+            Constraint::Length(3),          // Status bar
+            Constraint::Length(5),          // Progress section
+            Constraint::Min(8),             // Results table
+            Constraint::Length(log_height), // Logs (dynamic)
         ])
         .split(area);
 
@@ -106,9 +110,17 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &CompanionState) {
         .unwrap_or_default();
 
     let title = Line::from(vec![
-        Span::styled(" TrendLab Companion ", Style::default().fg(colors::BLUE).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " TrendLab Companion ",
+            Style::default()
+                .fg(colors::BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw("| GUI PID "),
-        Span::styled(state.gui_pid().to_string(), Style::default().fg(colors::CYAN)),
+        Span::styled(
+            state.gui_pid().to_string(),
+            Style::default().fg(colors::CYAN),
+        ),
         Span::styled(version, Style::default().fg(colors::COMMENT)),
         Span::raw(" | "),
         connection_status,
@@ -139,7 +151,10 @@ fn render_progress(frame: &mut Frame, area: Rect, state: &CompanionState) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(colors::DARK))
-        .title(Span::styled(" Progress ", Style::default().fg(colors::PURPLE)));
+        .title(Span::styled(
+            " Progress ",
+            Style::default().fg(colors::PURPLE),
+        ));
 
     if state.has_active_job() {
         let (current, total) = state.job_progress();
@@ -191,7 +206,10 @@ fn render_results(frame: &mut Frame, area: Rect, state: &CompanionState) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(colors::DARK))
-        .title(Span::styled(" Recent Results ", Style::default().fg(colors::GREEN)));
+        .title(Span::styled(
+            " Recent Results ",
+            Style::default().fg(colors::GREEN),
+        ));
 
     let results = state.recent_results();
 
@@ -203,9 +221,15 @@ fn render_results(frame: &mut Frame, area: Rect, state: &CompanionState) {
         return;
     }
 
-    let header = Row::new(vec!["Ticker", "Strategy", "Config", "Sharpe", "CAGR", "Max DD"])
-        .style(Style::default().fg(colors::BLUE).add_modifier(Modifier::BOLD))
-        .height(1);
+    let header = Row::new(vec![
+        "Ticker", "Strategy", "Config", "Sharpe", "CAGR", "Max DD",
+    ])
+    .style(
+        Style::default()
+            .fg(colors::BLUE)
+            .add_modifier(Modifier::BOLD),
+    )
+    .height(1);
 
     let rows: Vec<Row> = results
         .iter()
@@ -223,9 +247,18 @@ fn render_results(frame: &mut Frame, area: Rect, state: &CompanionState) {
                 Span::styled(r.ticker.clone(), Style::default().fg(colors::FG)),
                 Span::styled(r.strategy.clone(), Style::default().fg(colors::FG)),
                 Span::styled(r.config_id.clone(), Style::default().fg(colors::COMMENT)),
-                Span::styled(format!("{:.2}", r.sharpe), Style::default().fg(sharpe_color)),
-                Span::styled(format!("{:.1}%", r.cagr * 100.0), Style::default().fg(colors::FG)),
-                Span::styled(format!("{:.1}%", r.max_dd * 100.0), Style::default().fg(colors::RED)),
+                Span::styled(
+                    format!("{:.2}", r.sharpe),
+                    Style::default().fg(sharpe_color),
+                ),
+                Span::styled(
+                    format!("{:.1}%", r.cagr * 100.0),
+                    Style::default().fg(colors::FG),
+                ),
+                Span::styled(
+                    format!("{:.1}%", r.max_dd * 100.0),
+                    Style::default().fg(colors::RED),
+                ),
             ])
             .height(1)
         })
@@ -234,12 +267,12 @@ fn render_results(frame: &mut Frame, area: Rect, state: &CompanionState) {
     let table = Table::new(
         rows,
         [
-            Constraint::Length(8),   // Ticker
-            Constraint::Length(20),  // Strategy
-            Constraint::Length(12),  // Config
-            Constraint::Length(8),   // Sharpe
-            Constraint::Length(8),   // CAGR
-            Constraint::Length(8),   // Max DD
+            Constraint::Length(8),  // Ticker
+            Constraint::Length(20), // Strategy
+            Constraint::Length(12), // Config
+            Constraint::Length(8),  // Sharpe
+            Constraint::Length(8),  // CAGR
+            Constraint::Length(8),  // Max DD
         ],
     )
     .header(header)
@@ -281,7 +314,9 @@ fn render_logs(frame: &mut Frame, area: Rect, state: &CompanionState) {
         .take(max_lines)
         .map(|entry| {
             let level_style = match entry.level {
-                LogLevel::Trace => Style::default().fg(colors::COMMENT).add_modifier(Modifier::DIM),
+                LogLevel::Trace => Style::default()
+                    .fg(colors::COMMENT)
+                    .add_modifier(Modifier::DIM),
                 LogLevel::Debug => Style::default().fg(colors::COMMENT),
                 LogLevel::Info => Style::default().fg(colors::BLUE),
                 LogLevel::Warn => Style::default().fg(colors::YELLOW),

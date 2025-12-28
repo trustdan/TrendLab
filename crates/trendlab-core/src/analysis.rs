@@ -191,7 +191,7 @@ pub enum VolRegime {
 // =============================================================================
 
 /// Trade-level analysis for swing trading.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TradeAnalysis {
     /// Holding period distribution.
     pub holding_period: HoldingPeriodStats,
@@ -205,19 +205,6 @@ pub struct TradeAnalysis {
     pub vol_at_entry: VolAtEntryStats,
     /// Number of trades analyzed.
     pub n_trades: usize,
-}
-
-impl Default for TradeAnalysis {
-    fn default() -> Self {
-        Self {
-            holding_period: HoldingPeriodStats::default(),
-            mae: ExcursionStats::default(),
-            mfe: ExcursionStats::default(),
-            edge_ratio: EdgeRatioStats::default(),
-            vol_at_entry: VolAtEntryStats::default(),
-            n_trades: 0,
-        }
-    }
 }
 
 /// Holding period distribution statistics.

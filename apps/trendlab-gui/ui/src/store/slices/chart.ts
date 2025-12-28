@@ -13,6 +13,27 @@ import type {
 } from '../../types';
 import { DEFAULT_CHART_STATE, DEFAULT_OVERLAYS } from '../../types';
 
+/** Extract error message from GuiError envelope or string */
+function extractErrorMessage(error: unknown): string {
+  if (typeof error === 'string') {
+    return error;
+  }
+  if (typeof error === 'object' && error !== null) {
+    // GuiError envelope: { code, message, details, retryable }
+    if ('message' in error && typeof (error as { message: unknown }).message === 'string') {
+      return (error as { message: string }).message;
+    }
+    // Error object with toString
+    if ('toString' in error) {
+      const str = error.toString();
+      if (str !== '[object Object]') {
+        return str;
+      }
+    }
+  }
+  return 'Unknown error';
+}
+
 /** Available chart modes in order */
 const CHART_MODES: ChartMode[] = [
   'candlestick',
@@ -74,7 +95,7 @@ export const createChartSlice: SliceCreator<ChartSlice> = (set, get) => ({
       // Reload chart data for new mode
       await get().loadChartData();
     } catch (error) {
-      set({ chartError: String(error) });
+      set({ chartError: extractErrorMessage(error) });
     }
   },
 
@@ -100,7 +121,7 @@ export const createChartSlice: SliceCreator<ChartSlice> = (set, get) => ({
       // Reload chart data for new selection
       await get().loadChartData();
     } catch (error) {
-      set({ chartError: String(error) });
+      set({ chartError: extractErrorMessage(error) });
     }
   },
 
@@ -121,18 +142,13 @@ export const createChartSlice: SliceCreator<ChartSlice> = (set, get) => ({
         await get().loadChartData();
       }
     } catch (error) {
-      set({ chartError: String(error) });
+      set({ chartError: extractErrorMessage(error) });
     }
   },
 
   loadChartState: async () => {
     try {
       const state = await invoke<ChartState>('get_chart_state');
-      console.debug('[Chart] Loaded chart state:', {
-        mode: state.mode,
-        symbol: state.symbol,
-        strategy: state.strategy,
-      });
       set({
         chartMode: state.mode,
         chartSymbol: state.symbol ?? null,
@@ -141,8 +157,7 @@ export const createChartSlice: SliceCreator<ChartSlice> = (set, get) => ({
         chartOverlays: state.overlays,
       });
     } catch (error) {
-      console.error('[Chart] Error loading state:', error);
-      set({ chartError: String(error) });
+      set({ chartError: extractErrorMessage(error) });
     }
   },
 
@@ -151,15 +166,9 @@ export const createChartSlice: SliceCreator<ChartSlice> = (set, get) => ({
 
     try {
       const data = await invoke<ChartData>('get_chart_data');
-      console.debug('[Chart] Loaded chart data:', {
-        hasCandles: !!data.candles?.length,
-        hasEquity: !!data.equity?.length,
-        hasCurves: !!data.curves?.length,
-      });
       set({ chartData: data, chartLoading: false });
     } catch (error) {
-      console.error('[Chart] Error loading data:', error);
-      set({ chartError: String(error), chartLoading: false, chartData: null });
+      set({ chartError: extractErrorMessage(error), chartLoading: false, chartData: null });
     }
   },
 
@@ -167,7 +176,7 @@ export const createChartSlice: SliceCreator<ChartSlice> = (set, get) => ({
     try {
       return await invoke<ChartCandleData[]>('get_candle_data', { symbol });
     } catch (error) {
-      set({ chartError: String(error) });
+      set({ chartError: extractErrorMessage(error) });
       return [];
     }
   },
@@ -176,7 +185,7 @@ export const createChartSlice: SliceCreator<ChartSlice> = (set, get) => ({
     try {
       return await invoke<ChartEquityPoint[]>('get_equity_curve', { resultId });
     } catch (error) {
-      set({ chartError: String(error) });
+      set({ chartError: extractErrorMessage(error) });
       return [];
     }
   },
@@ -185,7 +194,7 @@ export const createChartSlice: SliceCreator<ChartSlice> = (set, get) => ({
     try {
       return await invoke<DrawdownPoint[]>('get_drawdown_curve', { resultId });
     } catch (error) {
-      set({ chartError: String(error) });
+      set({ chartError: extractErrorMessage(error) });
       return [];
     }
   },
@@ -194,7 +203,7 @@ export const createChartSlice: SliceCreator<ChartSlice> = (set, get) => ({
     try {
       return await invoke<NamedEquityCurve[]>('get_multi_ticker_curves');
     } catch (error) {
-      set({ chartError: String(error) });
+      set({ chartError: extractErrorMessage(error) });
       return [];
     }
   },
@@ -203,7 +212,7 @@ export const createChartSlice: SliceCreator<ChartSlice> = (set, get) => ({
     try {
       return await invoke<ChartEquityPoint[]>('get_portfolio_curve');
     } catch (error) {
-      set({ chartError: String(error) });
+      set({ chartError: extractErrorMessage(error) });
       return [];
     }
   },
@@ -212,7 +221,7 @@ export const createChartSlice: SliceCreator<ChartSlice> = (set, get) => ({
     try {
       return await invoke<NamedEquityCurve[]>('get_strategy_curves');
     } catch (error) {
-      set({ chartError: String(error) });
+      set({ chartError: extractErrorMessage(error) });
       return [];
     }
   },
@@ -221,7 +230,7 @@ export const createChartSlice: SliceCreator<ChartSlice> = (set, get) => ({
     try {
       return await invoke<TradeMarker[]>('get_trades', { resultId });
     } catch (error) {
-      set({ chartError: String(error) });
+      set({ chartError: extractErrorMessage(error) });
       return [];
     }
   },

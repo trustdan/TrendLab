@@ -1,4 +1,5 @@
 import { useEffect, useCallback } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../../store';
 import {
   CandlestickChart,
@@ -12,6 +13,7 @@ import type { ChartMode, ChartOverlays } from '../../types';
 import styles from './ChartPanel.module.css';
 
 export function ChartPanel() {
+
   const {
     chartMode,
     chartSymbol,
@@ -29,23 +31,25 @@ export function ChartPanel() {
     selectedResult,
     results,
     activePanel,
-  } = useAppStore((state) => ({
-    chartMode: state.chartMode,
-    chartSymbol: state.chartSymbol,
-    chartOverlays: state.chartOverlays,
-    chartData: state.chartData,
-    chartLoading: state.chartLoading,
-    chartError: state.chartError,
-    setChartMode: state.setChartMode,
-    cycleChartMode: state.cycleChartMode,
-    toggleOverlay: state.toggleOverlay,
-    loadChartState: state.loadChartState,
-    loadChartData: state.loadChartData,
-    clearChartError: state.clearChartError,
-    selectedResult: state.selectedResultId,
-    results: state.results,
-    activePanel: state.activePanel,
-  }));
+  } = useAppStore(
+    useShallow((state) => ({
+      chartMode: state.chartMode,
+      chartSymbol: state.chartSymbol,
+      chartOverlays: state.chartOverlays,
+      chartData: state.chartData,
+      chartLoading: state.chartLoading,
+      chartError: state.chartError,
+      setChartMode: state.setChartMode,
+      cycleChartMode: state.cycleChartMode,
+      toggleOverlay: state.toggleOverlay,
+      loadChartState: state.loadChartState,
+      loadChartData: state.loadChartData,
+      clearChartError: state.clearChartError,
+      selectedResult: state.selectedResultId,
+      results: state.results,
+      activePanel: state.activePanel,
+    }))
+  );
 
   // Handle keyboard actions for Chart panel
   const handleAction = useCallback(
@@ -76,9 +80,13 @@ export function ChartPanel() {
   useEffect(() => {
     let cancelled = false;
     const init = async () => {
-      await loadChartState();
-      if (!cancelled) {
-        await loadChartData();
+      try {
+        await loadChartState();
+        if (!cancelled) {
+          await loadChartData();
+        }
+      } catch (error) {
+        console.error('[ChartPanel] Init error:', error);
       }
     };
     init();
