@@ -220,9 +220,9 @@ fn draw_controls(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
     let mut lines = vec![Line::from(action)];
 
     // Show YOLO leaderboard summary if running or has entries
-    if app.yolo.enabled || !app.yolo.leaderboard.entries.is_empty() {
-        let best_sharpe = app.yolo.leaderboard.best_sharpe().unwrap_or(0.0);
-        let entry_count = app.yolo.leaderboard.entries.len();
+    if app.yolo.enabled || !app.yolo.leaderboard().entries.is_empty() {
+        let best_sharpe = app.yolo.leaderboard().best_sharpe().unwrap_or(0.0);
+        let entry_count = app.yolo.leaderboard().entries.len();
         lines.push(Line::from(vec![
             Span::styled("Leaderboard: ", Style::default().fg(colors::FG_DARK)),
             Span::styled(

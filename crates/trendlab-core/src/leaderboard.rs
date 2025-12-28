@@ -3,15 +3,56 @@
 //! This module provides:
 //! - LeaderboardEntry: A single discovered winning strategy
 //! - Leaderboard: Maintains top N strategies by Sharpe ratio
+//! - CrossSymbolLeaderboard: Aggregated performance across symbols
+//! - Session vs All-Time tracking for persistent discovery
 //! - Persistence to/from JSON
 
 use crate::metrics::Metrics;
+use crate::statistics::ConfidenceGrade;
 use crate::sweep::{StrategyConfigId, StrategyTypeId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
+
+// =============================================================================
+// Leaderboard Scope (Session vs All-Time)
+// =============================================================================
+
+/// Scope for leaderboard viewing - session (current app launch) vs all-time (persistent).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum LeaderboardScope {
+    /// Current session only (reset each app launch)
+    #[default]
+    Session,
+    /// All-time persistent leaderboard
+    AllTime,
+}
+
+impl LeaderboardScope {
+    /// Toggle between Session and AllTime.
+    pub fn toggle(&self) -> Self {
+        match self {
+            Self::Session => Self::AllTime,
+            Self::AllTime => Self::Session,
+        }
+    }
+
+    /// Display name for UI.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Session => "Session",
+            Self::AllTime => "All-Time",
+        }
+    }
+}
+
+/// Generate a session ID from the current timestamp.
+/// Format: YYYYMMDDTHHMMSS (ISO 8601 basic format)
+pub fn generate_session_id() -> String {
+    Utc::now().format("%Y%m%dT%H%M%S").to_string()
+}
 
 // =============================================================================
 // Leaderboard Entry
@@ -32,6 +73,11 @@ pub struct LeaderboardEntry {
     /// Symbol this was tested on (None for aggregate/portfolio)
     pub symbol: Option<String>,
 
+    /// Sector this symbol belongs to (e.g., "technology", "healthcare")
+    /// Derived from universe.toml sector mappings
+    #[serde(default)]
+    pub sector: Option<String>,
+
     /// Performance metrics
     pub metrics: Metrics,
 
@@ -47,6 +93,15 @@ pub struct LeaderboardEntry {
 
     /// Which YOLO iteration found this config
     pub iteration: u32,
+
+    /// Session ID that discovered this entry (for tracking session vs all-time)
+    #[serde(default)]
+    pub session_id: Option<String>,
+
+    /// Statistical confidence grade (computed from bootstrap analysis of returns)
+    /// None if not computed yet or insufficient data
+    #[serde(default)]
+    pub confidence_grade: Option<ConfidenceGrade>,
 }
 
 impl LeaderboardEntry {
@@ -63,6 +118,64 @@ impl LeaderboardEntry {
         // Hash symbol
         self.symbol.hash(&mut hasher);
         hasher.finish()
+    }
+
+    /// Compute confidence grade from equity curve using bootstrap analysis.
+    ///
+    /// Returns None if there's insufficient data for reliable analysis.
+    pub fn compute_confidence_grade(&self) -> Option<ConfidenceGrade> {
+        compute_confidence_from_equity(&self.equity_curve)
+    }
+}
+
+/// Compute confidence grade from an equity curve.
+///
+/// Uses bootstrap resampling on daily returns to assess:
+/// - Whether the Sharpe ratio is significantly positive
+/// - The width of the confidence interval (narrower = more confident)
+///
+/// Returns None if there's insufficient data (< 30 days).
+pub fn compute_confidence_from_equity(equity_curve: &[f64]) -> Option<ConfidenceGrade> {
+    use crate::statistics::{bootstrap_sharpe, BootstrapConfig};
+
+    // Need at least 30 data points for meaningful bootstrap
+    if equity_curve.len() < 30 {
+        return Some(ConfidenceGrade::Insufficient);
+    }
+
+    // Compute daily returns
+    let returns: Vec<f64> = equity_curve
+        .windows(2)
+        .map(|w| (w[1] - w[0]) / w[0].max(1e-10))
+        .collect();
+
+    if returns.len() < 30 {
+        return Some(ConfidenceGrade::Insufficient);
+    }
+
+    // Use quick bootstrap (fewer iterations for YOLO mode responsiveness)
+    let config = BootstrapConfig::quick();
+
+    // Use 252 trading days per year for annualization
+    match bootstrap_sharpe(&returns, 252.0, &config) {
+        Ok(result) => {
+            // Grade based on:
+            // 1. Is Sharpe significantly positive? (ci_lower > 0)
+            // 2. Is CI narrow? (ci_width < 1.0)
+
+            let ci_width = result.ci_width();
+            let is_positive = result.ci_lower > 0.0;
+            let is_strongly_positive = result.ci_lower > 0.5;
+
+            if is_strongly_positive && ci_width < 1.0 {
+                Some(ConfidenceGrade::High)
+            } else if is_positive && ci_width < 2.0 {
+                Some(ConfidenceGrade::Medium)
+            } else {
+                Some(ConfidenceGrade::Low)
+            }
+        }
+        Err(_) => Some(ConfidenceGrade::Insufficient),
     }
 }
 
@@ -361,6 +474,11 @@ pub struct AggregatedConfigResult {
     /// Symbols included in this aggregation
     pub symbols: Vec<String>,
 
+    /// Per-symbol sector mapping (symbol -> sector_id)
+    /// Enables sector-level analysis of cross-symbol performance
+    #[serde(default)]
+    pub per_symbol_sectors: HashMap<String, String>,
+
     /// Per-symbol metrics for drill-down
     pub per_symbol_metrics: HashMap<String, Metrics>,
 
@@ -378,6 +496,15 @@ pub struct AggregatedConfigResult {
 
     /// Which YOLO iteration found this config
     pub iteration: u32,
+
+    /// Session ID that discovered this entry (for tracking session vs all-time)
+    #[serde(default)]
+    pub session_id: Option<String>,
+
+    /// Statistical confidence grade (computed from bootstrap analysis of combined equity returns)
+    /// None if not computed yet or insufficient data
+    #[serde(default)]
+    pub confidence_grade: Option<ConfidenceGrade>,
 }
 
 impl AggregatedConfigResult {
@@ -391,6 +518,13 @@ impl AggregatedConfigResult {
         format!("{:?}", self.strategy_type).hash(&mut hasher);
         format!("{:?}", self.config_id).hash(&mut hasher);
         hasher.finish()
+    }
+
+    /// Compute confidence grade from combined equity curve using bootstrap analysis.
+    ///
+    /// Returns None if there's insufficient data for reliable analysis.
+    pub fn compute_confidence_grade(&self) -> Option<ConfidenceGrade> {
+        compute_confidence_from_equity(&self.combined_equity_curve)
     }
 }
 
@@ -579,6 +713,7 @@ mod tests {
                 exit_lookback: 10,
             },
             symbol: symbol.map(|s| s.to_string()),
+            sector: None,
             metrics: Metrics {
                 sharpe,
                 ..Default::default()
@@ -587,6 +722,8 @@ mod tests {
             dates: vec![],
             discovered_at: Utc::now(),
             iteration,
+            session_id: None,
+            confidence_grade: None,
         }
     }
 

@@ -4,6 +4,7 @@ import type {
   YoloPhase,
   Leaderboard,
   CrossSymbolLeaderboard,
+  LeaderboardScope,
 } from '../../types/yolo';
 import type {
   YoloStartedPayload,
@@ -48,23 +49,40 @@ export interface YoloSlice {
   yoloIteration: number;
   yoloRandomizationPct: number;
   yoloTotalConfigsTested: number;
+  yoloSessionConfigsTested: number;
   yoloStartedAt: string | null;
   yoloCurrentJobId: string | null;
   yoloCompletedConfigs: number;
   yoloTotalConfigs: number;
 
-  // Leaderboards
-  leaderboard: Leaderboard | null;
-  crossSymbolLeaderboard: CrossSymbolLeaderboard | null;
+  // Leaderboards - Session (current app launch)
+  sessionLeaderboard: Leaderboard | null;
+  sessionCrossSymbolLeaderboard: CrossSymbolLeaderboard | null;
+
+  // Leaderboards - All-Time (persisted across sessions)
+  allTimeLeaderboard: Leaderboard | null;
+  allTimeCrossSymbolLeaderboard: CrossSymbolLeaderboard | null;
+
+  // View scope toggle
+  leaderboardScope: LeaderboardScope;
 
   // UI state
   yoloLoading: boolean;
   yoloError: string | null;
 
+  // Computed accessors
+  currentLeaderboard: () => Leaderboard | null;
+  currentCrossSymbolLeaderboard: () => CrossSymbolLeaderboard | null;
+  currentConfigsTested: () => number;
+
   // Actions - YOLO control
   startYolo: (randomizationPct?: number) => Promise<StartYoloResponse | null>;
   stopYolo: () => Promise<void>;
   setRandomizationPct: (pct: number) => void;
+
+  // Actions - View scope
+  toggleLeaderboardScope: () => void;
+  setLeaderboardScope: (scope: LeaderboardScope) => void;
 
   // Actions - Data loading
   loadYoloState: () => Promise<void>;
@@ -91,14 +109,43 @@ export const createYoloSlice: SliceCreator<YoloSlice> = (set, get) => ({
   yoloIteration: 0,
   yoloRandomizationPct: 0.15, // 15% default
   yoloTotalConfigsTested: 0,
+  yoloSessionConfigsTested: 0,
   yoloStartedAt: null,
   yoloCurrentJobId: null,
   yoloCompletedConfigs: 0,
   yoloTotalConfigs: 0,
-  leaderboard: null,
-  crossSymbolLeaderboard: null,
+  // Session leaderboards (reset each app launch)
+  sessionLeaderboard: null,
+  sessionCrossSymbolLeaderboard: null,
+  // All-time leaderboards (persisted)
+  allTimeLeaderboard: null,
+  allTimeCrossSymbolLeaderboard: null,
+  // Default to session view
+  leaderboardScope: 'session',
   yoloLoading: false,
   yoloError: null,
+
+  // Computed accessors
+  currentLeaderboard: () => {
+    const state = get();
+    return state.leaderboardScope === 'session'
+      ? state.sessionLeaderboard
+      : state.allTimeLeaderboard;
+  },
+
+  currentCrossSymbolLeaderboard: () => {
+    const state = get();
+    return state.leaderboardScope === 'session'
+      ? state.sessionCrossSymbolLeaderboard
+      : state.allTimeCrossSymbolLeaderboard;
+  },
+
+  currentConfigsTested: () => {
+    const state = get();
+    return state.leaderboardScope === 'session'
+      ? state.yoloSessionConfigsTested
+      : state.yoloTotalConfigsTested;
+  },
 
   // YOLO control
   startYolo: async (randomizationPct) => {
@@ -141,6 +188,16 @@ export const createYoloSlice: SliceCreator<YoloSlice> = (set, get) => ({
     set({ yoloRandomizationPct: clamped });
   },
 
+  // View scope actions
+  toggleLeaderboardScope: () => {
+    const current = get().leaderboardScope;
+    set({ leaderboardScope: current === 'session' ? 'all_time' : 'session' });
+  },
+
+  setLeaderboardScope: (scope) => {
+    set({ leaderboardScope: scope });
+  },
+
   // Data loading
   loadYoloState: async () => {
     try {
@@ -161,10 +218,11 @@ export const createYoloSlice: SliceCreator<YoloSlice> = (set, get) => ({
 
   loadLeaderboards: async () => {
     try {
+      // Load all-time leaderboards from backend (persisted on disk)
       const response = await invoke<LeaderboardResponse>('get_leaderboard');
       set({
-        leaderboard: response.per_symbol,
-        crossSymbolLeaderboard: response.cross_symbol,
+        allTimeLeaderboard: response.per_symbol,
+        allTimeCrossSymbolLeaderboard: response.cross_symbol,
       });
     } catch (e) {
       console.error('Failed to load leaderboards:', e);
@@ -181,7 +239,11 @@ export const createYoloSlice: SliceCreator<YoloSlice> = (set, get) => ({
       yoloIteration: 0,
       yoloCompletedConfigs: 0,
       yoloTotalConfigs: 0,
+      yoloSessionConfigsTested: 0,
       yoloLoading: false,
+      // Reset session leaderboards on new YOLO start
+      sessionLeaderboard: null,
+      sessionCrossSymbolLeaderboard: null,
     });
   },
 
@@ -195,12 +257,17 @@ export const createYoloSlice: SliceCreator<YoloSlice> = (set, get) => ({
   },
 
   handleYoloIterationComplete: (payload) => {
+    const configsThisRound = payload.configsTestedThisRound;
     set({
       yoloIteration: payload.iteration,
-      crossSymbolLeaderboard: payload.crossSymbolLeaderboard,
-      leaderboard: payload.perSymbolLeaderboard,
-      yoloTotalConfigsTested:
-        get().yoloTotalConfigsTested + payload.configsTestedThisRound,
+      // Update both session and all-time leaderboards
+      sessionCrossSymbolLeaderboard: payload.crossSymbolLeaderboard,
+      sessionLeaderboard: payload.perSymbolLeaderboard,
+      allTimeCrossSymbolLeaderboard: payload.crossSymbolLeaderboard,
+      allTimeLeaderboard: payload.perSymbolLeaderboard,
+      // Update counts for both
+      yoloSessionConfigsTested: get().yoloSessionConfigsTested + configsThisRound,
+      yoloTotalConfigsTested: get().yoloTotalConfigsTested + configsThisRound,
     });
   },
 
@@ -209,8 +276,11 @@ export const createYoloSlice: SliceCreator<YoloSlice> = (set, get) => ({
       yoloEnabled: false,
       yoloPhase: 'stopped',
       yoloCurrentJobId: null,
-      crossSymbolLeaderboard: payload.crossSymbolLeaderboard,
-      leaderboard: payload.perSymbolLeaderboard,
+      // Final results update both session and all-time
+      sessionCrossSymbolLeaderboard: payload.crossSymbolLeaderboard,
+      sessionLeaderboard: payload.perSymbolLeaderboard,
+      allTimeCrossSymbolLeaderboard: payload.crossSymbolLeaderboard,
+      allTimeLeaderboard: payload.perSymbolLeaderboard,
       yoloIteration: payload.totalIterations,
       yoloTotalConfigsTested: payload.totalConfigsTested,
       yoloLoading: false,
@@ -224,12 +294,16 @@ export const createYoloSlice: SliceCreator<YoloSlice> = (set, get) => ({
       yoloPhase: 'idle',
       yoloIteration: 0,
       yoloTotalConfigsTested: 0,
+      yoloSessionConfigsTested: 0,
       yoloStartedAt: null,
       yoloCurrentJobId: null,
       yoloCompletedConfigs: 0,
       yoloTotalConfigs: 0,
-      leaderboard: null,
-      crossSymbolLeaderboard: null,
+      sessionLeaderboard: null,
+      sessionCrossSymbolLeaderboard: null,
+      allTimeLeaderboard: null,
+      allTimeCrossSymbolLeaderboard: null,
+      leaderboardScope: 'session',
       yoloLoading: false,
       yoloError: null,
     });

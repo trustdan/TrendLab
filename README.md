@@ -26,7 +26,7 @@ The project optimizes for:
 
 ## Quick Links
 
-[Quick Start](#quick-start) | [Zero to Backtest](#zero-to-first-backtest-5-minutes) | [TUI Guide](#tui-features) | [Desktop GUI](#desktop-gui) | [Strategies](#strategies) | [CLI Commands](#cli-commands) | [Contributing](#contributing) | [Project Map](#project-map)
+[Quick Start](#quick-start) | [Zero to Backtest](#zero-to-first-backtest-5-minutes) | [TUI Guide](#tui-features) | [Desktop GUI](#desktop-gui) | [YOLO Mode](#yolo-mode) | [Statistical Rigor](#statistical-rigor) | [Strategies](#strategies) | [CLI Commands](#cli-commands) | [Contributing](#contributing)
 
 ## Ethos (what we care about)
 
@@ -134,25 +134,37 @@ For more detail, see `docs/PROJECT_OVERVIEW.md` and `docs/architecture.md`.
 
 See [Backtest Architecture](#backtest-architecture) below for details on the dual-backend design.
 
-**Milestone 5 ("V2 Strategy Expansion")** 🚧 In Progress:
+**Milestone 5 ("V2 Strategy Expansion")** ✅ Complete:
 
-- **10 of 15 V2 strategies implemented** with Polars-native backends
-- Phase 1 (ATR-Based): Keltner ✅, STARC (pending), Supertrend (pending)
+- **20 V2 strategies implemented** with Polars-native backends
+- Phase 1 (ATR-Based): Keltner ✅, STARC ✅, Supertrend ✅
 - Phase 2 (Momentum/Direction): DMI/ADX ✅, Aroon ✅, Heikin-Ashi ✅
-- Phases 3-5: 5 strategies pending (Darvas Box, 52-Week High, Larry Williams, Bollinger Squeeze, Short Selling enhancements)
-- 124 library tests, 241 BDD scenarios (210 passed, 31 skipped)
+- Phase 3 (Price Structure): Darvas Box ✅, 52-Week High ✅, Larry Williams ✅, Bollinger Squeeze ✅
+- Phase 4 (Oscillators): RSI ✅, MACD ✅, Stochastic ✅, Williams %R ✅, CCI ✅, ROC ✅
+- Phase 5 (Hybrid/Complex): RSI+Bollinger ✅, MACD+ADX ✅, Oscillator Confluence ✅, Ichimoku ✅
 
 See [Strategy Roadmap](#strategy-roadmap) and [docs/roadmap-v2-strategies.md](docs/roadmap-v2-strategies.md) for details.
 
-**Milestone 6 ("Desktop GUI")** 🚧 In Progress:
+**Milestone 6 ("Desktop GUI")** ✅ Complete:
 
 - Tauri v2 desktop application with React + TypeScript frontend
 - TradingView Lightweight Charts for professional candlestick visualization
 - Same 5-panel workflow as TUI with polished web aesthetics
 - Full keyboard navigation matching TUI shortcuts
-- Phases 1-7 substantially complete (Foundation through Polish)
+- YOLO Mode with auto-optimization and leaderboard
 
 See [Desktop GUI](#desktop-gui) and [docs/roadmap-tauri-gui.md](docs/roadmap-tauri-gui.md) for details.
+
+**Milestone 7 ("Statistical Rigor")** ✅ Complete:
+
+- **Sector Analysis**: Sector-level performance aggregation and comparison
+- **ML Clustering**: K-means clustering of strategy configurations via linfa
+- **Walk-Forward Validation**: Out-of-sample testing with configurable fold structure
+- **Bootstrap Statistics**: Confidence intervals for Sharpe ratios and metrics
+- **False Discovery Rate**: Benjamini-Hochberg and Holm-Bonferroni corrections
+- **Confidence Grades**: Visual badges (High/Medium/Low) in leaderboards
+
+See [Statistical Rigor](#statistical-rigor) for details.
 
 ## Quick start
 
@@ -662,7 +674,7 @@ cargo run -p trendlab-cli -- sweep --strategy donchian --universe SPY,QQQ --sequ
 
 ## Strategies
 
-TrendLab implements ten trend-following strategy families:
+TrendLab implements twenty trend-following and technical analysis strategy families:
 
 ### Donchian Breakout / Turtle System
 
@@ -754,6 +766,96 @@ Smoothed candlestick regime detection:
 - **Exit**: First bearish HA candle after bullish regime
 - **HA Transform**: Smoothed OHLC using EWM (alpha=0.5) for open
 - **Parameters**: confirmation_bars (3)
+
+### RSI (Relative Strength Index)
+
+Wilder's momentum oscillator with crossover-based signals:
+
+- **Entry**: RSI crosses above oversold level (default 30)
+- **Exit**: RSI crosses below overbought level (default 70)
+- **Calculation**: 100 - (100 / (1 + RS)) where RS = avg gain / avg loss
+- **Parameters**: period (14), oversold (30), overbought (70)
+
+### MACD (Moving Average Convergence Divergence)
+
+Trend-following momentum indicator with three entry modes:
+
+- **CrossSignal Entry**: MACD line crosses above signal line
+- **CrossZero Entry**: MACD line crosses above zero
+- **Histogram Entry**: MACD histogram turns positive
+- **Exit**: MACD crosses below signal line
+- **Parameters**: fast (12), slow (26), signal (9), entry_mode
+
+### Stochastic Oscillator
+
+Momentum oscillator comparing close to high-low range:
+
+- **Entry**: %K crosses above %D when both below oversold (20)
+- **Exit**: %K crosses below %D when both above overbought (80)
+- **Calculation**: %K = (Close - Lowest Low) / (Highest High - Lowest Low)
+- **Parameters**: k_period (14), k_smooth (3), d_period (3)
+
+### Williams %R
+
+Momentum oscillator inverted from Stochastic (range -100 to 0):
+
+- **Entry**: %R crosses above -80 (leaving oversold)
+- **Exit**: %R crosses below -20 (leaving overbought)
+- **Parameters**: period (14)
+
+### CCI (Commodity Channel Index)
+
+Measures deviation from statistical mean for trend breakouts:
+
+- **Entry**: CCI crosses above +100 (strong uptrend)
+- **Exit**: CCI crosses below -100 (strong downtrend)
+- **Calculation**: (Typical Price - SMA) / (0.015 × Mean Deviation)
+- **Parameters**: period (20)
+
+### ROC (Rate of Change)
+
+Simple momentum indicator measuring percentage price change:
+
+- **Entry**: ROC crosses above zero (positive momentum)
+- **Exit**: ROC crosses below zero (negative momentum)
+- **Calculation**: ((Close - Close[n]) / Close[n]) × 100
+- **Parameters**: period (12)
+
+### RSI + Bollinger Bands (Hybrid)
+
+Mean reversion strategy combining oversold RSI with volatility bands:
+
+- **Entry**: RSI < oversold AND close touches lower Bollinger Band
+- **Exit**: Close crosses above middle band OR RSI > exit threshold
+- **Parameters**: rsi_period (14), rsi_oversold (30), bb_period (20), bb_std (2.0)
+
+### MACD + ADX Filter (Hybrid)
+
+Momentum strategy filtered by trend strength:
+
+- **Entry**: MACD crosses above signal AND ADX > threshold
+- **Exit**: MACD crosses below signal
+- **Rationale**: ADX filter removes signals in choppy, non-trending markets
+- **Parameters**: fast (12), slow (26), signal (9), adx_period (14), adx_threshold (25)
+
+### Oscillator Confluence
+
+Multi-oscillator strategy requiring agreement from RSI and Stochastic:
+
+- **Entry**: RSI crosses above oversold AND Stochastic %K crosses above %D
+- **Exit**: RSI crosses below overbought OR Stochastic signals bearish crossover
+- **Rationale**: Dual confirmation reduces false signals
+- **Parameters**: rsi_period (14), stoch_k (14), stoch_d (3)
+
+### Ichimoku Cloud
+
+Goichi Hosoda's multi-component Japanese trend system:
+
+- **Entry**: Price above cloud AND Tenkan-sen crosses above Kijun-sen
+- **Exit**: Price below cloud OR Tenkan-sen crosses below Kijun-sen
+- **Components**: Tenkan (9), Kijun (26), Senkou Span A/B, Chikou Span
+- **Cloud**: Area between Senkou Span A and B (bullish when A > B)
+- **Parameters**: tenkan (9), kijun (26), senkou_b (52)
 
 ## Strategy Roadmap
 

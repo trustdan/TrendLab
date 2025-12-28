@@ -280,6 +280,14 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
             KeyResult::Continue
         }
 
+        KeyCode::Char('t') => {
+            // 't' for toggle leaderboard scope (Session vs All-Time) in Results panel
+            if app.active_panel == Panel::Results {
+                app.yolo.toggle_scope();
+            }
+            KeyResult::Continue
+        }
+
         KeyCode::Char('R') => {
             // Reset to canonical defaults (lookbacks, grids, fetch range)
             app.reset_ui_defaults();
@@ -995,9 +1003,12 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             configs_tested_this_round,
         } => {
             app.yolo.iteration = iteration;
-            app.yolo.leaderboard = per_symbol_leaderboard.clone();
-            app.yolo.cross_symbol_leaderboard = Some(cross_symbol_leaderboard.clone());
-            app.yolo.total_configs_tested += configs_tested_this_round as u64;
+            // Update both session and all-time leaderboards
+            app.yolo.update_leaderboards(
+                per_symbol_leaderboard.clone(),
+                cross_symbol_leaderboard.clone(),
+                configs_tested_this_round,
+            );
 
             // Update status message with cross-symbol best
             let best_avg_sharpe = cross_symbol_leaderboard.best_avg_sharpe().unwrap_or(0.0);
@@ -1076,8 +1087,22 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             total_configs_tested,
         } => {
             app.yolo.enabled = false;
-            app.yolo.leaderboard = per_symbol_leaderboard.clone();
-            app.yolo.cross_symbol_leaderboard = Some(cross_symbol_leaderboard.clone());
+            // Final update to session leaderboards (all-time already updated incrementally)
+            app.yolo.session_leaderboard = per_symbol_leaderboard.clone();
+            app.yolo.session_cross_symbol_leaderboard = Some(cross_symbol_leaderboard.clone());
+            // Merge final results into all-time
+            for entry in per_symbol_leaderboard.entries.iter() {
+                app.yolo.all_time_leaderboard.try_insert(entry.clone());
+            }
+            if let Some(ref mut all_time_cross) = app.yolo.all_time_cross_symbol_leaderboard {
+                for entry in cross_symbol_leaderboard.entries.iter() {
+                    all_time_cross.try_insert(entry.clone());
+                }
+            } else {
+                app.yolo.all_time_cross_symbol_leaderboard = Some(cross_symbol_leaderboard.clone());
+            }
+            let _ = total_configs_tested; // Suppress unused warning
+            let _ = total_iterations;
             app.sweep.is_running = false;
             app.operation = app::OperationState::Idle;
 

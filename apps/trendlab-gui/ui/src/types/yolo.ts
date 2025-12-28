@@ -8,6 +8,11 @@
 export type YoloPhase = 'idle' | 'sweeping' | 'stopped';
 
 /**
+ * Leaderboard scope for viewing session vs all-time results
+ */
+export type LeaderboardScope = 'session' | 'all_time';
+
+/**
  * Entry in the per-symbol leaderboard
  */
 export interface LeaderboardEntry {
@@ -22,6 +27,7 @@ export interface LeaderboardEntry {
   iteration: number;
   equityCurve?: number[];
   dates?: string[];
+  confidenceGrade?: ConfidenceGrade | null;
 }
 
 /**
@@ -67,6 +73,7 @@ export interface AggregatedConfigResult {
   dates?: string[];
   discoveredAt: string;
   iteration: number;
+  confidenceGrade?: ConfidenceGrade | null;
 }
 
 /**
@@ -86,6 +93,11 @@ export interface CrossSymbolLeaderboard {
  * Ranking metric for cross-symbol leaderboard
  */
 export type CrossSymbolRankMetric = 'avgSharpe' | 'minSharpe' | 'geoMeanCagr' | 'hitRate';
+
+/**
+ * Statistical confidence grade for strategy results
+ */
+export type ConfidenceGrade = 'High' | 'Medium' | 'Low' | 'Insufficient';
 
 /**
  * YOLO mode state

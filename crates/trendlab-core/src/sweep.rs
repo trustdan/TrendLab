@@ -9,14 +9,17 @@
 use crate::backtest::{run_backtest, BacktestConfig, BacktestResult, CostModel};
 use crate::bar::Bar;
 use crate::indicators::MAType;
+use crate::indicators::MACDEntryMode;
 use crate::indicators::OpeningPeriod;
 use crate::metrics::{compute_metrics, Metrics};
 use crate::strategy::{
-    AroonCrossStrategy, BollingerSqueezeStrategy, DarvasBoxStrategy, DmiAdxStrategy,
+    AroonCrossStrategy, BollingerSqueezeStrategy, CCIStrategy, DarvasBoxStrategy, DmiAdxStrategy,
     DonchianBreakoutStrategy, EnsembleStrategy, FiftyTwoWeekHighStrategy, HeikinAshiRegimeStrategy,
-    KeltnerBreakoutStrategy, LarryWilliamsStrategy, MACrossoverStrategy,
-    OpeningRangeBreakoutStrategy, ParabolicSARStrategy, STARCBreakoutStrategy, Strategy,
-    SupertrendStrategy, TsmomStrategy, VotingMethod,
+    IchimokuStrategy, KeltnerBreakoutStrategy, LarryWilliamsStrategy, MACDAdxStrategy,
+    MACDStrategy, MACrossoverStrategy, OpeningRangeBreakoutStrategy, OscillatorConfluenceStrategy,
+    ParabolicSARStrategy, ROCStrategy, RSIBollingerStrategy, RSIStrategy, STARCBreakoutStrategy,
+    StochasticStrategy, Strategy, SupertrendStrategy, TsmomStrategy, VotingMethod,
+    WilliamsRStrategy,
 };
 use chrono::{DateTime, Utc};
 use rayon::prelude::*;
@@ -679,6 +682,17 @@ pub enum StrategyTypeId {
     ParabolicSar,
     OpeningRangeBreakout,
     Ensemble,
+    // Phase 5: Oscillator Strategies
+    Rsi,
+    Macd,
+    Stochastic,
+    WilliamsR,
+    Cci,
+    Roc,
+    RsiBollinger,
+    MacdAdx,
+    OscillatorConfluence,
+    Ichimoku,
 }
 
 impl StrategyTypeId {
@@ -707,6 +721,17 @@ impl StrategyTypeId {
             Self::ParabolicSar,
             Self::OpeningRangeBreakout,
             Self::Ensemble,
+            // Phase 5
+            Self::Rsi,
+            Self::Macd,
+            Self::Stochastic,
+            Self::WilliamsR,
+            Self::Cci,
+            Self::Roc,
+            Self::RsiBollinger,
+            Self::MacdAdx,
+            Self::OscillatorConfluence,
+            Self::Ichimoku,
         ]
     }
 
@@ -731,6 +756,17 @@ impl StrategyTypeId {
             Self::ParabolicSar => "Parabolic SAR",
             Self::OpeningRangeBreakout => "Opening Range Breakout",
             Self::Ensemble => "Multi-Horizon Ensemble",
+            // Phase 5
+            Self::Rsi => "RSI Crossover",
+            Self::Macd => "MACD Crossover",
+            Self::Stochastic => "Stochastic Crossover",
+            Self::WilliamsR => "Williams %R",
+            Self::Cci => "CCI Breakout",
+            Self::Roc => "Rate of Change",
+            Self::RsiBollinger => "RSI + Bollinger Bands",
+            Self::MacdAdx => "MACD + ADX Filter",
+            Self::OscillatorConfluence => "Oscillator Confluence",
+            Self::Ichimoku => "Ichimoku Cloud",
         }
     }
 
@@ -755,6 +791,17 @@ impl StrategyTypeId {
             Self::ParabolicSar => "parabolic_sar",
             Self::OpeningRangeBreakout => "orb",
             Self::Ensemble => "ensemble",
+            // Phase 5: Oscillator Strategies
+            Self::Rsi => "rsi",
+            Self::Macd => "macd",
+            Self::Stochastic => "stochastic",
+            Self::WilliamsR => "williams_r",
+            Self::Cci => "cci",
+            Self::Roc => "roc",
+            Self::RsiBollinger => "rsi_bollinger",
+            Self::MacdAdx => "macd_adx",
+            Self::OscillatorConfluence => "oscillator_confluence",
+            Self::Ichimoku => "ichimoku",
         }
     }
 }
@@ -836,6 +883,67 @@ pub enum StrategyConfigId {
         horizons: Vec<usize>,
         voting: VotingMethod,
     },
+    // Phase 5: Oscillator Strategies
+    Rsi {
+        period: usize,
+        oversold: f64,
+        overbought: f64,
+    },
+    Macd {
+        fast_period: usize,
+        slow_period: usize,
+        signal_period: usize,
+        entry_mode: MACDEntryMode,
+    },
+    Stochastic {
+        k_period: usize,
+        k_smooth: usize,
+        d_period: usize,
+        oversold: f64,
+        overbought: f64,
+    },
+    WilliamsR {
+        period: usize,
+        oversold: f64,
+        overbought: f64,
+    },
+    Cci {
+        period: usize,
+        entry_threshold: f64,
+        exit_threshold: f64,
+    },
+    Roc {
+        period: usize,
+    },
+    RsiBollinger {
+        rsi_period: usize,
+        rsi_oversold: f64,
+        rsi_exit: f64,
+        bb_period: usize,
+        bb_std_mult: f64,
+    },
+    MacdAdx {
+        fast_period: usize,
+        slow_period: usize,
+        signal_period: usize,
+        adx_period: usize,
+        adx_threshold: f64,
+    },
+    OscillatorConfluence {
+        rsi_period: usize,
+        rsi_oversold: f64,
+        rsi_overbought: f64,
+        stoch_k_period: usize,
+        stoch_k_smooth: usize,
+        stoch_d_period: usize,
+        stoch_oversold: f64,
+        stoch_overbought: f64,
+    },
+    Ichimoku {
+        tenkan_period: usize,
+        kijun_period: usize,
+        senkou_b_period: usize,
+    },
 }
 
 impl StrategyConfigId {
@@ -863,6 +971,17 @@ impl StrategyConfigId {
             Self::ParabolicSar { .. } => StrategyTypeId::ParabolicSar,
             Self::OpeningRangeBreakout { .. } => StrategyTypeId::OpeningRangeBreakout,
             Self::Ensemble { .. } => StrategyTypeId::Ensemble,
+            // Phase 5: Oscillator Strategies
+            Self::Rsi { .. } => StrategyTypeId::Rsi,
+            Self::Macd { .. } => StrategyTypeId::Macd,
+            Self::Stochastic { .. } => StrategyTypeId::Stochastic,
+            Self::WilliamsR { .. } => StrategyTypeId::WilliamsR,
+            Self::Cci { .. } => StrategyTypeId::Cci,
+            Self::Roc { .. } => StrategyTypeId::Roc,
+            Self::RsiBollinger { .. } => StrategyTypeId::RsiBollinger,
+            Self::MacdAdx { .. } => StrategyTypeId::MacdAdx,
+            Self::OscillatorConfluence { .. } => StrategyTypeId::OscillatorConfluence,
+            Self::Ichimoku { .. } => StrategyTypeId::Ichimoku,
         }
     }
 
@@ -954,6 +1073,70 @@ impl StrategyConfigId {
                 horizons,
                 voting
             ),
+            // Phase 5: Oscillator Strategies
+            Self::Rsi {
+                period,
+                oversold,
+                overbought,
+            } => format!("RSI {}/{:.0}/{:.0}", period, oversold, overbought),
+            Self::Macd {
+                fast_period,
+                slow_period,
+                signal_period,
+                entry_mode,
+            } => format!("MACD {}/{}/{} {:?}", fast_period, slow_period, signal_period, entry_mode),
+            Self::Stochastic {
+                k_period,
+                k_smooth,
+                d_period,
+                oversold,
+                overbought,
+            } => format!("Stoch {}/{}/{}/{:.0}/{:.0}", k_period, k_smooth, d_period, oversold, overbought),
+            Self::WilliamsR {
+                period,
+                oversold,
+                overbought,
+            } => format!("Williams %R {}/{:.0}/{:.0}", period, oversold, overbought),
+            Self::Cci {
+                period,
+                entry_threshold,
+                exit_threshold,
+            } => format!("CCI {}/{:.0}/{:.0}", period, entry_threshold, exit_threshold),
+            Self::Roc { period } => format!("ROC {}", period),
+            Self::RsiBollinger {
+                rsi_period,
+                rsi_oversold,
+                rsi_exit,
+                bb_period,
+                bb_std_mult,
+            } => format!("RSI+BB {}/{:.0}/{:.0}/{}/{:.1}", rsi_period, rsi_oversold, rsi_exit, bb_period, bb_std_mult),
+            Self::MacdAdx {
+                fast_period,
+                slow_period,
+                signal_period,
+                adx_period,
+                adx_threshold,
+            } => format!("MACD+ADX {}/{}/{}/{}/{:.0}", fast_period, slow_period, signal_period, adx_period, adx_threshold),
+            Self::OscillatorConfluence {
+                rsi_period,
+                rsi_oversold,
+                rsi_overbought,
+                stoch_k_period,
+                stoch_k_smooth,
+                stoch_d_period,
+                stoch_oversold,
+                stoch_overbought,
+            } => format!(
+                "Confluence RSI{}/{:.0}/{:.0} Stoch{}/{}/{}/{:.0}/{:.0}",
+                rsi_period, rsi_oversold, rsi_overbought,
+                stoch_k_period, stoch_k_smooth, stoch_d_period,
+                stoch_oversold, stoch_overbought
+            ),
+            Self::Ichimoku {
+                tenkan_period,
+                kijun_period,
+                senkou_b_period,
+            } => format!("Ichimoku {}/{}/{}", tenkan_period, kijun_period, senkou_b_period),
         }
     }
 
@@ -1005,6 +1188,41 @@ impl StrategyConfigId {
             Self::Ensemble { horizons, .. } => {
                 ConfigId::new(horizons.len(), horizons.first().copied().unwrap_or(0))
             }
+            // Phase 5: Pack params into legacy format
+            Self::Rsi { period, .. } => ConfigId::new(*period, 0),
+            Self::Macd {
+                fast_period,
+                slow_period,
+                ..
+            } => ConfigId::new(*fast_period, *slow_period),
+            Self::Stochastic {
+                k_period,
+                d_period,
+                ..
+            } => ConfigId::new(*k_period, *d_period),
+            Self::WilliamsR { period, .. } => ConfigId::new(*period, 0),
+            Self::Cci { period, .. } => ConfigId::new(*period, 0),
+            Self::Roc { period } => ConfigId::new(*period, 0),
+            Self::RsiBollinger {
+                rsi_period,
+                bb_period,
+                ..
+            } => ConfigId::new(*rsi_period, *bb_period),
+            Self::MacdAdx {
+                fast_period,
+                adx_period,
+                ..
+            } => ConfigId::new(*fast_period, *adx_period),
+            Self::OscillatorConfluence {
+                rsi_period,
+                stoch_k_period,
+                ..
+            } => ConfigId::new(*rsi_period, *stoch_k_period),
+            Self::Ichimoku {
+                tenkan_period,
+                kijun_period,
+                ..
+            } => ConfigId::new(*tenkan_period, *kijun_period),
         }
     }
 }
@@ -1085,6 +1303,67 @@ pub enum StrategyParams {
         base_strategies: Vec<StrategyTypeId>,
         horizon_sets: Vec<Vec<usize>>,
         voting_methods: Vec<VotingMethod>,
+    },
+    // Phase 5: Oscillator Strategies
+    Rsi {
+        periods: Vec<usize>,
+        oversolds: Vec<f64>,
+        overboughts: Vec<f64>,
+    },
+    Macd {
+        fast_periods: Vec<usize>,
+        slow_periods: Vec<usize>,
+        signal_periods: Vec<usize>,
+        entry_modes: Vec<MACDEntryMode>,
+    },
+    Stochastic {
+        k_periods: Vec<usize>,
+        k_smooths: Vec<usize>,
+        d_periods: Vec<usize>,
+        oversolds: Vec<f64>,
+        overboughts: Vec<f64>,
+    },
+    WilliamsR {
+        periods: Vec<usize>,
+        oversolds: Vec<f64>,
+        overboughts: Vec<f64>,
+    },
+    Cci {
+        periods: Vec<usize>,
+        entry_thresholds: Vec<f64>,
+        exit_thresholds: Vec<f64>,
+    },
+    Roc {
+        periods: Vec<usize>,
+    },
+    RsiBollinger {
+        rsi_periods: Vec<usize>,
+        rsi_oversolds: Vec<f64>,
+        rsi_exits: Vec<f64>,
+        bb_periods: Vec<usize>,
+        bb_std_mults: Vec<f64>,
+    },
+    MacdAdx {
+        fast_periods: Vec<usize>,
+        slow_periods: Vec<usize>,
+        signal_periods: Vec<usize>,
+        adx_periods: Vec<usize>,
+        adx_thresholds: Vec<f64>,
+    },
+    OscillatorConfluence {
+        rsi_periods: Vec<usize>,
+        rsi_oversolds: Vec<f64>,
+        rsi_overboughts: Vec<f64>,
+        stoch_k_periods: Vec<usize>,
+        stoch_k_smooths: Vec<usize>,
+        stoch_d_periods: Vec<usize>,
+        stoch_oversolds: Vec<f64>,
+        stoch_overboughts: Vec<f64>,
+    },
+    Ichimoku {
+        tenkan_periods: Vec<usize>,
+        kijun_periods: Vec<usize>,
+        senkou_b_periods: Vec<usize>,
     },
 }
 
@@ -1335,6 +1614,234 @@ impl StrategyParams {
                                 base_strategy,
                                 horizons: horizons.clone(),
                                 voting,
+                            });
+                        }
+                    }
+                }
+                configs
+            }
+            // Phase 5: Oscillator Strategies
+            Self::Rsi {
+                periods,
+                oversolds,
+                overboughts,
+            } => {
+                let mut configs = Vec::new();
+                for &period in periods {
+                    for &oversold in oversolds {
+                        for &overbought in overboughts {
+                            configs.push(StrategyConfigId::Rsi {
+                                period,
+                                oversold,
+                                overbought,
+                            });
+                        }
+                    }
+                }
+                configs
+            }
+            Self::Macd {
+                fast_periods,
+                slow_periods,
+                signal_periods,
+                entry_modes,
+            } => {
+                let mut configs = Vec::new();
+                for &fast_period in fast_periods {
+                    for &slow_period in slow_periods {
+                        if slow_period > fast_period {
+                            for &signal_period in signal_periods {
+                                for &entry_mode in entry_modes {
+                                    configs.push(StrategyConfigId::Macd {
+                                        fast_period,
+                                        slow_period,
+                                        signal_period,
+                                        entry_mode,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                configs
+            }
+            Self::Stochastic {
+                k_periods,
+                k_smooths,
+                d_periods,
+                oversolds,
+                overboughts,
+            } => {
+                let mut configs = Vec::new();
+                for &k_period in k_periods {
+                    for &k_smooth in k_smooths {
+                        for &d_period in d_periods {
+                            for &oversold in oversolds {
+                                for &overbought in overboughts {
+                                    configs.push(StrategyConfigId::Stochastic {
+                                        k_period,
+                                        k_smooth,
+                                        d_period,
+                                        oversold,
+                                        overbought,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                configs
+            }
+            Self::WilliamsR {
+                periods,
+                oversolds,
+                overboughts,
+            } => {
+                let mut configs = Vec::new();
+                for &period in periods {
+                    for &oversold in oversolds {
+                        for &overbought in overboughts {
+                            configs.push(StrategyConfigId::WilliamsR {
+                                period,
+                                oversold,
+                                overbought,
+                            });
+                        }
+                    }
+                }
+                configs
+            }
+            Self::Cci {
+                periods,
+                entry_thresholds,
+                exit_thresholds,
+            } => {
+                let mut configs = Vec::new();
+                for &period in periods {
+                    for &entry_threshold in entry_thresholds {
+                        for &exit_threshold in exit_thresholds {
+                            configs.push(StrategyConfigId::Cci {
+                                period,
+                                entry_threshold,
+                                exit_threshold,
+                            });
+                        }
+                    }
+                }
+                configs
+            }
+            Self::Roc { periods } => periods
+                .iter()
+                .map(|&period| StrategyConfigId::Roc { period })
+                .collect(),
+            Self::RsiBollinger {
+                rsi_periods,
+                rsi_oversolds,
+                rsi_exits,
+                bb_periods,
+                bb_std_mults,
+            } => {
+                let mut configs = Vec::new();
+                for &rsi_period in rsi_periods {
+                    for &rsi_oversold in rsi_oversolds {
+                        for &rsi_exit in rsi_exits {
+                            for &bb_period in bb_periods {
+                                for &bb_std_mult in bb_std_mults {
+                                    configs.push(StrategyConfigId::RsiBollinger {
+                                        rsi_period,
+                                        rsi_oversold,
+                                        rsi_exit,
+                                        bb_period,
+                                        bb_std_mult,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                configs
+            }
+            Self::MacdAdx {
+                fast_periods,
+                slow_periods,
+                signal_periods,
+                adx_periods,
+                adx_thresholds,
+            } => {
+                let mut configs = Vec::new();
+                for &fast_period in fast_periods {
+                    for &slow_period in slow_periods {
+                        if slow_period > fast_period {
+                            for &signal_period in signal_periods {
+                                for &adx_period in adx_periods {
+                                    for &adx_threshold in adx_thresholds {
+                                        configs.push(StrategyConfigId::MacdAdx {
+                                            fast_period,
+                                            slow_period,
+                                            signal_period,
+                                            adx_period,
+                                            adx_threshold,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                configs
+            }
+            Self::OscillatorConfluence {
+                rsi_periods,
+                rsi_oversolds,
+                rsi_overboughts,
+                stoch_k_periods,
+                stoch_k_smooths,
+                stoch_d_periods,
+                stoch_oversolds,
+                stoch_overboughts,
+            } => {
+                let mut configs = Vec::new();
+                for &rsi_period in rsi_periods {
+                    for &rsi_oversold in rsi_oversolds {
+                        for &rsi_overbought in rsi_overboughts {
+                            for &stoch_k_period in stoch_k_periods {
+                                for &stoch_k_smooth in stoch_k_smooths {
+                                    for &stoch_d_period in stoch_d_periods {
+                                        for &stoch_oversold in stoch_oversolds {
+                                            for &stoch_overbought in stoch_overboughts {
+                                                configs.push(StrategyConfigId::OscillatorConfluence {
+                                                    rsi_period,
+                                                    rsi_oversold,
+                                                    rsi_overbought,
+                                                    stoch_k_period,
+                                                    stoch_k_smooth,
+                                                    stoch_d_period,
+                                                    stoch_oversold,
+                                                    stoch_overbought,
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                configs
+            }
+            Self::Ichimoku {
+                tenkan_periods,
+                kijun_periods,
+                senkou_b_periods,
+            } => {
+                let mut configs = Vec::new();
+                for &tenkan_period in tenkan_periods {
+                    for &kijun_period in kijun_periods {
+                        for &senkou_b_period in senkou_b_periods {
+                            configs.push(StrategyConfigId::Ichimoku {
+                                tenkan_period,
+                                kijun_period,
+                                senkou_b_period,
                             });
                         }
                     }
@@ -2057,6 +2564,8 @@ impl MultiStrategyGrid {
             StrategyTypeId::ParabolicSar => StrategyGridConfig::parabolic_sar_default(),
             StrategyTypeId::OpeningRangeBreakout => StrategyGridConfig::orb_default(),
             StrategyTypeId::Ensemble => StrategyGridConfig::ensemble_default(),
+            // Phase 5 oscillator strategies - not yet implemented in grid
+            _ => panic!("Grid config not yet implemented for this strategy type"),
         };
         Self {
             strategies: vec![config],
@@ -2125,6 +2634,8 @@ impl MultiStrategyGrid {
             StrategyTypeId::ParabolicSar => StrategyGridConfig::parabolic_sar_with_depth(depth),
             StrategyTypeId::OpeningRangeBreakout => StrategyGridConfig::orb_with_depth(depth),
             StrategyTypeId::Ensemble => StrategyGridConfig::ensemble_with_depth(depth),
+            // Phase 5 oscillator strategies - not yet implemented in grid
+            _ => panic!("Grid config not yet implemented for this strategy type"),
         };
         Self {
             strategies: vec![config],
@@ -2471,6 +2982,8 @@ fn config_id_to_strategy_config_id(
         StrategyTypeId::HeikinAshi => StrategyConfigId::HeikinAshi {
             confirmation_bars: config_id.entry_lookback.max(1),
         },
+        // Phase 5 oscillator strategies - not yet implemented
+        _ => panic!("StrategyConfigId conversion not yet implemented for this strategy type"),
     }
 }
 
@@ -2571,6 +3084,101 @@ pub fn create_strategy_from_config(config: &StrategyConfigId) -> Box<dyn Strateg
             atr_period,
             multiplier,
         } => Box::new(SupertrendStrategy::new(*atr_period, *multiplier)),
+        // Phase 5: Oscillator Strategies
+        StrategyConfigId::Rsi {
+            period,
+            oversold,
+            overbought,
+        } => Box::new(RSIStrategy::new(*period, *oversold, *overbought)),
+        StrategyConfigId::Macd {
+            fast_period,
+            slow_period,
+            signal_period,
+            entry_mode,
+        } => Box::new(MACDStrategy::new(
+            *fast_period,
+            *slow_period,
+            *signal_period,
+            *entry_mode,
+        )),
+        StrategyConfigId::Stochastic {
+            k_period,
+            k_smooth,
+            d_period,
+            oversold,
+            overbought,
+        } => Box::new(StochasticStrategy::new(
+            *k_period,
+            *k_smooth,
+            *d_period,
+            *oversold,
+            *overbought,
+        )),
+        StrategyConfigId::WilliamsR {
+            period,
+            oversold,
+            overbought,
+        } => Box::new(WilliamsRStrategy::new(*period, *oversold, *overbought)),
+        StrategyConfigId::Cci {
+            period,
+            entry_threshold,
+            exit_threshold,
+        } => Box::new(CCIStrategy::new(*period, *entry_threshold, *exit_threshold)),
+        StrategyConfigId::Roc { period } => Box::new(ROCStrategy::new(*period)),
+        StrategyConfigId::RsiBollinger {
+            rsi_period,
+            rsi_oversold,
+            rsi_exit,
+            bb_period,
+            bb_std_mult,
+        } => Box::new(RSIBollingerStrategy::new(
+            *rsi_period,
+            *rsi_oversold,
+            *rsi_exit,
+            *bb_period,
+            *bb_std_mult,
+        )),
+        StrategyConfigId::MacdAdx {
+            fast_period,
+            slow_period,
+            signal_period,
+            adx_period,
+            adx_threshold,
+        } => Box::new(MACDAdxStrategy::new(
+            *fast_period,
+            *slow_period,
+            *signal_period,
+            *adx_period,
+            *adx_threshold,
+        )),
+        StrategyConfigId::OscillatorConfluence {
+            rsi_period,
+            rsi_oversold,
+            rsi_overbought,
+            stoch_k_period,
+            stoch_k_smooth,
+            stoch_d_period,
+            stoch_oversold,
+            stoch_overbought,
+        } => Box::new(OscillatorConfluenceStrategy::new(
+            *rsi_period,
+            *rsi_oversold,
+            *rsi_overbought,
+            *stoch_k_period,
+            *stoch_k_smooth,
+            *stoch_d_period,
+            *stoch_oversold,
+            *stoch_overbought,
+        )),
+        StrategyConfigId::Ichimoku {
+            tenkan_period,
+            kijun_period,
+            senkou_b_period,
+        } => Box::new(IchimokuStrategy::new(
+            *tenkan_period,
+            *kijun_period,
+            *senkou_b_period,
+        )),
     }
 }
 

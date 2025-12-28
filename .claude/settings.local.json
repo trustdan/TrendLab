@@ -57,7 +57,8 @@
       "Bash(cargo tauri build:*)",
       "Bash(where:*)",
       "Bash(npm run typecheck:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(npm run type-check:*)"
     ]
   }
 }

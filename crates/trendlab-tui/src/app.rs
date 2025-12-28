@@ -14,9 +14,10 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use ratatui::layout::Rect;
 use trendlab_core::{
-    BacktestConfig, Bar, CostModel, CrossSymbolLeaderboard, FillModel, Leaderboard, Metrics,
-    MultiStrategyGrid, MultiStrategySweepResult, MultiSweepResult, PyramidConfig, Sector,
-    StrategyTypeId, SweepConfigResult, SweepDepth, SweepGrid, Universe,
+    generate_session_id, BacktestConfig, Bar, CostModel, CrossSymbolLeaderboard, FillModel,
+    Leaderboard, LeaderboardScope, Metrics, MultiStrategyGrid, MultiStrategySweepResult,
+    MultiSweepResult, PyramidConfig, Sector, StrategyTypeId, SweepConfigResult, SweepDepth,
+    SweepGrid, Universe,
 };
 
 use crate::worker::{WorkerChannels, WorkerCommand};
@@ -1162,15 +1163,32 @@ pub struct YoloState {
     pub enabled: bool,
     /// Current iteration number
     pub iteration: u32,
-    /// Per-symbol top performers leaderboard
-    pub leaderboard: Leaderboard,
-    /// Cross-symbol aggregated leaderboard (primary for multi-symbol runs)
-    pub cross_symbol_leaderboard: Option<CrossSymbolLeaderboard>,
+
+    // Session leaderboards (reset each app launch)
+    /// Session per-symbol top performers leaderboard
+    pub session_leaderboard: Leaderboard,
+    /// Session cross-symbol aggregated leaderboard
+    pub session_cross_symbol_leaderboard: Option<CrossSymbolLeaderboard>,
+
+    // All-time leaderboards (persistent across sessions)
+    /// All-time per-symbol top performers leaderboard
+    pub all_time_leaderboard: Leaderboard,
+    /// All-time cross-symbol aggregated leaderboard
+    pub all_time_cross_symbol_leaderboard: Option<CrossSymbolLeaderboard>,
+
+    /// Which scope is currently being displayed (toggle with 't')
+    pub view_scope: LeaderboardScope,
+
+    /// Unique session ID for tracking which session discovered entries
+    pub session_id: String,
+
     /// Randomization percentage (e.g., 0.15 = ±15%)
     pub randomization_pct: f64,
-    /// Total configs tested across all iterations
+    /// Total configs tested this session
+    pub session_configs_tested: u64,
+    /// Total configs tested all-time (loaded from all_time_leaderboard)
     pub total_configs_tested: u64,
-    /// When YOLO mode was started
+    /// When YOLO mode was started this session
     pub started_at: Option<DateTime<Utc>>,
 }
 
@@ -1179,14 +1197,80 @@ impl Default for YoloState {
         Self {
             enabled: false,
             iteration: 0,
-            leaderboard: Leaderboard::new(4),
-            cross_symbol_leaderboard: None,
+            // Session leaderboards (fresh each app launch)
+            session_leaderboard: Leaderboard::new(4),
+            session_cross_symbol_leaderboard: None,
+            // All-time leaderboards (will be loaded from disk in App::new)
+            all_time_leaderboard: Leaderboard::new(16), // Larger capacity for historical data
+            all_time_cross_symbol_leaderboard: None,
+            // Default to showing session results
+            view_scope: LeaderboardScope::Session,
+            // Generate unique session ID
+            session_id: generate_session_id(),
             // Default exploration strength for YOLO mode. Kept moderate so it explores meaningfully
             // without completely thrashing parameter space each iteration.
             randomization_pct: 0.30,
+            session_configs_tested: 0,
             total_configs_tested: 0,
             started_at: None,
         }
+    }
+}
+
+impl YoloState {
+    /// Get the per-symbol leaderboard for the current view scope.
+    pub fn leaderboard(&self) -> &Leaderboard {
+        match self.view_scope {
+            LeaderboardScope::Session => &self.session_leaderboard,
+            LeaderboardScope::AllTime => &self.all_time_leaderboard,
+        }
+    }
+
+    /// Get the cross-symbol leaderboard for the current view scope.
+    pub fn cross_symbol_leaderboard(&self) -> Option<&CrossSymbolLeaderboard> {
+        match self.view_scope {
+            LeaderboardScope::Session => self.session_cross_symbol_leaderboard.as_ref(),
+            LeaderboardScope::AllTime => self.all_time_cross_symbol_leaderboard.as_ref(),
+        }
+    }
+
+    /// Get configs tested count for the current view scope.
+    pub fn configs_tested(&self) -> u64 {
+        match self.view_scope {
+            LeaderboardScope::Session => self.session_configs_tested,
+            LeaderboardScope::AllTime => self.total_configs_tested,
+        }
+    }
+
+    /// Toggle the view scope between Session and AllTime.
+    pub fn toggle_scope(&mut self) {
+        self.view_scope = self.view_scope.toggle();
+    }
+
+    /// Update both session and all-time leaderboards with new results from worker.
+    pub fn update_leaderboards(
+        &mut self,
+        per_symbol: Leaderboard,
+        cross_symbol: CrossSymbolLeaderboard,
+        configs_tested_this_round: usize,
+    ) {
+        // Update session leaderboards
+        self.session_leaderboard = per_symbol.clone();
+        self.session_cross_symbol_leaderboard = Some(cross_symbol.clone());
+        self.session_configs_tested += configs_tested_this_round as u64;
+
+        // Merge into all-time leaderboards
+        for entry in per_symbol.entries.iter() {
+            self.all_time_leaderboard.try_insert(entry.clone());
+        }
+        if let Some(ref mut all_time_cross) = self.all_time_cross_symbol_leaderboard {
+            for entry in cross_symbol.entries.iter() {
+                all_time_cross.try_insert(entry.clone());
+            }
+        } else {
+            self.all_time_cross_symbol_leaderboard = Some(cross_symbol);
+        }
+        self.total_configs_tested += configs_tested_this_round as u64;
     }
 }
 
@@ -1894,14 +1978,21 @@ impl App {
             auto: AutoRunState::default(),
             yolo: {
                 // Load existing leaderboards on startup for persistence
-                let per_symbol = Leaderboard::load(std::path::Path::new("artifacts/leaderboard.json"))
+                let all_time_per_symbol = Leaderboard::load(std::path::Path::new("artifacts/leaderboard.json"))
                     .ok()
                     .unwrap_or_else(|| Leaderboard::new(4));
-                let cross_symbol = CrossSymbolLeaderboard::load(std::path::Path::new("artifacts/cross_symbol_leaderboard.json"))
+                let all_time_cross_symbol = CrossSymbolLeaderboard::load(std::path::Path::new("artifacts/cross_symbol_leaderboard.json"))
                     .ok();
                 YoloState {
-                    leaderboard: per_symbol,
-                    cross_symbol_leaderboard: cross_symbol,
+                    // Session leaderboards start fresh each launch
+                    session_leaderboard: Leaderboard::new(10),
+                    session_cross_symbol_leaderboard: None,
+                    // All-time leaderboards loaded from disk
+                    all_time_leaderboard: all_time_per_symbol,
+                    all_time_cross_symbol_leaderboard: all_time_cross_symbol,
+                    // Start viewing session by default
+                    view_scope: LeaderboardScope::Session,
+                    session_id: generate_session_id(),
                     ..Default::default()
                 }
             },

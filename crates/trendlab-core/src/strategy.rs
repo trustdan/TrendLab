@@ -2,9 +2,10 @@
 
 use crate::bar::Bar;
 use crate::indicators::{
-    aroon, atr, bollinger_bands, darvas_boxes, dmi, donchian_channel, ema_close, heikin_ashi,
-    keltner_channel, opening_range, parabolic_sar, range_breakout_levels, rolling_max_close,
-    sma_close, starc_bands, supertrend, BollingerBands, DarvasBox, HABar, MAType, OpeningPeriod,
+    aroon, atr, bollinger_bands, cci, darvas_boxes, dmi, donchian_channel, ema_close, heikin_ashi,
+    ichimoku, keltner_channel, macd, opening_range, parabolic_sar, range_breakout_levels, roc,
+    rolling_max_close, rsi, sma_close, starc_bands, stochastic, supertrend, williams_r,
+    BollingerBands, DarvasBox, HABar, MACDEntryMode, MAType, OpeningPeriod,
 };
 
 /// Position state in a backtest.
@@ -2245,6 +2246,1451 @@ impl Strategy for EnsembleStrategy {
             strategy.reset();
         }
     }
+}
+
+// =============================================================================
+// Phase 5: Oscillator Strategies
+// =============================================================================
+
+/// RSI (Relative Strength Index) Strategy.
+///
+/// Entry: RSI crosses above oversold threshold from below (bullish crossover)
+/// Exit: RSI crosses below overbought threshold from above (bearish crossover)
+///
+/// The RSI measures the speed and magnitude of price changes.
+/// Values range from 0 to 100, with readings below 30 typically
+/// considered oversold and above 70 considered overbought.
+///
+/// Common configurations:
+/// - Period 14, Oversold 30, Overbought 70: Standard (Wilder's original)
+/// - Period 7, Oversold 20, Overbought 80: More extreme levels
+/// - Period 21, Oversold 30, Overbought 70: Smoother signals
+#[derive(Debug, Clone)]
+pub struct RSIStrategy {
+    /// Period for RSI calculation
+    period: usize,
+    /// Oversold threshold (entry when crossing above)
+    oversold: f64,
+    /// Overbought threshold (exit when crossing below)
+    overbought: f64,
+}
+
+impl RSIStrategy {
+    pub fn new(period: usize, oversold: f64, overbought: f64) -> Self {
+        assert!(period > 0, "Period must be at least 1");
+        assert!(oversold > 0.0 && oversold < 100.0, "Oversold must be between 0 and 100");
+        assert!(overbought > 0.0 && overbought < 100.0, "Overbought must be between 0 and 100");
+        assert!(oversold < overbought, "Oversold must be less than overbought");
+
+        Self {
+            period,
+            oversold,
+            overbought,
+        }
+    }
+
+    /// Standard configuration: period 14, oversold 30, overbought 70
+    pub fn standard() -> Self {
+        Self::new(14, 30.0, 70.0)
+    }
+
+    /// Extreme configuration: period 7, oversold 20, overbought 80
+    pub fn extreme() -> Self {
+        Self::new(7, 20.0, 80.0)
+    }
+
+    /// Smooth configuration: period 21, oversold 30, overbought 70
+    pub fn smooth() -> Self {
+        Self::new(21, 30.0, 70.0)
+    }
+
+    /// Get the period.
+    pub fn period(&self) -> usize {
+        self.period
+    }
+
+    /// Get the oversold threshold.
+    pub fn oversold(&self) -> f64 {
+        self.oversold
+    }
+
+    /// Get the overbought threshold.
+    pub fn overbought(&self) -> f64 {
+        self.overbought
+    }
+}
+
+impl Strategy for RSIStrategy {
+    fn id(&self) -> &str {
+        "rsi"
+    }
+
+    fn warmup_period(&self) -> usize {
+        // RSI needs period + 1 bars for Wilder smoothing
+        self.period + 1
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let rsi_values = rsi(bars, self.period);
+
+        // Get current and previous RSI values
+        let current_rsi = match rsi_values[current_idx] {
+            Some(ref r) => r.rsi,
+            None => return Signal::Hold,
+        };
+
+        // Need previous bar for crossover detection
+        if current_idx == 0 {
+            return Signal::Hold;
+        }
+
+        let prev_rsi = match rsi_values[current_idx - 1] {
+            Some(ref r) => r.rsi,
+            None => return Signal::Hold,
+        };
+
+        match current_position {
+            Position::Flat => {
+                // Entry: RSI crosses above oversold threshold
+                if current_rsi > self.oversold && prev_rsi <= self.oversold {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: RSI crosses below overbought threshold
+                if current_rsi < self.overbought && prev_rsi >= self.overbought {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// MACD (Moving Average Convergence Divergence) Strategy.
+///
+/// Entry modes:
+/// - CrossSignal: MACD line crosses above signal line
+/// - CrossZero: MACD line crosses above zero line
+/// - Histogram: Histogram turns positive (MACD > Signal)
+///
+/// Exit: Opposite of entry condition
+///
+/// Common configurations:
+/// - 12/26/9: Standard (most common)
+/// - 8/17/9: Short-term
+/// - 5/35/5: Longer-term smoothing
+#[derive(Debug, Clone)]
+pub struct MACDStrategy {
+    /// Fast EMA period
+    fast_period: usize,
+    /// Slow EMA period
+    slow_period: usize,
+    /// Signal line EMA period
+    signal_period: usize,
+    /// Entry mode
+    entry_mode: MACDEntryMode,
+}
+
+impl MACDStrategy {
+    pub fn new(fast_period: usize, slow_period: usize, signal_period: usize, entry_mode: MACDEntryMode) -> Self {
+        assert!(fast_period > 0, "Fast period must be at least 1");
+        assert!(slow_period > 0, "Slow period must be at least 1");
+        assert!(fast_period < slow_period, "Fast period must be less than slow period");
+        assert!(signal_period > 0, "Signal period must be at least 1");
+
+        Self {
+            fast_period,
+            slow_period,
+            signal_period,
+            entry_mode,
+        }
+    }
+
+    /// Standard configuration: 12/26/9 with CrossSignal mode
+    pub fn standard() -> Self {
+        Self::new(12, 26, 9, MACDEntryMode::CrossSignal)
+    }
+
+    /// Short-term configuration: 8/17/9
+    pub fn short_term() -> Self {
+        Self::new(8, 17, 9, MACDEntryMode::CrossSignal)
+    }
+
+    /// Zero-cross configuration: 12/26/9 with CrossZero mode
+    pub fn zero_cross() -> Self {
+        Self::new(12, 26, 9, MACDEntryMode::CrossZero)
+    }
+
+    /// Histogram configuration: 12/26/9 with Histogram mode
+    pub fn histogram() -> Self {
+        Self::new(12, 26, 9, MACDEntryMode::Histogram)
+    }
+
+    /// Get the fast period.
+    pub fn fast_period(&self) -> usize {
+        self.fast_period
+    }
+
+    /// Get the slow period.
+    pub fn slow_period(&self) -> usize {
+        self.slow_period
+    }
+
+    /// Get the signal period.
+    pub fn signal_period(&self) -> usize {
+        self.signal_period
+    }
+
+    /// Get the entry mode.
+    pub fn entry_mode(&self) -> MACDEntryMode {
+        self.entry_mode
+    }
+}
+
+impl Strategy for MACDStrategy {
+    fn id(&self) -> &str {
+        "macd"
+    }
+
+    fn warmup_period(&self) -> usize {
+        // MACD needs slow_period + signal_period for full calculation
+        self.slow_period + self.signal_period
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let macd_values = macd(bars, self.fast_period, self.slow_period, self.signal_period);
+
+        // Get current and previous MACD values
+        let current_macd = match macd_values[current_idx] {
+            Some(ref m) => m,
+            None => return Signal::Hold,
+        };
+
+        // Need previous bar for crossover detection
+        if current_idx == 0 {
+            return Signal::Hold;
+        }
+
+        let prev_macd = match macd_values[current_idx - 1] {
+            Some(ref m) => m,
+            None => return Signal::Hold,
+        };
+
+        match self.entry_mode {
+            MACDEntryMode::CrossSignal => {
+                let macd_above_signal = current_macd.macd_line > current_macd.signal_line;
+                let prev_macd_above_signal = prev_macd.macd_line > prev_macd.signal_line;
+
+                match current_position {
+                    Position::Flat => {
+                        // Entry: MACD crosses above signal line
+                        if macd_above_signal && !prev_macd_above_signal {
+                            return Signal::EnterLong;
+                        }
+                        Signal::Hold
+                    }
+                    Position::Long => {
+                        // Exit: MACD crosses below signal line
+                        if !macd_above_signal && prev_macd_above_signal {
+                            return Signal::ExitLong;
+                        }
+                        Signal::Hold
+                    }
+                    Position::Short => Signal::Hold,
+                }
+            }
+            MACDEntryMode::CrossZero => {
+                let macd_above_zero = current_macd.macd_line > 0.0;
+                let prev_macd_above_zero = prev_macd.macd_line > 0.0;
+
+                match current_position {
+                    Position::Flat => {
+                        // Entry: MACD crosses above zero
+                        if macd_above_zero && !prev_macd_above_zero {
+                            return Signal::EnterLong;
+                        }
+                        Signal::Hold
+                    }
+                    Position::Long => {
+                        // Exit: MACD crosses below zero
+                        if !macd_above_zero && prev_macd_above_zero {
+                            return Signal::ExitLong;
+                        }
+                        Signal::Hold
+                    }
+                    Position::Short => Signal::Hold,
+                }
+            }
+            MACDEntryMode::Histogram => {
+                let histogram_positive = current_macd.histogram > 0.0;
+                let prev_histogram_positive = prev_macd.histogram > 0.0;
+
+                match current_position {
+                    Position::Flat => {
+                        // Entry: Histogram turns positive
+                        if histogram_positive && !prev_histogram_positive {
+                            return Signal::EnterLong;
+                        }
+                        Signal::Hold
+                    }
+                    Position::Long => {
+                        // Exit: Histogram turns negative
+                        if !histogram_positive && prev_histogram_positive {
+                            return Signal::ExitLong;
+                        }
+                        Signal::Hold
+                    }
+                    Position::Short => Signal::Hold,
+                }
+            }
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// Stochastic Oscillator Strategy.
+///
+/// Entry: %K crosses above %D when both are below oversold threshold
+/// Exit: %K crosses below %D when both are above overbought threshold
+///
+/// The stochastic oscillator compares closing price to the price range
+/// over a given period. Values range from 0 to 100.
+///
+/// Common configurations:
+/// - 14/3/3, Oversold 20, Overbought 80: Standard
+/// - 5/3/3, Oversold 20, Overbought 80: Fast stochastic
+/// - 21/5/5, Oversold 20, Overbought 80: Slow stochastic
+#[derive(Debug, Clone)]
+pub struct StochasticStrategy {
+    /// %K period (lookback for high/low range)
+    k_period: usize,
+    /// %K smoothing period
+    k_smooth: usize,
+    /// %D period (signal line smoothing)
+    d_period: usize,
+    /// Oversold threshold
+    oversold: f64,
+    /// Overbought threshold
+    overbought: f64,
+}
+
+impl StochasticStrategy {
+    pub fn new(k_period: usize, k_smooth: usize, d_period: usize, oversold: f64, overbought: f64) -> Self {
+        assert!(k_period > 0, "K period must be at least 1");
+        assert!(k_smooth > 0, "K smooth must be at least 1");
+        assert!(d_period > 0, "D period must be at least 1");
+        assert!(oversold > 0.0 && oversold < 100.0, "Oversold must be between 0 and 100");
+        assert!(overbought > 0.0 && overbought < 100.0, "Overbought must be between 0 and 100");
+        assert!(oversold < overbought, "Oversold must be less than overbought");
+
+        Self {
+            k_period,
+            k_smooth,
+            d_period,
+            oversold,
+            overbought,
+        }
+    }
+
+    /// Standard configuration: 14/3/3, 20/80
+    pub fn standard() -> Self {
+        Self::new(14, 3, 3, 20.0, 80.0)
+    }
+
+    /// Fast stochastic: 5/3/3, 20/80
+    pub fn fast() -> Self {
+        Self::new(5, 3, 3, 20.0, 80.0)
+    }
+
+    /// Slow stochastic: 21/5/5, 20/80
+    pub fn slow() -> Self {
+        Self::new(21, 5, 5, 20.0, 80.0)
+    }
+
+    /// Get the K period.
+    pub fn k_period(&self) -> usize {
+        self.k_period
+    }
+
+    /// Get the K smoothing period.
+    pub fn k_smooth(&self) -> usize {
+        self.k_smooth
+    }
+
+    /// Get the D period.
+    pub fn d_period(&self) -> usize {
+        self.d_period
+    }
+
+    /// Get the oversold threshold.
+    pub fn oversold(&self) -> f64 {
+        self.oversold
+    }
+
+    /// Get the overbought threshold.
+    pub fn overbought(&self) -> f64 {
+        self.overbought
+    }
+}
+
+impl Strategy for StochasticStrategy {
+    fn id(&self) -> &str {
+        "stochastic"
+    }
+
+    fn warmup_period(&self) -> usize {
+        // Need K period + K smooth + D period
+        self.k_period + self.k_smooth + self.d_period
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let stoch_values = stochastic(bars, self.k_period, self.k_smooth, self.d_period);
+
+        // Get current and previous stochastic values
+        let current_stoch = match stoch_values[current_idx] {
+            Some(ref s) => s,
+            None => return Signal::Hold,
+        };
+
+        // Need previous bar for crossover detection
+        if current_idx == 0 {
+            return Signal::Hold;
+        }
+
+        let prev_stoch = match stoch_values[current_idx - 1] {
+            Some(ref s) => s,
+            None => return Signal::Hold,
+        };
+
+        let k_above_d = current_stoch.k_smooth > current_stoch.d;
+        let prev_k_above_d = prev_stoch.k_smooth > prev_stoch.d;
+
+        match current_position {
+            Position::Flat => {
+                // Entry: %K crosses above %D when both are in oversold territory
+                let in_oversold = current_stoch.k_smooth < self.oversold && current_stoch.d < self.oversold;
+                if k_above_d && !prev_k_above_d && in_oversold {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: %K crosses below %D when both are in overbought territory
+                let in_overbought = current_stoch.k_smooth > self.overbought && current_stoch.d > self.overbought;
+                if !k_above_d && prev_k_above_d && in_overbought {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// Williams %R Strategy.
+///
+/// Entry: %R crosses above oversold threshold (-80) from below
+/// Exit: %R crosses below overbought threshold (-20) from above
+///
+/// Williams %R is an inverse of the Fast Stochastic Oscillator.
+/// Values range from -100 (oversold) to 0 (overbought).
+///
+/// Common configurations:
+/// - Period 14, Oversold -80, Overbought -20: Standard
+/// - Period 10, Oversold -90, Overbought -10: More extreme
+/// - Period 21, Oversold -80, Overbought -20: Smoother
+#[derive(Debug, Clone)]
+pub struct WilliamsRStrategy {
+    /// Period for high/low range
+    period: usize,
+    /// Oversold threshold (typically -80)
+    oversold: f64,
+    /// Overbought threshold (typically -20)
+    overbought: f64,
+}
+
+impl WilliamsRStrategy {
+    pub fn new(period: usize, oversold: f64, overbought: f64) -> Self {
+        assert!(period > 0, "Period must be at least 1");
+        assert!(oversold >= -100.0 && oversold < 0.0, "Oversold must be between -100 and 0");
+        assert!(overbought > -100.0 && overbought <= 0.0, "Overbought must be between -100 and 0");
+        assert!(oversold < overbought, "Oversold must be less than overbought");
+
+        Self {
+            period,
+            oversold,
+            overbought,
+        }
+    }
+
+    /// Standard configuration: period 14, -80/-20
+    pub fn standard() -> Self {
+        Self::new(14, -80.0, -20.0)
+    }
+
+    /// Extreme configuration: period 10, -90/-10
+    pub fn extreme() -> Self {
+        Self::new(10, -90.0, -10.0)
+    }
+
+    /// Smooth configuration: period 21, -80/-20
+    pub fn smooth() -> Self {
+        Self::new(21, -80.0, -20.0)
+    }
+
+    /// Get the period.
+    pub fn period(&self) -> usize {
+        self.period
+    }
+
+    /// Get the oversold threshold.
+    pub fn oversold(&self) -> f64 {
+        self.oversold
+    }
+
+    /// Get the overbought threshold.
+    pub fn overbought(&self) -> f64 {
+        self.overbought
+    }
+}
+
+impl Strategy for WilliamsRStrategy {
+    fn id(&self) -> &str {
+        "williams_r"
+    }
+
+    fn warmup_period(&self) -> usize {
+        self.period
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let wr_values = williams_r(bars, self.period);
+
+        // Get current and previous Williams %R values
+        let current_wr = match wr_values[current_idx] {
+            Some(ref w) => w.williams_r,
+            None => return Signal::Hold,
+        };
+
+        // Need previous bar for crossover detection
+        if current_idx == 0 {
+            return Signal::Hold;
+        }
+
+        let prev_wr = match wr_values[current_idx - 1] {
+            Some(ref w) => w.williams_r,
+            None => return Signal::Hold,
+        };
+
+        match current_position {
+            Position::Flat => {
+                // Entry: %R crosses above oversold threshold
+                if current_wr > self.oversold && prev_wr <= self.oversold {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: %R crosses below overbought threshold
+                if current_wr < self.overbought && prev_wr >= self.overbought {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// CCI (Commodity Channel Index) Strategy.
+///
+/// Entry: CCI crosses above +100 (trend breakout)
+/// Exit: CCI crosses below -100 (trend breakdown)
+///
+/// CCI measures the deviation of price from its statistical mean.
+/// Readings above +100 indicate overbought (strong uptrend),
+/// readings below -100 indicate oversold (strong downtrend).
+///
+/// Common configurations:
+/// - Period 20, Entry +100, Exit -100: Standard
+/// - Period 14, Entry +100, Exit -100: Faster
+/// - Period 40, Entry +150, Exit -150: More conservative
+#[derive(Debug, Clone)]
+pub struct CCIStrategy {
+    /// Period for CCI calculation
+    period: usize,
+    /// Entry threshold (typically +100)
+    entry_threshold: f64,
+    /// Exit threshold (typically -100)
+    exit_threshold: f64,
+}
+
+impl CCIStrategy {
+    pub fn new(period: usize, entry_threshold: f64, exit_threshold: f64) -> Self {
+        assert!(period > 0, "Period must be at least 1");
+        assert!(entry_threshold > exit_threshold, "Entry threshold must be greater than exit threshold");
+
+        Self {
+            period,
+            entry_threshold,
+            exit_threshold,
+        }
+    }
+
+    /// Standard configuration: period 20, +100/-100
+    pub fn standard() -> Self {
+        Self::new(20, 100.0, -100.0)
+    }
+
+    /// Fast configuration: period 14, +100/-100
+    pub fn fast() -> Self {
+        Self::new(14, 100.0, -100.0)
+    }
+
+    /// Conservative configuration: period 40, +150/-150
+    pub fn conservative() -> Self {
+        Self::new(40, 150.0, -150.0)
+    }
+
+    /// Get the period.
+    pub fn period(&self) -> usize {
+        self.period
+    }
+
+    /// Get the entry threshold.
+    pub fn entry_threshold(&self) -> f64 {
+        self.entry_threshold
+    }
+
+    /// Get the exit threshold.
+    pub fn exit_threshold(&self) -> f64 {
+        self.exit_threshold
+    }
+}
+
+impl Strategy for CCIStrategy {
+    fn id(&self) -> &str {
+        "cci"
+    }
+
+    fn warmup_period(&self) -> usize {
+        self.period
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let cci_values = cci(bars, self.period);
+
+        // Get current and previous CCI values
+        let current_cci = match cci_values[current_idx] {
+            Some(ref c) => c.cci,
+            None => return Signal::Hold,
+        };
+
+        // Need previous bar for crossover detection
+        if current_idx == 0 {
+            return Signal::Hold;
+        }
+
+        let prev_cci = match cci_values[current_idx - 1] {
+            Some(ref c) => c.cci,
+            None => return Signal::Hold,
+        };
+
+        match current_position {
+            Position::Flat => {
+                // Entry: CCI crosses above entry threshold
+                if current_cci > self.entry_threshold && prev_cci <= self.entry_threshold {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: CCI crosses below exit threshold
+                if current_cci < self.exit_threshold && prev_cci >= self.exit_threshold {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// ROC (Rate of Change) Strategy.
+///
+/// Entry: ROC crosses above 0 (positive momentum)
+/// Exit: ROC crosses below 0 (negative momentum)
+///
+/// ROC measures the percentage change between the current price
+/// and the price N periods ago. It's a simple momentum indicator.
+///
+/// Common configurations:
+/// - Period 12: Standard monthly momentum
+/// - Period 9: Faster signals
+/// - Period 25: Slower, fewer signals
+#[derive(Debug, Clone)]
+pub struct ROCStrategy {
+    /// Period for ROC calculation
+    period: usize,
+}
+
+impl ROCStrategy {
+    pub fn new(period: usize) -> Self {
+        assert!(period > 0, "Period must be at least 1");
+
+        Self { period }
+    }
+
+    /// Standard configuration: period 12
+    pub fn standard() -> Self {
+        Self::new(12)
+    }
+
+    /// Fast configuration: period 9
+    pub fn fast() -> Self {
+        Self::new(9)
+    }
+
+    /// Slow configuration: period 25
+    pub fn slow() -> Self {
+        Self::new(25)
+    }
+
+    /// Get the period.
+    pub fn period(&self) -> usize {
+        self.period
+    }
+}
+
+impl Strategy for ROCStrategy {
+    fn id(&self) -> &str {
+        "roc"
+    }
+
+    fn warmup_period(&self) -> usize {
+        self.period
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let roc_values = roc(bars, self.period);
+
+        // Get current and previous ROC values
+        let current_roc = match roc_values[current_idx] {
+            Some(ref r) => r.roc,
+            None => return Signal::Hold,
+        };
+
+        // Need previous bar for crossover detection
+        if current_idx == 0 {
+            return Signal::Hold;
+        }
+
+        let prev_roc = match roc_values[current_idx - 1] {
+            Some(ref r) => r.roc,
+            None => return Signal::Hold,
+        };
+
+        match current_position {
+            Position::Flat => {
+                // Entry: ROC crosses above 0
+                if current_roc > 0.0 && prev_roc <= 0.0 {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: ROC crosses below 0
+                if current_roc < 0.0 && prev_roc >= 0.0 {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+// =============================================================================
+// Phase 5b: Hybrid/Confluence Strategies
+// =============================================================================
+
+/// RSI + Bollinger Bands Hybrid Strategy.
+///
+/// Entry: RSI < oversold threshold AND close touches/breaks lower Bollinger Band
+/// Exit: Close crosses above middle band (SMA) OR RSI > exit_rsi threshold
+///
+/// This strategy combines mean reversion (RSI oversold) with volatility bands
+/// to identify high-probability reversal points.
+///
+/// Common configurations:
+/// - RSI 14/30, BB 20/2.0, Exit RSI 50: Standard
+/// - RSI 7/20, BB 20/2.5, Exit RSI 50: More aggressive entries
+#[derive(Debug, Clone)]
+pub struct RSIBollingerStrategy {
+    /// RSI period
+    rsi_period: usize,
+    /// RSI oversold threshold for entry
+    rsi_oversold: f64,
+    /// RSI level for exit (typically neutral)
+    rsi_exit: f64,
+    /// Bollinger Bands period
+    bb_period: usize,
+    /// Bollinger Bands standard deviation multiplier
+    bb_std_mult: f64,
+}
+
+impl RSIBollingerStrategy {
+    pub fn new(rsi_period: usize, rsi_oversold: f64, rsi_exit: f64, bb_period: usize, bb_std_mult: f64) -> Self {
+        assert!(rsi_period > 0, "RSI period must be at least 1");
+        assert!(rsi_oversold > 0.0 && rsi_oversold < 100.0, "RSI oversold must be between 0 and 100");
+        assert!(rsi_exit > rsi_oversold, "RSI exit must be greater than oversold");
+        assert!(bb_period > 0, "BB period must be at least 1");
+        assert!(bb_std_mult > 0.0, "BB std mult must be positive");
+
+        Self {
+            rsi_period,
+            rsi_oversold,
+            rsi_exit,
+            bb_period,
+            bb_std_mult,
+        }
+    }
+
+    /// Standard configuration: RSI 14/30/50, BB 20/2.0
+    pub fn standard() -> Self {
+        Self::new(14, 30.0, 50.0, 20, 2.0)
+    }
+
+    /// Aggressive configuration: RSI 7/20/50, BB 20/2.5
+    pub fn aggressive() -> Self {
+        Self::new(7, 20.0, 50.0, 20, 2.5)
+    }
+
+    /// Get the RSI period.
+    pub fn rsi_period(&self) -> usize {
+        self.rsi_period
+    }
+
+    /// Get the RSI oversold threshold.
+    pub fn rsi_oversold(&self) -> f64 {
+        self.rsi_oversold
+    }
+
+    /// Get the RSI exit threshold.
+    pub fn rsi_exit(&self) -> f64 {
+        self.rsi_exit
+    }
+
+    /// Get the Bollinger Bands period.
+    pub fn bb_period(&self) -> usize {
+        self.bb_period
+    }
+
+    /// Get the Bollinger Bands std multiplier.
+    pub fn bb_std_mult(&self) -> f64 {
+        self.bb_std_mult
+    }
+}
+
+impl Strategy for RSIBollingerStrategy {
+    fn id(&self) -> &str {
+        "rsi_bollinger"
+    }
+
+    fn warmup_period(&self) -> usize {
+        // Max of RSI and BB warmup periods
+        (self.rsi_period + 1).max(self.bb_period)
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let rsi_values = rsi(bars, self.rsi_period);
+        let bb_values = bollinger_bands(bars, self.bb_period, self.bb_std_mult);
+
+        // Get current values
+        let current_rsi = match rsi_values[current_idx] {
+            Some(ref r) => r.rsi,
+            None => return Signal::Hold,
+        };
+
+        let current_bb = match bb_values[current_idx] {
+            Some(ref b) => b,
+            None => return Signal::Hold,
+        };
+
+        let current_close = bars[current_idx].close;
+
+        match current_position {
+            Position::Flat => {
+                // Entry: RSI < oversold AND close <= lower BB
+                if current_rsi < self.rsi_oversold && current_close <= current_bb.lower {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: Close > middle band OR RSI > exit threshold
+                if current_close > current_bb.middle || current_rsi > self.rsi_exit {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// MACD + ADX Filter Strategy.
+///
+/// Entry: MACD crosses above signal line AND ADX > threshold
+/// Exit: MACD crosses below signal line
+///
+/// This strategy combines MACD momentum signals with ADX trend strength
+/// filter to avoid false signals in ranging markets.
+///
+/// Common configurations:
+/// - MACD 12/26/9, ADX 14/25: Standard
+/// - MACD 8/17/9, ADX 14/20: Faster with lower ADX threshold
+#[derive(Debug, Clone)]
+pub struct MACDAdxStrategy {
+    /// MACD fast period
+    fast_period: usize,
+    /// MACD slow period
+    slow_period: usize,
+    /// MACD signal period
+    signal_period: usize,
+    /// ADX period
+    adx_period: usize,
+    /// ADX threshold for trend strength
+    adx_threshold: f64,
+}
+
+impl MACDAdxStrategy {
+    pub fn new(fast_period: usize, slow_period: usize, signal_period: usize, adx_period: usize, adx_threshold: f64) -> Self {
+        assert!(fast_period > 0, "Fast period must be at least 1");
+        assert!(slow_period > fast_period, "Slow period must be greater than fast period");
+        assert!(signal_period > 0, "Signal period must be at least 1");
+        assert!(adx_period > 0, "ADX period must be at least 1");
+        assert!(adx_threshold > 0.0, "ADX threshold must be positive");
+
+        Self {
+            fast_period,
+            slow_period,
+            signal_period,
+            adx_period,
+            adx_threshold,
+        }
+    }
+
+    /// Standard configuration: MACD 12/26/9, ADX 14/25
+    pub fn standard() -> Self {
+        Self::new(12, 26, 9, 14, 25.0)
+    }
+
+    /// Fast configuration: MACD 8/17/9, ADX 14/20
+    pub fn fast() -> Self {
+        Self::new(8, 17, 9, 14, 20.0)
+    }
+
+    /// Get the MACD fast period.
+    pub fn fast_period(&self) -> usize {
+        self.fast_period
+    }
+
+    /// Get the MACD slow period.
+    pub fn slow_period(&self) -> usize {
+        self.slow_period
+    }
+
+    /// Get the MACD signal period.
+    pub fn signal_period(&self) -> usize {
+        self.signal_period
+    }
+
+    /// Get the ADX period.
+    pub fn adx_period(&self) -> usize {
+        self.adx_period
+    }
+
+    /// Get the ADX threshold.
+    pub fn adx_threshold(&self) -> f64 {
+        self.adx_threshold
+    }
+}
+
+impl Strategy for MACDAdxStrategy {
+    fn id(&self) -> &str {
+        "macd_adx"
+    }
+
+    fn warmup_period(&self) -> usize {
+        // Max of MACD and ADX warmup periods
+        let macd_warmup = self.slow_period + self.signal_period;
+        let adx_warmup = 2 * self.adx_period; // ADX needs double smoothing
+        macd_warmup.max(adx_warmup)
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let macd_values = macd(bars, self.fast_period, self.slow_period, self.signal_period);
+        let dmi_values = dmi(bars, self.adx_period);
+
+        // Get current and previous MACD values
+        let current_macd = match macd_values[current_idx] {
+            Some(ref m) => m,
+            None => return Signal::Hold,
+        };
+
+        let current_dmi = match dmi_values[current_idx] {
+            Some(ref d) => d,
+            None => return Signal::Hold,
+        };
+
+        // Need previous bar for crossover detection
+        if current_idx == 0 {
+            return Signal::Hold;
+        }
+
+        let prev_macd = match macd_values[current_idx - 1] {
+            Some(ref m) => m,
+            None => return Signal::Hold,
+        };
+
+        let macd_above_signal = current_macd.macd_line > current_macd.signal_line;
+        let prev_macd_above_signal = prev_macd.macd_line > prev_macd.signal_line;
+        let strong_trend = current_dmi.adx > self.adx_threshold;
+
+        match current_position {
+            Position::Flat => {
+                // Entry: MACD crosses above signal AND ADX > threshold
+                if macd_above_signal && !prev_macd_above_signal && strong_trend {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: MACD crosses below signal line
+                if !macd_above_signal && prev_macd_above_signal {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// Multi-Oscillator Confluence Strategy.
+///
+/// Entry: Both RSI shows bullish crossover AND Stochastic %K > %D
+/// Exit: Either RSI shows bearish crossover OR Stochastic %K < %D
+///
+/// This strategy requires agreement between two oscillators for entry,
+/// but only one needs to signal for exit (conservative exit).
+///
+/// Common configurations:
+/// - RSI 14/30/70, Stoch 14/3/3/20/80: Standard
+#[derive(Debug, Clone)]
+pub struct OscillatorConfluenceStrategy {
+    /// RSI period
+    rsi_period: usize,
+    /// RSI oversold threshold
+    rsi_oversold: f64,
+    /// RSI overbought threshold
+    rsi_overbought: f64,
+    /// Stochastic K period
+    stoch_k_period: usize,
+    /// Stochastic K smoothing
+    stoch_k_smooth: usize,
+    /// Stochastic D period
+    stoch_d_period: usize,
+    /// Stochastic oversold threshold
+    stoch_oversold: f64,
+    /// Stochastic overbought threshold
+    stoch_overbought: f64,
+}
+
+impl OscillatorConfluenceStrategy {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        rsi_period: usize,
+        rsi_oversold: f64,
+        rsi_overbought: f64,
+        stoch_k_period: usize,
+        stoch_k_smooth: usize,
+        stoch_d_period: usize,
+        stoch_oversold: f64,
+        stoch_overbought: f64,
+    ) -> Self {
+        assert!(rsi_period > 0, "RSI period must be at least 1");
+        assert!(rsi_oversold < rsi_overbought, "RSI oversold must be less than overbought");
+        assert!(stoch_k_period > 0, "Stoch K period must be at least 1");
+        assert!(stoch_oversold < stoch_overbought, "Stoch oversold must be less than overbought");
+
+        Self {
+            rsi_period,
+            rsi_oversold,
+            rsi_overbought,
+            stoch_k_period,
+            stoch_k_smooth,
+            stoch_d_period,
+            stoch_oversold,
+            stoch_overbought,
+        }
+    }
+
+    /// Standard configuration
+    pub fn standard() -> Self {
+        Self::new(14, 30.0, 70.0, 14, 3, 3, 20.0, 80.0)
+    }
+
+    /// Get the RSI period.
+    pub fn rsi_period(&self) -> usize {
+        self.rsi_period
+    }
+
+    /// Get the Stochastic K period.
+    pub fn stoch_k_period(&self) -> usize {
+        self.stoch_k_period
+    }
+}
+
+impl Strategy for OscillatorConfluenceStrategy {
+    fn id(&self) -> &str {
+        "oscillator_confluence"
+    }
+
+    fn warmup_period(&self) -> usize {
+        let rsi_warmup = self.rsi_period + 1;
+        let stoch_warmup = self.stoch_k_period + self.stoch_k_smooth + self.stoch_d_period;
+        rsi_warmup.max(stoch_warmup)
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let rsi_values = rsi(bars, self.rsi_period);
+        let stoch_values = stochastic(bars, self.stoch_k_period, self.stoch_k_smooth, self.stoch_d_period);
+
+        // Get current and previous values
+        let current_rsi = match rsi_values[current_idx] {
+            Some(ref r) => r.rsi,
+            None => return Signal::Hold,
+        };
+
+        let current_stoch = match stoch_values[current_idx] {
+            Some(ref s) => s,
+            None => return Signal::Hold,
+        };
+
+        // Need previous bar for crossover detection
+        if current_idx == 0 {
+            return Signal::Hold;
+        }
+
+        let prev_rsi = match rsi_values[current_idx - 1] {
+            Some(ref r) => r.rsi,
+            None => return Signal::Hold,
+        };
+
+        let prev_stoch = match stoch_values[current_idx - 1] {
+            Some(ref s) => s,
+            None => return Signal::Hold,
+        };
+
+        // RSI crossover detection
+        let rsi_bullish_cross = current_rsi > self.rsi_oversold && prev_rsi <= self.rsi_oversold;
+        let rsi_bearish_cross = current_rsi < self.rsi_overbought && prev_rsi >= self.rsi_overbought;
+
+        // Stochastic state
+        let stoch_bullish = current_stoch.k_smooth > current_stoch.d;
+        let stoch_bearish = current_stoch.k_smooth < current_stoch.d;
+        let prev_stoch_bullish = prev_stoch.k_smooth > prev_stoch.d;
+
+        match current_position {
+            Position::Flat => {
+                // Entry: RSI bullish crossover AND Stochastic K > D
+                if rsi_bullish_cross && stoch_bullish {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: RSI bearish crossover OR Stochastic K crosses below D
+                let stoch_bearish_cross = stoch_bearish && prev_stoch_bullish;
+                if rsi_bearish_cross || stoch_bearish_cross {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// Ichimoku Cloud Strategy.
+///
+/// Entry: Price above cloud AND Tenkan-sen crosses above Kijun-sen
+/// Exit: Price below cloud OR Tenkan-sen crosses below Kijun-sen
+///
+/// The Ichimoku Kinko Hyo ("one glance equilibrium chart") is a comprehensive
+/// indicator that defines support/resistance, trend direction, and momentum.
+///
+/// Components:
+/// - Tenkan-sen (conversion line): (9-period high + 9-period low) / 2
+/// - Kijun-sen (base line): (26-period high + 26-period low) / 2
+/// - Senkou Span A (leading span A): (Tenkan + Kijun) / 2, shifted 26 periods ahead
+/// - Senkou Span B (leading span B): (52-period high + 52-period low) / 2, shifted 26 periods ahead
+/// - Kumo (cloud): Area between Senkou Span A and B
+///
+/// Common configurations:
+/// - 9/26/52: Standard (traditional Japanese trading week settings)
+/// - 7/22/44: Adapted for crypto/24-7 markets
+#[derive(Debug, Clone)]
+pub struct IchimokuStrategy {
+    /// Tenkan-sen period (conversion line)
+    tenkan_period: usize,
+    /// Kijun-sen period (base line)
+    kijun_period: usize,
+    /// Senkou Span B period
+    senkou_b_period: usize,
+}
+
+impl IchimokuStrategy {
+    pub fn new(tenkan_period: usize, kijun_period: usize, senkou_b_period: usize) -> Self {
+        assert!(tenkan_period > 0, "Tenkan period must be at least 1");
+        assert!(kijun_period > 0, "Kijun period must be at least 1");
+        assert!(senkou_b_period > 0, "Senkou B period must be at least 1");
+        assert!(tenkan_period < kijun_period, "Tenkan period should be less than Kijun period");
+
+        Self {
+            tenkan_period,
+            kijun_period,
+            senkou_b_period,
+        }
+    }
+
+    /// Standard configuration: 9/26/52
+    pub fn standard() -> Self {
+        Self::new(9, 26, 52)
+    }
+
+    /// Crypto/fast configuration: 7/22/44
+    pub fn crypto() -> Self {
+        Self::new(7, 22, 44)
+    }
+
+    /// Double configuration: 18/52/104
+    pub fn double() -> Self {
+        Self::new(18, 52, 104)
+    }
+
+    /// Get the Tenkan-sen period.
+    pub fn tenkan_period(&self) -> usize {
+        self.tenkan_period
+    }
+
+    /// Get the Kijun-sen period.
+    pub fn kijun_period(&self) -> usize {
+        self.kijun_period
+    }
+
+    /// Get the Senkou Span B period.
+    pub fn senkou_b_period(&self) -> usize {
+        self.senkou_b_period
+    }
+}
+
+impl Strategy for IchimokuStrategy {
+    fn id(&self) -> &str {
+        "ichimoku"
+    }
+
+    fn warmup_period(&self) -> usize {
+        // Need the longest period (Senkou B) plus displacement (Kijun period)
+        self.senkou_b_period + self.kijun_period
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        // During warmup, no signals
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let ichimoku_values = ichimoku(bars, self.tenkan_period, self.kijun_period, self.senkou_b_period);
+
+        // Get current and previous Ichimoku values
+        let current_ich = match ichimoku_values[current_idx] {
+            Some(ref i) => i,
+            None => return Signal::Hold,
+        };
+
+        // Need previous bar for crossover detection
+        if current_idx == 0 {
+            return Signal::Hold;
+        }
+
+        let prev_ich = match ichimoku_values[current_idx - 1] {
+            Some(ref i) => i,
+            None => return Signal::Hold,
+        };
+
+        let current_close = bars[current_idx].close;
+
+        // Determine cloud bounds (cloud is between Senkou Span A and B)
+        let cloud_top = current_ich.senkou_span_a.max(current_ich.senkou_span_b);
+        let cloud_bottom = current_ich.senkou_span_a.min(current_ich.senkou_span_b);
+
+        // Price position relative to cloud
+        let price_above_cloud = current_close > cloud_top;
+        let price_below_cloud = current_close < cloud_bottom;
+
+        // Tenkan/Kijun crossover
+        let tenkan_above_kijun = current_ich.tenkan_sen > current_ich.kijun_sen;
+        let prev_tenkan_above_kijun = prev_ich.tenkan_sen > prev_ich.kijun_sen;
+
+        match current_position {
+            Position::Flat => {
+                // Entry: Price above cloud AND Tenkan crosses above Kijun
+                if price_above_cloud && tenkan_above_kijun && !prev_tenkan_above_kijun {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: Price below cloud OR Tenkan crosses below Kijun
+                let tenkan_bearish_cross = !tenkan_above_kijun && prev_tenkan_above_kijun;
+                if price_below_cloud || tenkan_bearish_cross {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
 }
 
 #[cfg(test)]

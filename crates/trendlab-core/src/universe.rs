@@ -6,7 +6,7 @@
 //! - Utility methods for ticker lookups
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use thiserror::Error;
 
@@ -145,6 +145,49 @@ impl Universe {
     /// Find which sector a ticker belongs to.
     pub fn find_sector_for_ticker(&self, ticker: &str) -> Option<&Sector> {
         self.sectors.iter().find(|s| s.contains(ticker))
+    }
+
+    /// Build a fast lookup table mapping ticker symbols to sector names.
+    ///
+    /// Returns a HashMap where keys are ticker symbols (e.g., "AAPL") and
+    /// values are sector display names (e.g., "Technology").
+    ///
+    /// This is useful for enriching DataFrames with sector information
+    /// without repeated sector lookups.
+    ///
+    /// # Example
+    /// ```
+    /// use trendlab_core::universe::Universe;
+    ///
+    /// let universe = Universe::default_universe();
+    /// let lookup = universe.build_sector_lookup();
+    ///
+    /// assert_eq!(lookup.get("AAPL"), Some(&"Technology".to_string()));
+    /// assert_eq!(lookup.get("JPM"), Some(&"Financial".to_string()));
+    /// ```
+    pub fn build_sector_lookup(&self) -> HashMap<String, String> {
+        let mut lookup = HashMap::new();
+        for sector in &self.sectors {
+            for ticker in &sector.tickers {
+                lookup.insert(ticker.clone(), sector.name.clone());
+            }
+        }
+        lookup
+    }
+
+    /// Build a fast lookup table mapping ticker symbols to sector IDs.
+    ///
+    /// Similar to `build_sector_lookup()` but returns sector IDs instead of names.
+    /// Useful when you need machine-readable identifiers (e.g., "technology")
+    /// rather than display names (e.g., "Technology").
+    pub fn build_sector_id_lookup(&self) -> HashMap<String, String> {
+        let mut lookup = HashMap::new();
+        for sector in &self.sectors {
+            for ticker in &sector.tickers {
+                lookup.insert(ticker.clone(), sector.id.clone());
+            }
+        }
+        lookup
     }
 
     /// Get tickers for a specific sector by ID.
@@ -325,5 +368,36 @@ tickers = ["JPM", "GS"]
         let universe = Universe::default_universe();
         assert_eq!(universe.sector_count(), 11);
         assert!(universe.ticker_count() > 40);
+    }
+
+    #[test]
+    fn test_build_sector_lookup() {
+        let universe = Universe::default_universe();
+        let lookup = universe.build_sector_lookup();
+
+        // Check expected mappings
+        assert_eq!(lookup.get("AAPL"), Some(&"Technology".to_string()));
+        assert_eq!(lookup.get("MSFT"), Some(&"Technology".to_string()));
+        assert_eq!(lookup.get("JPM"), Some(&"Financial".to_string()));
+        assert_eq!(lookup.get("XOM"), Some(&"Energy".to_string()));
+        assert_eq!(lookup.get("LLY"), Some(&"Healthcare".to_string()));
+
+        // Unknown ticker should not be in lookup
+        assert!(lookup.get("UNKNOWN").is_none());
+
+        // Should have all tickers from universe
+        assert_eq!(lookup.len(), universe.ticker_count());
+    }
+
+    #[test]
+    fn test_build_sector_id_lookup() {
+        let universe = Universe::default_universe();
+        let lookup = universe.build_sector_id_lookup();
+
+        // Check expected mappings (IDs, not names)
+        assert_eq!(lookup.get("AAPL"), Some(&"technology".to_string()));
+        assert_eq!(lookup.get("JPM"), Some(&"financial".to_string()));
+        assert_eq!(lookup.get("XOM"), Some(&"energy".to_string()));
+        assert_eq!(lookup.get("LLY"), Some(&"healthcare".to_string()));
     }
 }

@@ -30,11 +30,15 @@ export function ResultsPanel() {
     setActivePanel,
     setChartMode,
     // YOLO leaderboard
-    crossSymbolLeaderboard,
-    leaderboard,
+    currentCrossSymbolLeaderboard,
+    currentLeaderboard,
   } = useAppStore();
 
   const [currentView, setCurrentView] = useState<ResultsView>('results');
+
+  // Get current leaderboards using accessor methods
+  const crossSymbolLeaderboard = currentCrossSymbolLeaderboard();
+  const leaderboard = currentLeaderboard();
 
   // Check if we have leaderboard data
   const hasLeaderboardData =

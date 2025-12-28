@@ -10,6 +10,7 @@ use ratatui::{
 
 use crate::app::{App, Panel, ResultsViewMode};
 use crate::ui::{colors, panel_block};
+use trendlab_core::ConfidenceGrade;
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     // Split for table and help text
@@ -49,11 +50,10 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_empty_state(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
-    let has_yolo_results = !app.yolo.leaderboard.entries.is_empty()
+    let has_yolo_results = !app.yolo.leaderboard().entries.is_empty()
         || app
             .yolo
-            .cross_symbol_leaderboard
-            .as_ref()
+            .cross_symbol_leaderboard()
             .is_some_and(|lb| !lb.entries.is_empty());
 
     let lines = if has_yolo_results {
@@ -534,12 +534,12 @@ fn draw_aggregated_view(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
 /// Draw YOLO leaderboard table (cross-symbol aggregated results)
 fn draw_leaderboard_table(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
     // Check if we have cross-symbol leaderboard data
-    let cross_symbol = match &app.yolo.cross_symbol_leaderboard {
+    let cross_symbol = match app.yolo.cross_symbol_leaderboard() {
         Some(lb) if !lb.entries.is_empty() => lb,
         _ => {
             // Fallback: show per-symbol leaderboard if no cross-symbol data
-            if app.yolo.leaderboard.entries.is_empty() {
-                draw_empty_leaderboard(f, area, is_active);
+            if app.yolo.leaderboard().entries.is_empty() {
+                draw_empty_leaderboard(f, app, area, is_active);
                 return;
             }
             draw_per_symbol_leaderboard(f, app, area, is_active);
@@ -553,6 +553,7 @@ fn draw_leaderboard_table(f: &mut Frame, app: &App, area: Rect, is_active: bool)
 
     let header = Row::new(vec![
         Cell::from("#").style(header_style),
+        Cell::from("Conf").style(header_style), // Confidence grade
         Cell::from("Strategy").style(header_style),
         Cell::from("Config").style(header_style),
         Cell::from("Syms").style(header_style),
@@ -600,10 +601,20 @@ fn draw_leaderboard_table(f: &mut Frame, app: &App, area: Rect, is_active: bool)
                 base_style
             };
 
+            // Confidence badge with color
+            let (conf_text, conf_style) = match entry.confidence_grade {
+                Some(ConfidenceGrade::High) => ("✓✓", Style::default().fg(colors::GREEN)),
+                Some(ConfidenceGrade::Medium) => ("✓", Style::default().fg(colors::YELLOW)),
+                Some(ConfidenceGrade::Low) => ("○", Style::default().fg(colors::ORANGE)),
+                Some(ConfidenceGrade::Insufficient) => ("?", Style::default().fg(colors::FG_DARK)),
+                None => ("-", base_style),
+            };
+
             Row::new(vec![
                 rank_cell,
+                Cell::from(conf_text).style(conf_style),
                 Cell::from(entry.strategy_type.name()).style(base_style),
-                Cell::from(truncate_config(&entry.config_id.display(), 20)).style(base_style),
+                Cell::from(truncate_config(&entry.config_id.display(), 18)).style(base_style),
                 Cell::from(format!("{}", entry.symbols.len())).style(base_style),
                 Cell::from(format!("{:.3}", entry.aggregate_metrics.avg_sharpe)).style(sharpe_style),
                 Cell::from(format!("{:.3}", entry.aggregate_metrics.min_sharpe)).style(base_style),
@@ -615,8 +626,9 @@ fn draw_leaderboard_table(f: &mut Frame, app: &App, area: Rect, is_active: bool)
 
     let widths = [
         Constraint::Length(3),  // Rank
+        Constraint::Length(4),  // Confidence
         Constraint::Length(14), // Strategy
-        Constraint::Length(22), // Config
+        Constraint::Length(20), // Config
         Constraint::Length(5),  // Symbols
         Constraint::Length(10), // Avg Sharpe
         Constraint::Length(10), // Min Sharpe
@@ -624,9 +636,11 @@ fn draw_leaderboard_table(f: &mut Frame, app: &App, area: Rect, is_active: bool)
         Constraint::Length(10), // Avg CAGR
     ];
 
+    let scope_label = app.yolo.view_scope.display_name();
     let title = format!(
-        "YOLO Leaderboard ({} configs tested)",
-        cross_symbol.total_configs_tested
+        "YOLO Leaderboard [{}] ({} configs)",
+        scope_label,
+        app.yolo.configs_tested()
     );
     let table = Table::new(rows, widths)
         .header(header)
@@ -636,11 +650,12 @@ fn draw_leaderboard_table(f: &mut Frame, app: &App, area: Rect, is_active: bool)
 }
 
 /// Draw empty leaderboard state
-fn draw_empty_leaderboard(f: &mut Frame, area: Rect, is_active: bool) {
+fn draw_empty_leaderboard(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
+    let scope_label = app.yolo.view_scope.display_name();
     let lines = vec![
         Line::from(""),
         Line::from(vec![Span::styled(
-            "No YOLO results yet.",
+            format!("No {} YOLO results yet.", scope_label),
             Style::default().fg(colors::FG_DARK),
         )]),
         Line::from(""),
@@ -649,19 +664,23 @@ fn draw_empty_leaderboard(f: &mut Frame, area: Rect, is_active: bool) {
             Style::default().fg(colors::FG_DARK),
         )]),
         Line::from(""),
-        Line::from(vec![Span::styled(
-            "Press 'Y' with multiple symbols selected to start YOLO mode.",
-            Style::default().fg(colors::FG_DARK),
-        )]),
+        Line::from(vec![
+            Span::styled("Press ", Style::default().fg(colors::FG_DARK)),
+            Span::styled("'t'", Style::default().fg(colors::CYAN)),
+            Span::styled(" to toggle Session/All-Time, ", Style::default().fg(colors::FG_DARK)),
+            Span::styled("'Y'", Style::default().fg(colors::MAGENTA)),
+            Span::styled(" to start YOLO mode.", Style::default().fg(colors::FG_DARK)),
+        ]),
     ];
 
-    let para = Paragraph::new(lines).block(panel_block("YOLO Leaderboard", is_active));
+    let title = format!("YOLO Leaderboard [{}]", scope_label);
+    let para = Paragraph::new(lines).block(panel_block(&title, is_active));
     f.render_widget(para, area);
 }
 
 /// Draw per-symbol leaderboard (fallback when no cross-symbol data)
 fn draw_per_symbol_leaderboard(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
-    let leaderboard = &app.yolo.leaderboard;
+    let leaderboard = app.yolo.leaderboard();
 
     let header_style = Style::default()
         .fg(colors::MAGENTA)
@@ -669,6 +688,7 @@ fn draw_per_symbol_leaderboard(f: &mut Frame, app: &App, area: Rect, is_active: 
 
     let header = Row::new(vec![
         Cell::from("#").style(header_style),
+        Cell::from("Conf").style(header_style), // Confidence grade
         Cell::from("Strategy").style(header_style),
         Cell::from("Symbol").style(header_style),
         Cell::from("Sharpe").style(header_style),
@@ -698,9 +718,19 @@ fn draw_per_symbol_leaderboard(f: &mut Frame, app: &App, area: Rect, is_active: 
                 r => Cell::from(format!("{}", r)).style(base_style),
             };
 
+            // Confidence badge with color
+            let (conf_text, conf_style) = match entry.confidence_grade {
+                Some(ConfidenceGrade::High) => ("✓✓", Style::default().fg(colors::GREEN)),
+                Some(ConfidenceGrade::Medium) => ("✓", Style::default().fg(colors::YELLOW)),
+                Some(ConfidenceGrade::Low) => ("○", Style::default().fg(colors::ORANGE)),
+                Some(ConfidenceGrade::Insufficient) => ("?", Style::default().fg(colors::FG_DARK)),
+                None => ("-", base_style),
+            };
+
             let symbol = entry.symbol.as_deref().unwrap_or("-");
             Row::new(vec![
                 rank_cell,
+                Cell::from(conf_text).style(conf_style),
                 Cell::from(entry.strategy_type.name()).style(base_style),
                 Cell::from(symbol).style(base_style),
                 Cell::from(format!("{:.3}", entry.metrics.sharpe)).style(base_style),
@@ -713,6 +743,7 @@ fn draw_per_symbol_leaderboard(f: &mut Frame, app: &App, area: Rect, is_active: 
 
     let widths = [
         Constraint::Length(3),  // Rank
+        Constraint::Length(4),  // Confidence
         Constraint::Length(14), // Strategy
         Constraint::Length(8),  // Symbol
         Constraint::Length(8),  // Sharpe
@@ -721,9 +752,11 @@ fn draw_per_symbol_leaderboard(f: &mut Frame, app: &App, area: Rect, is_active: 
         Constraint::Length(6),  // Win%
     ];
 
+    let scope_label = app.yolo.view_scope.display_name();
     let title = format!(
-        "Per-Symbol Leaderboard ({} configs)",
-        leaderboard.total_configs_tested
+        "Per-Symbol Leaderboard [{}] ({} configs)",
+        scope_label,
+        app.yolo.configs_tested()
     );
     let table = Table::new(rows, widths)
         .header(header)
@@ -743,20 +776,27 @@ fn truncate_config(s: &str, max_len: usize) -> String {
 
 fn draw_help(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
     let view_mode = app.results.view_mode_name();
+    let scope_label = app.yolo.view_scope.display_name();
 
     let lines = vec![Line::from(vec![
         Span::styled("\u{2191}\u{2193}: ", Style::default().fg(colors::CYAN)),
         Span::styled("Select  ", Style::default().fg(colors::FG_DARK)),
         Span::styled("Enter: ", Style::default().fg(colors::CYAN)),
-        Span::styled("View chart  ", Style::default().fg(colors::FG_DARK)),
+        Span::styled("Chart  ", Style::default().fg(colors::FG_DARK)),
         Span::styled("'s': ", Style::default().fg(colors::CYAN)),
         Span::styled("Sort  ", Style::default().fg(colors::FG_DARK)),
         Span::styled("'v': ", Style::default().fg(colors::CYAN)),
-        Span::styled("View ", Style::default().fg(colors::FG_DARK)),
         Span::styled(
-            view_mode,
+            format!("{}  ", view_mode),
             Style::default()
                 .fg(colors::YELLOW)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("'t': ", Style::default().fg(colors::CYAN)),
+        Span::styled(
+            scope_label,
+            Style::default()
+                .fg(colors::MAGENTA)
                 .add_modifier(Modifier::BOLD),
         ),
     ])];

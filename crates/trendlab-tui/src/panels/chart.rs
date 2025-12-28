@@ -493,6 +493,8 @@ fn strategy_color(strategy_type: StrategyTypeId) -> Color {
         StrategyTypeId::ParabolicSar => Color::Rgb(44, 62, 80), // Dark Gray
         StrategyTypeId::OpeningRangeBreakout => Color::Rgb(189, 195, 199), // Light Gray
         StrategyTypeId::Ensemble => Color::Rgb(149, 165, 166), // Silver
+        // Phase 5 oscillator strategies
+        _ => Color::Rgb(100, 100, 100), // Default gray for new strategy types
     }
 }
 

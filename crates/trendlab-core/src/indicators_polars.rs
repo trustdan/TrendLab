@@ -930,6 +930,332 @@ pub fn apply_parabolic_sar_exprs(lf: LazyFrame, atr_period: usize, af_equiv: f64
     lf.with_column(is_uptrend)
 }
 
+// =============================================================================
+// Phase 5: Oscillator Indicators (TA-Focused)
+// =============================================================================
+
+/// RSI (Relative Strength Index) expression.
+///
+/// Computes RSI using Wilder smoothing.
+/// Returns the RSI value (0-100).
+///
+/// Note: Due to Polars limitations with EWM seeding, this uses an approximate
+/// Wilder smoothing that converges to the correct value after warmup.
+pub fn rsi_expr(period: usize) -> Expr {
+    // Calculate price changes
+    let change = col("close") - col("close").shift(lit(1));
+
+    // Separate gains and losses
+    let gain = when(change.clone().gt(lit(0.0)))
+        .then(change.clone())
+        .otherwise(lit(0.0));
+    let loss = when(change.clone().lt(lit(0.0)))
+        .then(-change)
+        .otherwise(lit(0.0));
+
+    // Wilder smoothing (EWM with alpha = 1/period)
+    let alpha = 1.0 / period as f64;
+    let avg_gain = gain.ewm_mean(EWMOptions {
+        alpha,
+        adjust: false,
+        ..Default::default()
+    });
+    let avg_loss = loss.ewm_mean(EWMOptions {
+        alpha,
+        adjust: false,
+        ..Default::default()
+    });
+
+    // RSI = 100 - (100 / (1 + RS))
+    let rs = avg_gain.clone() / avg_loss.clone();
+    (lit(100.0) - (lit(100.0) / (lit(1.0) + rs))).alias("rsi")
+}
+
+/// Apply RSI expressions to a LazyFrame.
+pub fn apply_rsi_exprs(lf: LazyFrame, period: usize) -> LazyFrame {
+    lf.with_column(rsi_expr(period))
+}
+
+/// MACD line expression (fast EMA - slow EMA).
+pub fn macd_line_expr(fast_period: usize, slow_period: usize) -> Expr {
+    // Convert span to alpha: alpha = 2 / (span + 1)
+    let fast_alpha = 2.0 / (fast_period as f64 + 1.0);
+    let slow_alpha = 2.0 / (slow_period as f64 + 1.0);
+
+    let fast_ema = col("close").ewm_mean(EWMOptions {
+        alpha: fast_alpha,
+        ..Default::default()
+    });
+    let slow_ema = col("close").ewm_mean(EWMOptions {
+        alpha: slow_alpha,
+        ..Default::default()
+    });
+    (fast_ema - slow_ema).alias("macd_line")
+}
+
+/// MACD signal line expression (EMA of MACD line).
+pub fn macd_signal_expr(signal_period: usize) -> Expr {
+    let signal_alpha = 2.0 / (signal_period as f64 + 1.0);
+    col("macd_line")
+        .ewm_mean(EWMOptions {
+            alpha: signal_alpha,
+            ..Default::default()
+        })
+        .alias("macd_signal")
+}
+
+/// MACD histogram expression (MACD line - signal line).
+pub fn macd_histogram_expr() -> Expr {
+    (col("macd_line") - col("macd_signal")).alias("macd_histogram")
+}
+
+/// Apply MACD expressions to a LazyFrame.
+///
+/// Adds columns: macd_line, macd_signal, macd_histogram
+pub fn apply_macd_exprs(
+    lf: LazyFrame,
+    fast_period: usize,
+    slow_period: usize,
+    signal_period: usize,
+) -> LazyFrame {
+    lf.with_column(macd_line_expr(fast_period, slow_period))
+        .with_column(macd_signal_expr(signal_period))
+        .with_column(macd_histogram_expr())
+}
+
+/// Stochastic %K raw expression.
+///
+/// %K = (Close - Lowest Low) / (Highest High - Lowest Low) * 100
+pub fn stochastic_k_raw_expr(period: usize) -> Expr {
+    let highest = col("high").rolling_max(RollingOptionsFixedWindow {
+        window_size: period,
+        min_periods: period,
+        ..Default::default()
+    });
+    let lowest = col("low").rolling_min(RollingOptionsFixedWindow {
+        window_size: period,
+        min_periods: period,
+        ..Default::default()
+    });
+    let range = highest.clone() - lowest.clone();
+    let k = when(range.clone().gt(lit(0.0)))
+        .then((col("close") - lowest) / range * lit(100.0))
+        .otherwise(lit(50.0)); // Middle when range is zero
+    k.alias("stoch_k_raw")
+}
+
+/// Stochastic %K smoothed expression (SMA of raw %K).
+pub fn stochastic_k_smooth_expr(smooth_period: usize) -> Expr {
+    col("stoch_k_raw")
+        .rolling_mean(RollingOptionsFixedWindow {
+            window_size: smooth_period,
+            min_periods: smooth_period,
+            ..Default::default()
+        })
+        .alias("stoch_k")
+}
+
+/// Stochastic %D expression (SMA of smoothed %K).
+pub fn stochastic_d_expr(d_period: usize) -> Expr {
+    col("stoch_k")
+        .rolling_mean(RollingOptionsFixedWindow {
+            window_size: d_period,
+            min_periods: d_period,
+            ..Default::default()
+        })
+        .alias("stoch_d")
+}
+
+/// Apply Stochastic expressions to a LazyFrame.
+///
+/// Adds columns: stoch_k_raw, stoch_k, stoch_d
+pub fn apply_stochastic_exprs(
+    lf: LazyFrame,
+    k_period: usize,
+    k_smooth: usize,
+    d_period: usize,
+) -> LazyFrame {
+    lf.with_column(stochastic_k_raw_expr(k_period))
+        .with_column(stochastic_k_smooth_expr(k_smooth))
+        .with_column(stochastic_d_expr(d_period))
+}
+
+/// Williams %R expression.
+///
+/// %R = (Highest High - Close) / (Highest High - Lowest Low) * -100
+/// Range: -100 to 0
+pub fn williams_r_expr(period: usize) -> Expr {
+    let highest = col("high").rolling_max(RollingOptionsFixedWindow {
+        window_size: period,
+        min_periods: period,
+        ..Default::default()
+    });
+    let lowest = col("low").rolling_min(RollingOptionsFixedWindow {
+        window_size: period,
+        min_periods: period,
+        ..Default::default()
+    });
+    let range = highest.clone() - lowest.clone();
+    let wr = when(range.clone().gt(lit(0.0)))
+        .then((highest.clone() - col("close")) / range * lit(-100.0))
+        .otherwise(lit(-50.0)); // Middle when range is zero
+    wr.alias("williams_r")
+}
+
+/// Apply Williams %R expressions to a LazyFrame.
+pub fn apply_williams_r_exprs(lf: LazyFrame, period: usize) -> LazyFrame {
+    lf.with_column(williams_r_expr(period))
+}
+
+/// CCI (Commodity Channel Index) typical price expression.
+pub fn typical_price_expr() -> Expr {
+    ((col("high") + col("low") + col("close")) / lit(3.0)).alias("typical_price")
+}
+
+/// CCI expression.
+///
+/// CCI = (Typical Price - SMA(TP)) / (0.015 * Mean Deviation)
+pub fn cci_expr(period: usize) -> Expr {
+    let tp_sma = col("typical_price").rolling_mean(RollingOptionsFixedWindow {
+        window_size: period,
+        min_periods: period,
+        ..Default::default()
+    });
+
+    // Mean deviation is calculated separately using a custom expression
+    // For simplicity, we use standard deviation as an approximation
+    // (actual CCI uses mean absolute deviation)
+    let tp_std = col("typical_price").rolling_std(RollingOptionsFixedWindow {
+        window_size: period,
+        min_periods: period,
+        ..Default::default()
+    });
+
+    // CCI using std as approximation (multiply by sqrt(2/pi) ≈ 0.7979 to convert)
+    let mean_dev_approx = tp_std * lit(0.7979);
+    let cci = when(mean_dev_approx.clone().gt(lit(0.0)))
+        .then((col("typical_price") - tp_sma) / (lit(0.015) * mean_dev_approx))
+        .otherwise(lit(0.0));
+    cci.alias("cci")
+}
+
+/// Apply CCI expressions to a LazyFrame.
+///
+/// Adds columns: typical_price, cci
+pub fn apply_cci_exprs(lf: LazyFrame, period: usize) -> LazyFrame {
+    lf.with_column(typical_price_expr()).with_column(cci_expr(period))
+}
+
+/// ROC (Rate of Change) expression.
+///
+/// ROC = ((Close - Close[n]) / Close[n]) * 100
+pub fn roc_expr(period: usize) -> Expr {
+    let prev_close = col("close").shift(lit(period as i64));
+    ((col("close") - prev_close.clone()) / prev_close * lit(100.0)).alias("roc")
+}
+
+/// Apply ROC expressions to a LazyFrame.
+pub fn apply_roc_exprs(lf: LazyFrame, period: usize) -> LazyFrame {
+    lf.with_column(roc_expr(period))
+}
+
+/// Ichimoku Tenkan-sen (Conversion Line) expression.
+///
+/// Tenkan-sen = (Highest High + Lowest Low) / 2 over tenkan_period
+pub fn ichimoku_tenkan_expr(period: usize) -> Expr {
+    let highest = col("high").rolling_max(RollingOptionsFixedWindow {
+        window_size: period,
+        min_periods: period,
+        ..Default::default()
+    });
+    let lowest = col("low").rolling_min(RollingOptionsFixedWindow {
+        window_size: period,
+        min_periods: period,
+        ..Default::default()
+    });
+    ((highest + lowest) / lit(2.0)).alias("tenkan_sen")
+}
+
+/// Ichimoku Kijun-sen (Base Line) expression.
+pub fn ichimoku_kijun_expr(period: usize) -> Expr {
+    let highest = col("high").rolling_max(RollingOptionsFixedWindow {
+        window_size: period,
+        min_periods: period,
+        ..Default::default()
+    });
+    let lowest = col("low").rolling_min(RollingOptionsFixedWindow {
+        window_size: period,
+        min_periods: period,
+        ..Default::default()
+    });
+    ((highest + lowest) / lit(2.0)).alias("kijun_sen")
+}
+
+/// Ichimoku Senkou Span A expression (not displaced).
+pub fn ichimoku_senkou_a_expr() -> Expr {
+    ((col("tenkan_sen") + col("kijun_sen")) / lit(2.0)).alias("senkou_span_a")
+}
+
+/// Ichimoku Senkou Span B expression (not displaced).
+pub fn ichimoku_senkou_b_expr(period: usize) -> Expr {
+    let highest = col("high").rolling_max(RollingOptionsFixedWindow {
+        window_size: period,
+        min_periods: period,
+        ..Default::default()
+    });
+    let lowest = col("low").rolling_min(RollingOptionsFixedWindow {
+        window_size: period,
+        min_periods: period,
+        ..Default::default()
+    });
+    ((highest + lowest) / lit(2.0)).alias("senkou_span_b")
+}
+
+/// Apply Ichimoku expressions to a LazyFrame.
+///
+/// Adds columns: tenkan_sen, kijun_sen, senkou_span_a, senkou_span_b
+/// Also adds: is_above_cloud, is_below_cloud, is_inside_cloud
+pub fn apply_ichimoku_exprs(
+    lf: LazyFrame,
+    tenkan_period: usize,
+    kijun_period: usize,
+    senkou_b_period: usize,
+) -> LazyFrame {
+    // Compute cloud top and bottom first
+    let cloud_top = when(col("senkou_span_a").gt(col("senkou_span_b")))
+        .then(col("senkou_span_a"))
+        .otherwise(col("senkou_span_b"))
+        .alias("cloud_top");
+
+    let cloud_bottom = when(col("senkou_span_a").lt(col("senkou_span_b")))
+        .then(col("senkou_span_a"))
+        .otherwise(col("senkou_span_b"))
+        .alias("cloud_bottom");
+
+    lf.with_column(ichimoku_tenkan_expr(tenkan_period))
+        .with_column(ichimoku_kijun_expr(kijun_period))
+        .with_column(ichimoku_senkou_a_expr())
+        .with_column(ichimoku_senkou_b_expr(senkou_b_period))
+        .with_columns([cloud_top, cloud_bottom])
+        .with_columns([
+            // is_above_cloud: close > cloud_top
+            col("close")
+                .gt(col("cloud_top"))
+                .alias("is_above_cloud"),
+            // is_below_cloud: close < cloud_bottom
+            col("close")
+                .lt(col("cloud_bottom"))
+                .alias("is_below_cloud"),
+        ])
+        .with_column(
+            // is_inside_cloud: not above and not below
+            col("is_above_cloud")
+                .not()
+                .and(col("is_below_cloud").not())
+                .alias("is_inside_cloud"),
+        )
+}
+
 /// Indicator specification for building indicator sets.
 #[derive(Debug, Clone)]
 pub enum IndicatorSpec {
@@ -949,6 +1275,32 @@ pub enum IndicatorSpec {
     DMI { period: usize },
     /// Aroon indicators (full set)
     Aroon { period: usize },
+    /// RSI (Relative Strength Index)
+    RSI { period: usize },
+    /// MACD (Moving Average Convergence Divergence)
+    MACD {
+        fast_period: usize,
+        slow_period: usize,
+        signal_period: usize,
+    },
+    /// Stochastic Oscillator
+    Stochastic {
+        k_period: usize,
+        k_smooth: usize,
+        d_period: usize,
+    },
+    /// Williams %R
+    WilliamsR { period: usize },
+    /// CCI (Commodity Channel Index)
+    CCI { period: usize },
+    /// ROC (Rate of Change)
+    ROC { period: usize },
+    /// Ichimoku Cloud
+    Ichimoku {
+        tenkan_period: usize,
+        kijun_period: usize,
+        senkou_b_period: usize,
+    },
 }
 
 /// Collection of indicators to compute together.
@@ -1017,6 +1369,70 @@ impl IndicatorSet {
         self.indicators.push(IndicatorSpec::Aroon { period });
         self
     }
+
+    /// Add RSI indicator.
+    pub fn with_rsi(mut self, period: usize) -> Self {
+        self.indicators.push(IndicatorSpec::RSI { period });
+        self
+    }
+
+    /// Add MACD indicator set.
+    pub fn with_macd(
+        mut self,
+        fast_period: usize,
+        slow_period: usize,
+        signal_period: usize,
+    ) -> Self {
+        self.indicators.push(IndicatorSpec::MACD {
+            fast_period,
+            slow_period,
+            signal_period,
+        });
+        self
+    }
+
+    /// Add Stochastic Oscillator indicator set.
+    pub fn with_stochastic(mut self, k_period: usize, k_smooth: usize, d_period: usize) -> Self {
+        self.indicators.push(IndicatorSpec::Stochastic {
+            k_period,
+            k_smooth,
+            d_period,
+        });
+        self
+    }
+
+    /// Add Williams %R indicator.
+    pub fn with_williams_r(mut self, period: usize) -> Self {
+        self.indicators.push(IndicatorSpec::WilliamsR { period });
+        self
+    }
+
+    /// Add CCI indicator.
+    pub fn with_cci(mut self, period: usize) -> Self {
+        self.indicators.push(IndicatorSpec::CCI { period });
+        self
+    }
+
+    /// Add ROC indicator.
+    pub fn with_roc(mut self, period: usize) -> Self {
+        self.indicators.push(IndicatorSpec::ROC { period });
+        self
+    }
+
+    /// Add Ichimoku Cloud indicator set.
+    pub fn with_ichimoku(
+        mut self,
+        tenkan_period: usize,
+        kijun_period: usize,
+        senkou_b_period: usize,
+    ) -> Self {
+        self.indicators.push(IndicatorSpec::Ichimoku {
+            tenkan_period,
+            kijun_period,
+            senkou_b_period,
+        });
+        self
+    }
 }
 
 /// Apply an indicator set to a LazyFrame.
@@ -1069,6 +1485,25 @@ pub fn apply_indicators(lf: LazyFrame, indicator_set: &IndicatorSet) -> LazyFram
             }
             IndicatorSpec::DMI { period } => apply_dmi_exprs(lf, *period),
             IndicatorSpec::Aroon { period } => apply_aroon_exprs(lf, *period),
+            IndicatorSpec::RSI { period } => apply_rsi_exprs(lf, *period),
+            IndicatorSpec::MACD {
+                fast_period,
+                slow_period,
+                signal_period,
+            } => apply_macd_exprs(lf, *fast_period, *slow_period, *signal_period),
+            IndicatorSpec::Stochastic {
+                k_period,
+                k_smooth,
+                d_period,
+            } => apply_stochastic_exprs(lf, *k_period, *k_smooth, *d_period),
+            IndicatorSpec::WilliamsR { period } => apply_williams_r_exprs(lf, *period),
+            IndicatorSpec::CCI { period } => apply_cci_exprs(lf, *period),
+            IndicatorSpec::ROC { period } => apply_roc_exprs(lf, *period),
+            IndicatorSpec::Ichimoku {
+                tenkan_period,
+                kijun_period,
+                senkou_b_period,
+            } => apply_ichimoku_exprs(lf, *tenkan_period, *kijun_period, *senkou_b_period),
         };
     }
 

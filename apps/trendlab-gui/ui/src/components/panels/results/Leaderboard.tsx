@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
-import { VscStarFull, VscSync } from 'react-icons/vsc';
+import { VscStarFull, VscSync, VscHistory, VscWatch } from 'react-icons/vsc';
 import { useAppStore } from '../../../store';
-import type { AggregatedConfigResult, LeaderboardEntry } from '../../../types/yolo';
+import type { AggregatedConfigResult, ConfidenceGrade, LeaderboardEntry, LeaderboardScope } from '../../../types/yolo';
 
 interface LeaderboardProps {
   isActive: boolean;
@@ -11,15 +11,22 @@ type LeaderboardTab = 'cross_symbol' | 'per_symbol';
 
 export function Leaderboard({ isActive }: LeaderboardProps) {
   const {
-    crossSymbolLeaderboard,
-    leaderboard,
+    currentLeaderboard,
+    currentCrossSymbolLeaderboard,
+    currentConfigsTested,
+    leaderboardScope,
+    toggleLeaderboardScope,
     yoloIteration,
-    yoloTotalConfigsTested,
     setActivePanel,
     setChartMode,
   } = useAppStore();
 
   const [activeTab, setActiveTab] = useState<LeaderboardTab>('cross_symbol');
+
+  // Get leaderboards from computed accessors
+  const crossSymbolLeaderboard = currentCrossSymbolLeaderboard();
+  const leaderboard = currentLeaderboard();
+  const configsTested = currentConfigsTested();
 
   const handleSelectCrossSymbol = useCallback(
     (entry: AggregatedConfigResult) => {
@@ -55,19 +62,45 @@ export function Leaderboard({ isActive }: LeaderboardProps) {
   const formatPct = (val: number) => `${(val * 100).toFixed(2)}%`;
   const formatRatio = (val: number) => val.toFixed(2);
 
+  const getConfidenceBadge = (grade?: ConfidenceGrade | null) => {
+    switch (grade) {
+      case 'High':
+        return { text: '✓✓', className: 'conf-high' };
+      case 'Medium':
+        return { text: '✓', className: 'conf-medium' };
+      case 'Low':
+        return { text: '○', className: 'conf-low' };
+      case 'Insufficient':
+        return { text: '?', className: 'conf-insufficient' };
+      default:
+        return { text: '-', className: '' };
+    }
+  };
+
+  const scopeLabel = leaderboardScope === 'session' ? 'Session' : 'All-Time';
+  const ScopeIcon = leaderboardScope === 'session' ? VscWatch : VscHistory;
+
   return (
     <div className={`leaderboard ${isActive ? 'active' : ''}`}>
       <div className="leaderboard-header">
         <div className="header-left">
           <VscStarFull className="header-icon" />
           <span className="header-title">YOLO Leaderboard</span>
+          <button
+            className="scope-toggle"
+            onClick={toggleLeaderboardScope}
+            title="Toggle Session/All-Time view (T)"
+          >
+            <ScopeIcon className="scope-icon" />
+            <span className="scope-label">{scopeLabel}</span>
+          </button>
         </div>
         <div className="header-stats">
           <span className="stat">
             <VscSync className="stat-icon" />
             {yoloIteration} iterations
           </span>
-          <span className="stat">{yoloTotalConfigsTested.toLocaleString()} tested</span>
+          <span className="stat">{configsTested.toLocaleString()} tested</span>
         </div>
       </div>
 
@@ -107,6 +140,7 @@ export function Leaderboard({ isActive }: LeaderboardProps) {
                 <th>Min Sharpe</th>
                 <th>CAGR</th>
                 <th>Hit Rate</th>
+                <th>Conf</th>
               </tr>
             </thead>
             <tbody>
@@ -138,6 +172,9 @@ export function Leaderboard({ isActive }: LeaderboardProps) {
                   <td className="metric-cell">
                     {formatPct(entry.aggregateMetrics.hitRate)}
                   </td>
+                  <td className={`conf-cell ${getConfidenceBadge(entry.confidenceGrade).className}`}>
+                    {getConfidenceBadge(entry.confidenceGrade).text}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -157,7 +194,8 @@ export function Leaderboard({ isActive }: LeaderboardProps) {
                 <th>Sharpe</th>
                 <th>CAGR</th>
                 <th>Max DD</th>
-                <th>Iteration</th>
+                <th>Conf</th>
+                <th>Iter</th>
               </tr>
             </thead>
             <tbody>
@@ -185,6 +223,9 @@ export function Leaderboard({ isActive }: LeaderboardProps) {
                   </td>
                   <td className="metric-cell negative">
                     {formatPct(entry.maxDrawdown)}
+                  </td>
+                  <td className={`conf-cell ${getConfidenceBadge(entry.confidenceGrade).className}`}>
+                    {getConfidenceBadge(entry.confidenceGrade).text}
                   </td>
                   <td className="iteration-cell">{entry.iteration}</td>
                 </tr>
@@ -232,6 +273,35 @@ export function Leaderboard({ isActive }: LeaderboardProps) {
         .header-title {
           font-weight: 600;
           color: var(--fg);
+        }
+
+        .scope-toggle {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          padding: 4px 8px;
+          margin-left: var(--space-sm);
+          font-size: var(--font-size-xs);
+          background: var(--bg);
+          border: 1px solid var(--border);
+          border-radius: var(--radius-sm);
+          color: var(--muted);
+          cursor: pointer;
+          transition: all 0.15s;
+        }
+
+        .scope-toggle:hover {
+          background: var(--bg-hover);
+          border-color: var(--magenta);
+          color: var(--magenta);
+        }
+
+        .scope-icon {
+          font-size: 12px;
+        }
+
+        .scope-label {
+          font-weight: 500;
         }
 
         .header-stats {
@@ -416,6 +486,27 @@ export function Leaderboard({ isActive }: LeaderboardProps) {
 
         .iteration-cell {
           text-align: center;
+          color: var(--muted);
+        }
+
+        .conf-cell {
+          text-align: center;
+          font-weight: 600;
+        }
+
+        .conf-cell.conf-high {
+          color: var(--green);
+        }
+
+        .conf-cell.conf-medium {
+          color: var(--yellow);
+        }
+
+        .conf-cell.conf-low {
+          color: var(--orange, #f39c12);
+        }
+
+        .conf-cell.conf-insufficient {
           color: var(--muted);
         }
       `}</style>

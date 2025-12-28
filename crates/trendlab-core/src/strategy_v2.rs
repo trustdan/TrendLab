@@ -13,14 +13,16 @@
 
 use crate::bar::Bar;
 use crate::indicators::{
-    aroon, atr, darvas_boxes, dmi, donchian_channel, ema_close, heikin_ashi, keltner_channel,
-    opening_range, parabolic_sar, range_breakout_levels, sma_close, starc_bands, supertrend,
-    MAType, OpeningPeriod,
+    aroon, atr, bollinger_bands, cci, darvas_boxes, dmi, donchian_channel, ema_close, heikin_ashi,
+    ichimoku, keltner_channel, macd, opening_range, parabolic_sar, range_breakout_levels, roc, rsi,
+    sma_close, starc_bands, stochastic, supertrend, williams_r, MACDEntryMode, MAType,
+    OpeningPeriod,
 };
 use crate::indicators_polars::{
-    apply_aroon_exprs, apply_dmi_exprs, apply_heikin_ashi_exprs, apply_keltner_exprs,
-    apply_opening_range_exprs, apply_parabolic_sar_exprs, apply_starc_exprs,
-    apply_supertrend_exprs, donchian_channel_exprs, ema_close_expr, sma_close_expr,
+    apply_aroon_exprs, apply_dmi_exprs, apply_heikin_ashi_exprs, apply_ichimoku_exprs,
+    apply_keltner_exprs, apply_macd_exprs, apply_opening_range_exprs, apply_parabolic_sar_exprs,
+    apply_starc_exprs, apply_stochastic_exprs, apply_supertrend_exprs, cci_expr,
+    donchian_channel_exprs, ema_close_expr, roc_expr, rsi_expr, sma_close_expr, williams_r_expr,
 };
 use crate::strategy::{Position, Signal, TradingMode, VotingMethod};
 use polars::prelude::*;
@@ -192,6 +194,116 @@ pub enum StrategySpec {
         horizons: Vec<usize>,
         /// Voting method for signal aggregation
         voting: VotingMethod,
+    },
+
+    // =========================================================================
+    // Phase 5: Oscillator Strategies
+    // =========================================================================
+
+    /// RSI (Relative Strength Index) strategy.
+    ///
+    /// Entry: RSI crosses above oversold threshold from below
+    /// Exit: RSI crosses below overbought threshold from above
+    Rsi {
+        period: usize,
+        oversold: f64,
+        overbought: f64,
+    },
+
+    /// MACD (Moving Average Convergence Divergence) strategy.
+    ///
+    /// Entry: Based on entry_mode (CrossSignal, CrossZero, or Histogram)
+    /// Exit: Opposite of entry condition
+    Macd {
+        fast_period: usize,
+        slow_period: usize,
+        signal_period: usize,
+        entry_mode: MACDEntryMode,
+    },
+
+    /// Stochastic Oscillator strategy.
+    ///
+    /// Entry: %K crosses above %D when both are in oversold territory
+    /// Exit: %K crosses below %D when both are in overbought territory
+    Stochastic {
+        k_period: usize,
+        k_smooth: usize,
+        d_period: usize,
+        oversold: f64,
+        overbought: f64,
+    },
+
+    /// Williams %R strategy.
+    ///
+    /// Entry: %R crosses above oversold threshold (-80) from below
+    /// Exit: %R crosses below overbought threshold (-20) from above
+    WilliamsR {
+        period: usize,
+        oversold: f64,
+        overbought: f64,
+    },
+
+    /// CCI (Commodity Channel Index) strategy.
+    ///
+    /// Entry: CCI crosses above entry_threshold (+100)
+    /// Exit: CCI crosses below exit_threshold (-100)
+    Cci {
+        period: usize,
+        entry_threshold: f64,
+        exit_threshold: f64,
+    },
+
+    /// ROC (Rate of Change) strategy.
+    ///
+    /// Entry: ROC crosses above 0 (positive momentum)
+    /// Exit: ROC crosses below 0 (negative momentum)
+    Roc { period: usize },
+
+    /// RSI + Bollinger Bands hybrid strategy.
+    ///
+    /// Entry: RSI < oversold AND close <= lower Bollinger Band
+    /// Exit: Close > middle band OR RSI > exit threshold
+    RsiBollinger {
+        rsi_period: usize,
+        rsi_oversold: f64,
+        rsi_exit: f64,
+        bb_period: usize,
+        bb_std_mult: f64,
+    },
+
+    /// MACD + ADX filter strategy.
+    ///
+    /// Entry: MACD crosses above signal AND ADX > threshold
+    /// Exit: MACD crosses below signal
+    MacdAdx {
+        fast_period: usize,
+        slow_period: usize,
+        signal_period: usize,
+        adx_period: usize,
+        adx_threshold: f64,
+    },
+
+    /// Multi-oscillator confluence strategy.
+    ///
+    /// Entry: RSI bullish crossover AND Stochastic K > D
+    /// Exit: RSI bearish crossover OR Stochastic K crosses below D
+    OscillatorConfluence {
+        rsi_period: usize,
+        rsi_oversold: f64,
+        rsi_overbought: f64,
+        stoch_k_period: usize,
+        stoch_k_smooth: usize,
+        stoch_d_period: usize,
+    },
+
+    /// Ichimoku Cloud strategy.
+    ///
+    /// Entry: Price above cloud AND Tenkan crosses above Kijun
+    /// Exit: Price below cloud OR Tenkan crosses below Kijun
+    Ichimoku {
+        tenkan_period: usize,
+        kijun_period: usize,
+        senkou_b_period: usize,
     },
 }
 
@@ -416,6 +528,17 @@ impl StrategySpec {
             StrategySpec::OpeningRangeBreakout { .. } => "opening_range_breakout",
             StrategySpec::ParabolicSar { .. } => "parabolic_sar",
             StrategySpec::Ensemble { .. } => "ensemble",
+            // Phase 5: Oscillator strategies
+            StrategySpec::Rsi { .. } => "rsi",
+            StrategySpec::Macd { .. } => "macd",
+            StrategySpec::Stochastic { .. } => "stochastic",
+            StrategySpec::WilliamsR { .. } => "williams_r",
+            StrategySpec::Cci { .. } => "cci",
+            StrategySpec::Roc { .. } => "roc",
+            StrategySpec::RsiBollinger { .. } => "rsi_bollinger",
+            StrategySpec::MacdAdx { .. } => "macd_adx",
+            StrategySpec::OscillatorConfluence { .. } => "oscillator_confluence",
+            StrategySpec::Ichimoku { .. } => "ichimoku",
         }
     }
 
@@ -467,6 +590,45 @@ impl StrategySpec {
                 .map(|c| c.warmup_period())
                 .max()
                 .unwrap_or(0),
+            // Phase 5: Oscillator strategies
+            StrategySpec::Rsi { period, .. } => *period + 1,
+            StrategySpec::Macd {
+                slow_period,
+                signal_period,
+                ..
+            } => *slow_period + *signal_period,
+            StrategySpec::Stochastic {
+                k_period,
+                k_smooth,
+                d_period,
+                ..
+            } => *k_period + *k_smooth + *d_period,
+            StrategySpec::WilliamsR { period, .. } => *period,
+            StrategySpec::Cci { period, .. } => *period,
+            StrategySpec::Roc { period } => *period,
+            StrategySpec::RsiBollinger {
+                rsi_period,
+                bb_period,
+                ..
+            } => (*rsi_period + 1).max(*bb_period),
+            StrategySpec::MacdAdx {
+                slow_period,
+                signal_period,
+                adx_period,
+                ..
+            } => (*slow_period + *signal_period).max(2 * *adx_period),
+            StrategySpec::OscillatorConfluence {
+                rsi_period,
+                stoch_k_period,
+                stoch_k_smooth,
+                stoch_d_period,
+                ..
+            } => (*rsi_period + 1).max(*stoch_k_period + *stoch_k_smooth + *stoch_d_period),
+            StrategySpec::Ichimoku {
+                senkou_b_period,
+                kijun_period,
+                ..
+            } => *senkou_b_period + *kijun_period,
         }
     }
 }
@@ -3223,6 +3385,8 @@ pub fn create_strategy_v2(spec: &StrategySpec) -> Box<dyn StrategyV2> {
             horizons.clone(),
             *voting,
         )),
+        // Phase 5 oscillator strategies - not yet implemented as V2
+        _ => panic!("StrategyV2 not yet implemented for this StrategySpec variant. Use the legacy Strategy trait."),
     }
 }
 
@@ -3332,6 +3496,10 @@ pub fn create_strategy_v2_from_config(
             horizons.clone(),
             *voting,
         ))),
+        // Phase 5 oscillator strategies - not yet implemented as V2
+        _ => Err(crate::error::TrendLabError::Strategy(
+            "StrategyV2 not yet implemented for this StrategyConfigId variant".to_string(),
+        )),
     }
 }
 

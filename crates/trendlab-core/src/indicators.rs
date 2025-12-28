@@ -1689,6 +1689,613 @@ pub fn aroon(bars: &[Bar], period: usize) -> Vec<Option<AroonIndicator>> {
     out
 }
 
+// =============================================================================
+// Phase 5: Oscillator Indicators (TA-Focused)
+// =============================================================================
+
+/// MACD (Moving Average Convergence Divergence) value.
+///
+/// MACD is a momentum oscillator that shows the relationship between two EMAs:
+/// - MACD Line = EMA(fast) - EMA(slow)
+/// - Signal Line = EMA of MACD Line
+/// - Histogram = MACD Line - Signal Line
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MACDValue {
+    /// The MACD line (fast EMA - slow EMA).
+    pub macd_line: f64,
+    /// The signal line (EMA of MACD line).
+    pub signal_line: f64,
+    /// The histogram (MACD line - signal line).
+    pub histogram: f64,
+}
+
+/// Entry mode for MACD strategy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub enum MACDEntryMode {
+    /// Entry when MACD crosses above signal line.
+    #[default]
+    CrossSignal,
+    /// Entry when MACD crosses above zero.
+    CrossZero,
+    /// Entry when histogram turns positive.
+    Histogram,
+}
+
+impl MACDEntryMode {
+    /// Get display name.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::CrossSignal => "Cross Signal",
+            Self::CrossZero => "Cross Zero",
+            Self::Histogram => "Histogram",
+        }
+    }
+}
+
+/// Compute MACD (Moving Average Convergence Divergence).
+///
+/// Standard parameters: fast=12, slow=26, signal=9
+///
+/// Returns `None` until there are enough bars for all calculations.
+/// Warmup = slow_period + signal_period - 1
+pub fn macd(
+    bars: &[Bar],
+    fast_period: usize,
+    slow_period: usize,
+    signal_period: usize,
+) -> Vec<Option<MACDValue>> {
+    if bars.is_empty() || fast_period == 0 || slow_period == 0 || signal_period == 0 {
+        return vec![None; bars.len()];
+    }
+
+    // Fast and slow EMAs
+    let fast_ema = ema_close(bars, fast_period);
+    let slow_ema = ema_close(bars, slow_period);
+
+    // Calculate MACD line (fast EMA - slow EMA)
+    let mut macd_line: Vec<Option<f64>> = vec![None; bars.len()];
+    for i in 0..bars.len() {
+        if let (Some(fast), Some(slow)) = (fast_ema[i], slow_ema[i]) {
+            macd_line[i] = Some(fast - slow);
+        }
+    }
+
+    // Calculate signal line (EMA of MACD line)
+    // We need to compute EMA manually on the MACD line values
+    let k = 2.0 / (signal_period as f64 + 1.0);
+    let mut signal_line: Vec<Option<f64>> = vec![None; bars.len()];
+
+    // Find the first valid MACD value and accumulate for SMA seed
+    let mut first_valid_idx = None;
+    let mut count = 0;
+    let mut sum = 0.0;
+
+    for (i, macd_val) in macd_line.iter().enumerate() {
+        if let Some(m) = macd_val {
+            if first_valid_idx.is_none() {
+                first_valid_idx = Some(i);
+            }
+            count += 1;
+            sum += m;
+
+            if count == signal_period {
+                // Seed with SMA
+                let seed = sum / signal_period as f64;
+                signal_line[i] = Some(seed);
+
+                // Continue with EMA
+                let mut prev_signal = seed;
+                for j in (i + 1)..bars.len() {
+                    if let Some(m_val) = macd_line[j] {
+                        let new_signal = m_val * k + prev_signal * (1.0 - k);
+                        signal_line[j] = Some(new_signal);
+                        prev_signal = new_signal;
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    // Build output
+    let mut out = vec![None; bars.len()];
+    for i in 0..bars.len() {
+        if let (Some(macd_val), Some(signal_val)) = (macd_line[i], signal_line[i]) {
+            out[i] = Some(MACDValue {
+                macd_line: macd_val,
+                signal_line: signal_val,
+                histogram: macd_val - signal_val,
+            });
+        }
+    }
+
+    out
+}
+
+/// Relative Strength Index (RSI) value.
+///
+/// RSI is a momentum oscillator that measures the speed and magnitude of price changes.
+/// Values range from 0 to 100:
+/// - RSI > 70 typically indicates overbought conditions
+/// - RSI < 30 typically indicates oversold conditions
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RSIValue {
+    /// The RSI value (0-100).
+    pub rsi: f64,
+    /// The average gain over the period.
+    pub avg_gain: f64,
+    /// The average loss over the period (as positive value).
+    pub avg_loss: f64,
+}
+
+/// Compute RSI (Relative Strength Index) using Wilder smoothing.
+///
+/// Standard period: 14
+///
+/// The RSI is calculated as:
+/// - RS = Average Gain / Average Loss
+/// - RSI = 100 - (100 / (1 + RS))
+///
+/// Uses Wilder smoothing for average gain/loss (same as ATR Wilder).
+///
+/// Returns `None` until there are `period` bars.
+pub fn rsi(bars: &[Bar], period: usize) -> Vec<Option<RSIValue>> {
+    if bars.is_empty() || period == 0 {
+        return vec![None; bars.len()];
+    }
+
+    let mut out = vec![None; bars.len()];
+
+    if bars.len() < period + 1 {
+        return out;
+    }
+
+    // Calculate gains and losses
+    let mut gains = vec![0.0; bars.len()];
+    let mut losses = vec![0.0; bars.len()];
+
+    for i in 1..bars.len() {
+        let change = bars[i].close - bars[i - 1].close;
+        if change > 0.0 {
+            gains[i] = change;
+        } else {
+            losses[i] = -change; // Store as positive
+        }
+    }
+
+    // First RSI: simple average of first `period` gains/losses
+    let initial_avg_gain: f64 = gains[1..=period].iter().sum::<f64>() / period as f64;
+    let initial_avg_loss: f64 = losses[1..=period].iter().sum::<f64>() / period as f64;
+
+    let first_rsi = if initial_avg_loss == 0.0 {
+        100.0
+    } else {
+        let rs = initial_avg_gain / initial_avg_loss;
+        100.0 - (100.0 / (1.0 + rs))
+    };
+
+    out[period] = Some(RSIValue {
+        rsi: first_rsi,
+        avg_gain: initial_avg_gain,
+        avg_loss: initial_avg_loss,
+    });
+
+    // Wilder smoothing for subsequent values
+    let alpha = 1.0 / period as f64;
+    let mut prev_avg_gain = initial_avg_gain;
+    let mut prev_avg_loss = initial_avg_loss;
+
+    for i in (period + 1)..bars.len() {
+        let avg_gain = prev_avg_gain * (1.0 - alpha) + gains[i] * alpha;
+        let avg_loss = prev_avg_loss * (1.0 - alpha) + losses[i] * alpha;
+
+        let rsi_val = if avg_loss == 0.0 {
+            100.0
+        } else {
+            let rs = avg_gain / avg_loss;
+            100.0 - (100.0 / (1.0 + rs))
+        };
+
+        out[i] = Some(RSIValue {
+            rsi: rsi_val,
+            avg_gain,
+            avg_loss,
+        });
+
+        prev_avg_gain = avg_gain;
+        prev_avg_loss = avg_loss;
+    }
+
+    out
+}
+
+/// Stochastic Oscillator value.
+///
+/// The Stochastic Oscillator compares a closing price to its price range:
+/// - %K = (Close - Lowest Low) / (Highest High - Lowest Low) * 100
+/// - %K Smooth = SMA of %K (Fast Stochastic)
+/// - %D = SMA of %K Smooth (Signal Line)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StochasticValue {
+    /// Raw %K value (0-100).
+    pub k_raw: f64,
+    /// Smoothed %K value (Fast Stochastic, 0-100).
+    pub k_smooth: f64,
+    /// %D value (Signal Line, 0-100).
+    pub d: f64,
+}
+
+/// Compute Stochastic Oscillator.
+///
+/// Standard parameters: k_period=14, k_smooth=3, d_period=3
+///
+/// Returns `None` until there are enough bars for all calculations.
+pub fn stochastic(
+    bars: &[Bar],
+    k_period: usize,
+    k_smooth: usize,
+    d_period: usize,
+) -> Vec<Option<StochasticValue>> {
+    if bars.is_empty() || k_period == 0 || k_smooth == 0 || d_period == 0 {
+        return vec![None; bars.len()];
+    }
+
+    // Calculate raw %K
+    let mut k_raw: Vec<Option<f64>> = vec![None; bars.len()];
+
+    for i in (k_period - 1)..bars.len() {
+        let start = i + 1 - k_period;
+        let highest = bars[start..=i]
+            .iter()
+            .map(|b| b.high)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let lowest = bars[start..=i]
+            .iter()
+            .map(|b| b.low)
+            .fold(f64::INFINITY, f64::min);
+
+        let range = highest - lowest;
+        if range > 0.0 {
+            k_raw[i] = Some((bars[i].close - lowest) / range * 100.0);
+        } else {
+            k_raw[i] = Some(50.0); // Middle when range is zero
+        }
+    }
+
+    // Smooth %K with SMA
+    let mut k_smooth_vals: Vec<Option<f64>> = vec![None; bars.len()];
+    let mut sum = 0.0;
+    let mut count = 0;
+
+    for i in 0..bars.len() {
+        if let Some(k) = k_raw[i] {
+            sum += k;
+            count += 1;
+
+            if count >= k_smooth {
+                if count > k_smooth {
+                    // Remove oldest value
+                    let oldest_idx = i - k_smooth;
+                    if let Some(oldest) = k_raw[oldest_idx] {
+                        sum -= oldest;
+                    }
+                }
+                k_smooth_vals[i] = Some(sum / k_smooth as f64);
+            }
+        }
+    }
+
+    // Calculate %D (SMA of smoothed %K)
+    let mut d_vals: Vec<Option<f64>> = vec![None; bars.len()];
+    sum = 0.0;
+    count = 0;
+
+    for i in 0..bars.len() {
+        if let Some(ks) = k_smooth_vals[i] {
+            sum += ks;
+            count += 1;
+
+            if count >= d_period {
+                if count > d_period {
+                    // Find and remove oldest valid value
+                    let mut removed = false;
+                    for j in (0..i).rev() {
+                        if k_smooth_vals[j].is_some() && !removed {
+                            let steps_back = i - j;
+                            if steps_back == d_period {
+                                if let Some(oldest) = k_smooth_vals[j] {
+                                    sum -= oldest;
+                                    removed = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                d_vals[i] = Some(sum / d_period as f64);
+            }
+        }
+    }
+
+    // Build output
+    let mut out = vec![None; bars.len()];
+    for i in 0..bars.len() {
+        if let (Some(kr), Some(ks), Some(d)) = (k_raw[i], k_smooth_vals[i], d_vals[i]) {
+            out[i] = Some(StochasticValue {
+                k_raw: kr,
+                k_smooth: ks,
+                d,
+            });
+        }
+    }
+
+    out
+}
+
+/// Williams %R value.
+///
+/// Williams %R is similar to Stochastic but inverted, ranging from -100 to 0:
+/// - Values near -100 indicate oversold conditions
+/// - Values near 0 indicate overbought conditions
+///
+/// Formula: %R = (Highest High - Close) / (Highest High - Lowest Low) * -100
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WilliamsRValue {
+    /// The Williams %R value (-100 to 0).
+    pub williams_r: f64,
+}
+
+/// Compute Williams %R.
+///
+/// Standard period: 14
+///
+/// Returns `None` until there are `period` bars.
+pub fn williams_r(bars: &[Bar], period: usize) -> Vec<Option<WilliamsRValue>> {
+    if bars.is_empty() || period == 0 {
+        return vec![None; bars.len()];
+    }
+
+    let mut out = vec![None; bars.len()];
+
+    for i in (period - 1)..bars.len() {
+        let start = i + 1 - period;
+        let highest = bars[start..=i]
+            .iter()
+            .map(|b| b.high)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let lowest = bars[start..=i]
+            .iter()
+            .map(|b| b.low)
+            .fold(f64::INFINITY, f64::min);
+
+        let range = highest - lowest;
+        let wr = if range > 0.0 {
+            (highest - bars[i].close) / range * -100.0
+        } else {
+            -50.0 // Middle when range is zero
+        };
+
+        out[i] = Some(WilliamsRValue { williams_r: wr });
+    }
+
+    out
+}
+
+/// CCI (Commodity Channel Index) value.
+///
+/// CCI measures the difference between the current price and the average price:
+/// - CCI = (Typical Price - SMA of Typical Price) / (0.015 * Mean Deviation)
+/// - Typical Price = (High + Low + Close) / 3
+///
+/// Values typically range from -200 to +200:
+/// - CCI > +100 indicates overbought (or strong uptrend)
+/// - CCI < -100 indicates oversold (or strong downtrend)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CCIValue {
+    /// The CCI value (unbounded, typically -200 to +200).
+    pub cci: f64,
+    /// The typical price for this bar.
+    pub typical_price: f64,
+    /// The mean deviation.
+    pub mean_deviation: f64,
+}
+
+/// Compute CCI (Commodity Channel Index).
+///
+/// Standard period: 20
+///
+/// Returns `None` until there are `period` bars.
+pub fn cci(bars: &[Bar], period: usize) -> Vec<Option<CCIValue>> {
+    if bars.is_empty() || period == 0 {
+        return vec![None; bars.len()];
+    }
+
+    let mut out = vec![None; bars.len()];
+
+    // Calculate typical prices
+    let tp: Vec<f64> = bars
+        .iter()
+        .map(|b| (b.high + b.low + b.close) / 3.0)
+        .collect();
+
+    for i in (period - 1)..bars.len() {
+        let start = i + 1 - period;
+
+        // SMA of typical prices
+        let tp_sum: f64 = tp[start..=i].iter().sum();
+        let tp_sma = tp_sum / period as f64;
+
+        // Mean deviation
+        let md: f64 = tp[start..=i].iter().map(|&t| (t - tp_sma).abs()).sum::<f64>() / period as f64;
+
+        let cci_val = if md > 0.0 {
+            (tp[i] - tp_sma) / (0.015 * md)
+        } else {
+            0.0 // No deviation
+        };
+
+        out[i] = Some(CCIValue {
+            cci: cci_val,
+            typical_price: tp[i],
+            mean_deviation: md,
+        });
+    }
+
+    out
+}
+
+/// ROC (Rate of Change) value.
+///
+/// ROC measures the percentage change between the current price and the price N periods ago:
+/// - ROC = ((Close - Close[n]) / Close[n]) * 100
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ROCValue {
+    /// The ROC value (percentage).
+    pub roc: f64,
+}
+
+/// Compute ROC (Rate of Change).
+///
+/// Standard period: 12
+///
+/// Returns `None` until there are `period` bars.
+pub fn roc(bars: &[Bar], period: usize) -> Vec<Option<ROCValue>> {
+    if bars.is_empty() || period == 0 {
+        return vec![None; bars.len()];
+    }
+
+    let mut out = vec![None; bars.len()];
+
+    for i in period..bars.len() {
+        let prev_close = bars[i - period].close;
+        if prev_close != 0.0 {
+            let roc_val = ((bars[i].close - prev_close) / prev_close) * 100.0;
+            out[i] = Some(ROCValue { roc: roc_val });
+        }
+    }
+
+    out
+}
+
+/// Ichimoku Cloud component values.
+///
+/// The Ichimoku Cloud (Ichimoku Kinko Hyo) is a comprehensive indicator that defines:
+/// - Support and resistance levels
+/// - Trend direction
+/// - Momentum
+///
+/// Components:
+/// - Tenkan-sen (Conversion Line): (9-period high + 9-period low) / 2
+/// - Kijun-sen (Base Line): (26-period high + 26-period low) / 2
+/// - Senkou Span A (Leading Span A): (Tenkan + Kijun) / 2, plotted 26 periods ahead
+/// - Senkou Span B (Leading Span B): (52-period high + 52-period low) / 2, plotted 26 periods ahead
+/// - Chikou Span (Lagging Span): Close plotted 26 periods behind
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IchimokuValue {
+    /// Tenkan-sen (Conversion Line).
+    pub tenkan_sen: f64,
+    /// Kijun-sen (Base Line).
+    pub kijun_sen: f64,
+    /// Senkou Span A (Leading Span A) - current value (not displaced).
+    pub senkou_span_a: f64,
+    /// Senkou Span B (Leading Span B) - current value (not displaced).
+    pub senkou_span_b: f64,
+    /// Chikou Span (Lagging Span) - current close (for plotting 26 periods back).
+    pub chikou_span: f64,
+    /// True if price is above the cloud (bullish).
+    pub is_above_cloud: bool,
+    /// True if price is below the cloud (bearish).
+    pub is_below_cloud: bool,
+    /// True if price is inside the cloud (neutral/consolidation).
+    pub is_inside_cloud: bool,
+}
+
+/// Compute Ichimoku Cloud.
+///
+/// Standard parameters: tenkan=9, kijun=26, senkou_b_period=52
+///
+/// Returns `None` until there are `senkou_b_period` bars.
+pub fn ichimoku(
+    bars: &[Bar],
+    tenkan_period: usize,
+    kijun_period: usize,
+    senkou_b_period: usize,
+) -> Vec<Option<IchimokuValue>> {
+    if bars.is_empty() || tenkan_period == 0 || kijun_period == 0 || senkou_b_period == 0 {
+        return vec![None; bars.len()];
+    }
+
+    let mut out = vec![None; bars.len()];
+
+    // Helper to compute (highest high + lowest low) / 2 over a period
+    let midpoint = |start: usize, end: usize| -> f64 {
+        let highest = bars[start..=end]
+            .iter()
+            .map(|b| b.high)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let lowest = bars[start..=end]
+            .iter()
+            .map(|b| b.low)
+            .fold(f64::INFINITY, f64::min);
+        (highest + lowest) / 2.0
+    };
+
+    let warmup = senkou_b_period - 1;
+
+    for i in warmup..bars.len() {
+        // Tenkan-sen
+        let tenkan_start = if i + 1 >= tenkan_period {
+            i + 1 - tenkan_period
+        } else {
+            0
+        };
+        let tenkan_sen = midpoint(tenkan_start, i);
+
+        // Kijun-sen
+        let kijun_start = if i + 1 >= kijun_period {
+            i + 1 - kijun_period
+        } else {
+            0
+        };
+        let kijun_sen = midpoint(kijun_start, i);
+
+        // Senkou Span A (at current bar, not displaced)
+        let senkou_span_a = (tenkan_sen + kijun_sen) / 2.0;
+
+        // Senkou Span B
+        let senkou_b_start = if i + 1 >= senkou_b_period {
+            i + 1 - senkou_b_period
+        } else {
+            0
+        };
+        let senkou_span_b = midpoint(senkou_b_start, i);
+
+        // Chikou Span (current close, for plotting backwards)
+        let chikou_span = bars[i].close;
+
+        // Determine cloud position
+        let cloud_top = senkou_span_a.max(senkou_span_b);
+        let cloud_bottom = senkou_span_a.min(senkou_span_b);
+        let close = bars[i].close;
+
+        let is_above_cloud = close > cloud_top;
+        let is_below_cloud = close < cloud_bottom;
+        let is_inside_cloud = !is_above_cloud && !is_below_cloud;
+
+        out[i] = Some(IchimokuValue {
+            tenkan_sen,
+            kijun_sen,
+            senkou_span_a,
+            senkou_span_b,
+            chikou_span,
+            is_above_cloud,
+            is_below_cloud,
+            is_inside_cloud,
+        });
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

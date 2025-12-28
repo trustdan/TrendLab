@@ -1771,17 +1771,24 @@ fn handle_yolo_mode(
                 let (combined_equity, combined_dates) =
                     combine_equity_curves(&per_symbol_equity, &per_symbol_dates, 100_000.0);
 
+                // Compute confidence grade from combined equity curve
+                let confidence_grade =
+                    trendlab_core::compute_confidence_from_equity(&combined_equity);
+
                 let aggregated_result = AggregatedConfigResult {
                     rank: 0, // Will be set by leaderboard
                     strategy_type: strategy_config.strategy_type,
                     config_id: strategy_config_id.clone(),
                     symbols: per_symbol_metrics.keys().cloned().collect(),
+                    per_symbol_sectors: std::collections::HashMap::new(), // TODO: Fill from universe in Phase 2
                     per_symbol_metrics,
                     aggregate_metrics: aggregate_metrics.clone(),
                     combined_equity_curve: combined_equity,
                     dates: combined_dates,
                     discovered_at: Utc::now(),
                     iteration,
+                    session_id: None, // TODO: Pass session_id from YoloState in Phase 1
+                    confidence_grade,
                 };
 
                 // Track best aggregate this round
@@ -1819,16 +1826,23 @@ fn handle_yolo_mode(
 
         // 4. Update per-symbol leaderboard with best from this round
         if let Some(ref best) = best_per_symbol_this_round {
+            // Compute confidence grade from equity curve
+            let confidence_grade =
+                trendlab_core::compute_confidence_from_equity(&best.equity_curve);
+
             let entry = LeaderboardEntry {
                 rank: 0,
                 strategy_type: best.strategy_type,
                 config: best.config_id.clone(),
                 symbol: best.symbol.clone(),
+                sector: None, // TODO: Look up sector from universe in Phase 2
                 metrics: best.metrics.clone(),
                 equity_curve: best.equity_curve.clone(),
                 dates: vec![], // Could extract from backtest result if needed
                 discovered_at: Utc::now(),
                 iteration,
+                session_id: None, // TODO: Pass session_id from YoloState in Phase 1
+                confidence_grade,
             };
             per_symbol_leaderboard.try_insert(entry);
         }
@@ -2175,6 +2189,8 @@ fn generate_config_ids_for_strategy(strategy_config: &StrategyGridConfig) -> Vec
             }
             configs
         }
+        // Phase 5 oscillator strategies not yet supported in YOLO mode
+        _ => Vec::new(),
     }
 }
 
@@ -2295,6 +2311,8 @@ fn create_single_config_grid(
             horizon_sets: vec![horizons.clone()],
             voting_methods: vec![*voting],
         },
+        // Phase 5 oscillator strategies not yet supported in YOLO mode
+        _ => panic!("Strategy config ID not yet supported in YOLO mode"),
     };
 
     StrategyGridConfig {
@@ -2437,6 +2455,8 @@ fn extract_strategy_config_id(
             horizons: vec![20, 50],
             voting: VotingMethod::Majority,
         },
+        // Phase 5 oscillator strategies not yet supported in simple config conversion
+        _ => panic!("Strategy type not yet supported in config_id_from_simple_config"),
     }
 }
 
@@ -2602,6 +2622,8 @@ fn jitter_strategy_params(params: &StrategyParams, pct: f64, rng: &mut impl Rng)
                 .collect(),
             voting_methods: voting_methods.clone(),
         },
+        // Phase 5 oscillator strategies not yet supported in YOLO mode jittering
+        _ => params.clone(),
     }
 }
 

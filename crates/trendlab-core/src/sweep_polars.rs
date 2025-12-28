@@ -5,6 +5,7 @@
 
 use crate::sweep::{MultiStrategySweepResult, RankMetric, SweepResult};
 use polars::prelude::*;
+use std::collections::HashMap;
 
 /// Convert a SweepResult to a Polars DataFrame.
 ///
@@ -150,6 +151,63 @@ pub fn multi_sweep_to_dataframe(result: &MultiStrategySweepResult) -> PolarsResu
     // Vertically concatenate all DataFrames
     let lazy_frames: Vec<LazyFrame> = all_dfs.into_iter().map(|df| df.lazy()).collect();
     concat(lazy_frames, UnionArgs::default())?.collect()
+}
+
+/// Enrich a DataFrame with a sector column based on symbol lookups.
+///
+/// Given a DataFrame with a "symbol" column and a sector lookup table,
+/// adds a new "sector" column mapping each symbol to its sector.
+/// Symbols not found in the lookup will have "Unknown" as their sector.
+///
+/// # Arguments
+/// * `df` - DataFrame with a "symbol" column
+/// * `sector_lookup` - HashMap mapping ticker symbols to sector names
+///
+/// # Returns
+/// A new DataFrame with the "sector" column added
+///
+/// # Example
+/// ```ignore
+/// use trendlab_core::universe::Universe;
+/// use trendlab_core::sweep_polars::enrich_with_sector;
+///
+/// let universe = Universe::default_universe();
+/// let lookup = universe.build_sector_lookup();
+/// let enriched_df = enrich_with_sector(df, &lookup)?;
+/// ```
+pub fn enrich_with_sector(
+    mut df: DataFrame,
+    sector_lookup: &HashMap<String, String>,
+) -> PolarsResult<DataFrame> {
+    // Extract the symbol column
+    let symbol_col = df.column("symbol")?.str()?;
+
+    // Map each symbol to its sector
+    let sectors: Vec<String> = symbol_col
+        .into_iter()
+        .map(|opt_symbol| {
+            opt_symbol
+                .and_then(|s| sector_lookup.get(s))
+                .cloned()
+                .unwrap_or_else(|| "Unknown".to_string())
+        })
+        .collect();
+
+    // Add the sector column to the DataFrame
+    let sector_series = Series::new("sector".into(), sectors);
+    df.with_column(sector_series).map(|df| df.clone())
+}
+
+/// Enrich a MultiStrategySweepResult DataFrame with sectors.
+///
+/// Convenience function that converts a MultiStrategySweepResult to a DataFrame
+/// and enriches it with sector information in one step.
+pub fn multi_sweep_with_sectors(
+    result: &MultiStrategySweepResult,
+    sector_lookup: &HashMap<String, String>,
+) -> PolarsResult<DataFrame> {
+    let df = multi_sweep_to_dataframe(result)?;
+    enrich_with_sector(df, sector_lookup)
 }
 
 /// Analysis result from sweep queries.
@@ -666,5 +724,54 @@ mod tests {
         let summary = analysis.summary().unwrap();
         assert!(summary.column("mean_sharpe").is_ok());
         assert!(summary.column("max_sharpe").is_ok());
+    }
+
+    #[test]
+    fn test_enrich_with_sector() {
+        use std::collections::HashMap;
+
+        // Create a simple DataFrame with symbols
+        let df = DataFrame::new(vec![
+            Series::new("symbol".into(), vec!["AAPL", "JPM", "XOM", "UNKNOWN"])
+                .into(),
+            Series::new("value".into(), vec![1.0, 2.0, 3.0, 4.0]).into(),
+        ])
+        .unwrap();
+
+        // Create sector lookup
+        let mut sector_lookup = HashMap::new();
+        sector_lookup.insert("AAPL".to_string(), "Technology".to_string());
+        sector_lookup.insert("JPM".to_string(), "Financial".to_string());
+        sector_lookup.insert("XOM".to_string(), "Energy".to_string());
+
+        // Enrich with sectors
+        let enriched = super::enrich_with_sector(df, &sector_lookup).unwrap();
+
+        // Check that sector column was added
+        assert!(enriched.column("sector").is_ok());
+
+        let sectors = enriched.column("sector").unwrap().str().unwrap();
+        assert_eq!(sectors.get(0), Some("Technology"));
+        assert_eq!(sectors.get(1), Some("Financial"));
+        assert_eq!(sectors.get(2), Some("Energy"));
+        assert_eq!(sectors.get(3), Some("Unknown")); // Unknown ticker
+    }
+
+    #[test]
+    fn test_enrich_with_sector_empty_lookup() {
+        use std::collections::HashMap;
+
+        let df = DataFrame::new(vec![
+            Series::new("symbol".into(), vec!["AAPL", "MSFT"]).into(),
+        ])
+        .unwrap();
+
+        let sector_lookup = HashMap::new();
+
+        let enriched = super::enrich_with_sector(df, &sector_lookup).unwrap();
+
+        let sectors = enriched.column("sector").unwrap().str().unwrap();
+        assert_eq!(sectors.get(0), Some("Unknown"));
+        assert_eq!(sectors.get(1), Some("Unknown"));
     }
 }
