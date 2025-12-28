@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import {
   createChart,
   IChartApi,
@@ -60,23 +60,61 @@ export interface UseChartReturn {
  * - Chart creation and cleanup
  * - Container resize observation
  * - Tokyo Night theming
+ * - Waiting for valid container dimensions before creation
  */
 export function useChart(options: ChartOptions = {}): UseChartReturn {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const [chart, setChart] = useState<IChartApi | null>(null);
+  const [dimensionsReady, setDimensionsReady] = useState(false);
 
   const opts = { ...DEFAULT_OPTIONS, ...options };
 
-  // Create chart on mount
+  // Wait for container to have valid dimensions
   useEffect(() => {
     if (!containerRef.current) return;
 
     const container = containerRef.current;
+    const { clientWidth, clientHeight } = container;
+
+    // If dimensions are already valid, mark as ready
+    if (clientWidth > 0 && clientHeight > 0) {
+      setDimensionsReady(true);
+      return;
+    }
+
+    // Wait for dimensions via ResizeObserver
+    const observer = new ResizeObserver((entries) => {
+      if (entries.length === 0) return;
+      const { width, height } = entries[0].contentRect;
+      if (width > 0 && height > 0) {
+        setDimensionsReady(true);
+        observer.disconnect();
+      }
+    });
+
+    observer.observe(container);
+
+    return () => observer.disconnect();
+  }, []);
+
+  // Create chart once dimensions are ready
+  useEffect(() => {
+    if (!containerRef.current || !dimensionsReady) return;
+
+    const container = containerRef.current;
+    const { clientWidth, clientHeight } = container;
+
+    // Double-check dimensions (defensive)
+    if (clientWidth === 0 || clientHeight === 0) {
+      console.warn('[useChart] Container has 0 dimensions, skipping chart creation');
+      return;
+    }
 
     // Create chart with Tokyo Night theme
-    const chart = createChart(container, {
-      width: container.clientWidth,
-      height: container.clientHeight,
+    const chartInstance = createChart(container, {
+      width: clientWidth,
+      height: clientHeight,
       layout: {
         background: { type: ColorType.Solid, color: CHART_COLORS.background },
         textColor: CHART_COLORS.textColor,
@@ -133,13 +171,16 @@ export function useChart(options: ChartOptions = {}): UseChartReturn {
       },
     });
 
-    chartRef.current = chart;
+    chartRef.current = chartInstance;
+    setChart(chartInstance);
 
     // Resize observer for responsive charts
     const resizeObserver = new ResizeObserver((entries) => {
       if (entries.length === 0) return;
       const { width, height } = entries[0].contentRect;
-      chart.applyOptions({ width, height });
+      if (width > 0 && height > 0) {
+        chartInstance.applyOptions({ width, height });
+      }
     });
 
     resizeObserver.observe(container);
@@ -147,10 +188,11 @@ export function useChart(options: ChartOptions = {}): UseChartReturn {
     // Cleanup
     return () => {
       resizeObserver.disconnect();
-      chart.remove();
+      chartInstance.remove();
       chartRef.current = null;
+      setChart(null);
     };
-  }, [opts.crosshair, opts.grid, opts.priceScale, opts.timeScale]);
+  }, [dimensionsReady, opts.crosshair, opts.grid, opts.priceScale, opts.timeScale]);
 
   const fitContent = useCallback(() => {
     chartRef.current?.timeScale().fitContent();
@@ -162,7 +204,7 @@ export function useChart(options: ChartOptions = {}): UseChartReturn {
 
   return {
     containerRef: containerRef as React.RefObject<HTMLDivElement>,
-    chart: chartRef.current,
+    chart,
     fitContent,
     scrollToRealTime,
   };

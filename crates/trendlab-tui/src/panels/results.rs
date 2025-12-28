@@ -547,6 +547,23 @@ fn draw_leaderboard_table(f: &mut Frame, app: &App, area: Rect, is_active: bool)
         }
     };
 
+    // Extract date range from the first entry's dates vector
+    let date_range_str = cross_symbol
+        .entries
+        .first()
+        .and_then(|e| {
+            let start = e.dates.first()?;
+            let end = e.dates.last()?;
+            let years = (*end - *start).num_days() as f64 / 365.25;
+            Some(format!(
+                "{} -> {} ({:.1}y)",
+                start.format("%Y-%m-%d"),
+                end.format("%Y-%m-%d"),
+                years
+            ))
+        })
+        .unwrap_or_default();
+
     let header_style = Style::default()
         .fg(colors::MAGENTA)
         .add_modifier(Modifier::BOLD);
@@ -563,66 +580,133 @@ fn draw_leaderboard_table(f: &mut Frame, app: &App, area: Rect, is_active: bool)
         Cell::from("Avg CAGR%").style(header_style),
     ]);
 
-    let rows: Vec<Row> = cross_symbol
-        .entries
-        .iter()
-        .enumerate()
-        .map(|(i, entry)| {
-            let is_selected = i == app.results.selected_leaderboard_index;
-            let base_style = if is_selected && is_active {
-                Style::default()
-                    .fg(colors::BLUE)
-                    .add_modifier(Modifier::BOLD)
+    // Build rows with expansion support
+    let expanded_idx = app.results.expanded_leaderboard_index;
+    let mut rows: Vec<Row> = Vec::new();
+
+    for (i, entry) in cross_symbol.entries.iter().enumerate() {
+        let is_selected = i == app.results.selected_leaderboard_index;
+        let is_expanded = expanded_idx == Some(i);
+        let base_style = if is_selected && is_active {
+            Style::default()
+                .fg(colors::BLUE)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(colors::FG)
+        };
+
+        // Rank indicator for top 3
+        let rank_cell = match entry.rank {
+            1 => Cell::from("\u{1f947}").style(base_style),
+            2 => Cell::from("\u{1f948}").style(base_style),
+            3 => Cell::from("\u{1f949}").style(base_style),
+            r => Cell::from(format!("{}", r)).style(base_style),
+        };
+
+        let sharpe_style = if entry.aggregate_metrics.avg_sharpe > 1.0 {
+            Style::default().fg(colors::GREEN)
+        } else if entry.aggregate_metrics.avg_sharpe < 0.5 {
+            Style::default().fg(colors::ORANGE)
+        } else {
+            base_style
+        };
+
+        let hit_style = if entry.aggregate_metrics.hit_rate > 0.7 {
+            Style::default().fg(colors::GREEN)
+        } else if entry.aggregate_metrics.hit_rate < 0.5 {
+            Style::default().fg(colors::RED)
+        } else {
+            base_style
+        };
+
+        // Confidence badge with color
+        let (conf_text, conf_style) = match entry.confidence_grade {
+            Some(ConfidenceGrade::High) => ("✓✓", Style::default().fg(colors::GREEN)),
+            Some(ConfidenceGrade::Medium) => ("✓", Style::default().fg(colors::YELLOW)),
+            Some(ConfidenceGrade::Low) => ("○", Style::default().fg(colors::ORANGE)),
+            Some(ConfidenceGrade::Insufficient) => ("?", Style::default().fg(colors::FG_DARK)),
+            None => ("-", base_style),
+        };
+
+        // Main row
+        rows.push(Row::new(vec![
+            rank_cell,
+            Cell::from(conf_text).style(conf_style),
+            Cell::from(entry.strategy_type.name()).style(base_style),
+            Cell::from(truncate_config(&entry.config_id.display(), 18)).style(base_style),
+            Cell::from(format!("{}", entry.symbols.len())).style(base_style),
+            Cell::from(format!("{:.3}", entry.aggregate_metrics.avg_sharpe)).style(sharpe_style),
+            Cell::from(format!("{:.3}", entry.aggregate_metrics.min_sharpe)).style(base_style),
+            Cell::from(format!("{:.1}%", entry.aggregate_metrics.hit_rate * 100.0)).style(hit_style),
+            Cell::from(format!("{:.1}%", entry.aggregate_metrics.avg_cagr * 100.0)).style(base_style),
+        ]));
+
+        // If expanded, add detail rows
+        if is_expanded {
+            let detail_style = Style::default().fg(colors::FG_DARK);
+            let highlight_style = Style::default().fg(colors::CYAN);
+
+            // Row 1: Full config parameters
+            let config_detail = format!("     \u{251c}\u{2500} {}", entry.config_id.display());
+            rows.push(Row::new(vec![Cell::from(config_detail).style(highlight_style)]));
+
+            // Row 2: Date range for this config
+            let entry_date_range = entry
+                .dates
+                .first()
+                .zip(entry.dates.last())
+                .map(|(s, e)| {
+                    let years = (*e - *s).num_days() as f64 / 365.25;
+                    format!(
+                        "     \u{251c}\u{2500} Date Range: {} -> {} ({:.1} years)",
+                        s.format("%Y-%m-%d"),
+                        e.format("%Y-%m-%d"),
+                        years
+                    )
+                })
+                .unwrap_or_else(|| "     \u{251c}\u{2500} Date Range: N/A".to_string());
+            rows.push(Row::new(vec![Cell::from(entry_date_range).style(detail_style)]));
+
+            // Row 3: Best symbols by Sharpe
+            let mut sorted_symbols: Vec<_> = entry.per_symbol_metrics.iter().collect();
+            sorted_symbols.sort_by(|a, b| b.1.sharpe.partial_cmp(&a.1.sharpe).unwrap());
+
+            let best_symbols: String = sorted_symbols
+                .iter()
+                .take(3)
+                .map(|(sym, m)| format!("{} ({:.2})", sym, m.sharpe))
+                .collect::<Vec<_>>()
+                .join("  ");
+            let best_line = format!("     \u{251c}\u{2500} Best:  {}", best_symbols);
+            rows.push(Row::new(vec![Cell::from(best_line).style(Style::default().fg(colors::GREEN))]));
+
+            // Row 4: Worst symbols by Sharpe
+            let worst_symbols: String = sorted_symbols
+                .iter()
+                .rev()
+                .take(3)
+                .map(|(sym, m)| format!("{} ({:.2})", sym, m.sharpe))
+                .collect::<Vec<_>>()
+                .join("  ");
+            let worst_line = format!("     \u{251c}\u{2500} Worst: {}", worst_symbols);
+            rows.push(Row::new(vec![Cell::from(worst_line).style(Style::default().fg(colors::RED))]));
+
+            // Row 5: Sector breakdown (if available)
+            if !entry.per_symbol_sectors.is_empty() {
+                let sector_stats = compute_sector_stats(&entry.per_symbol_metrics, &entry.per_symbol_sectors);
+                let sector_line = format!("     \u{2514}\u{2500} Sectors: {}", sector_stats);
+                rows.push(Row::new(vec![Cell::from(sector_line).style(detail_style)]));
             } else {
-                Style::default().fg(colors::FG)
-            };
-
-            // Rank indicator for top 3
-            let rank_cell = match entry.rank {
-                1 => Cell::from("\u{1f947}").style(base_style),
-                2 => Cell::from("\u{1f948}").style(base_style),
-                3 => Cell::from("\u{1f949}").style(base_style),
-                r => Cell::from(format!("{}", r)).style(base_style),
-            };
-
-            let sharpe_style = if entry.aggregate_metrics.avg_sharpe > 1.0 {
-                Style::default().fg(colors::GREEN)
-            } else if entry.aggregate_metrics.avg_sharpe < 0.5 {
-                Style::default().fg(colors::ORANGE)
-            } else {
-                base_style
-            };
-
-            let hit_style = if entry.aggregate_metrics.hit_rate > 0.7 {
-                Style::default().fg(colors::GREEN)
-            } else if entry.aggregate_metrics.hit_rate < 0.5 {
-                Style::default().fg(colors::RED)
-            } else {
-                base_style
-            };
-
-            // Confidence badge with color
-            let (conf_text, conf_style) = match entry.confidence_grade {
-                Some(ConfidenceGrade::High) => ("✓✓", Style::default().fg(colors::GREEN)),
-                Some(ConfidenceGrade::Medium) => ("✓", Style::default().fg(colors::YELLOW)),
-                Some(ConfidenceGrade::Low) => ("○", Style::default().fg(colors::ORANGE)),
-                Some(ConfidenceGrade::Insufficient) => ("?", Style::default().fg(colors::FG_DARK)),
-                None => ("-", base_style),
-            };
-
-            Row::new(vec![
-                rank_cell,
-                Cell::from(conf_text).style(conf_style),
-                Cell::from(entry.strategy_type.name()).style(base_style),
-                Cell::from(truncate_config(&entry.config_id.display(), 18)).style(base_style),
-                Cell::from(format!("{}", entry.symbols.len())).style(base_style),
-                Cell::from(format!("{:.3}", entry.aggregate_metrics.avg_sharpe)).style(sharpe_style),
-                Cell::from(format!("{:.3}", entry.aggregate_metrics.min_sharpe)).style(base_style),
-                Cell::from(format!("{:.1}%", entry.aggregate_metrics.hit_rate * 100.0)).style(hit_style),
-                Cell::from(format!("{:.1}%", entry.aggregate_metrics.avg_cagr * 100.0)).style(base_style),
-            ])
-        })
-        .collect();
+                // Closing line without sectors
+                let close_line = format!(
+                    "     \u{2514}\u{2500} Trades: {:.0} avg | MaxDD: {:.1}%",
+                    entry.aggregate_metrics.avg_trades,
+                    entry.aggregate_metrics.worst_max_drawdown * 100.0
+                );
+                rows.push(Row::new(vec![Cell::from(close_line).style(detail_style)]));
+            }
+        }
+    }
 
     let widths = [
         Constraint::Length(3),  // Rank
@@ -637,16 +721,65 @@ fn draw_leaderboard_table(f: &mut Frame, app: &App, area: Rect, is_active: bool)
     ];
 
     let scope_label = app.yolo.view_scope.display_name();
-    let title = format!(
-        "YOLO Leaderboard [{}] ({} configs)",
-        scope_label,
-        app.yolo.configs_tested()
-    );
+    let title = if date_range_str.is_empty() {
+        format!(
+            "YOLO Leaderboard [{}] ({} configs)",
+            scope_label,
+            app.yolo.configs_tested()
+        )
+    } else {
+        format!(
+            "YOLO Leaderboard [{}] | {} ({} configs)",
+            scope_label,
+            date_range_str,
+            app.yolo.configs_tested()
+        )
+    };
+
     let table = Table::new(rows, widths)
         .header(header)
         .block(panel_block(&title, is_active));
 
     f.render_widget(table, area);
+}
+
+/// Compute sector hit rate statistics from per-symbol metrics.
+fn compute_sector_stats(
+    per_symbol_metrics: &std::collections::HashMap<String, trendlab_core::Metrics>,
+    per_symbol_sectors: &std::collections::HashMap<String, String>,
+) -> String {
+    use std::collections::HashMap;
+
+    // Group symbols by sector and compute hit rate per sector
+    let mut sector_stats: HashMap<&str, (usize, usize)> = HashMap::new(); // (profitable, total)
+
+    for (symbol, metrics) in per_symbol_metrics {
+        if let Some(sector) = per_symbol_sectors.get(symbol) {
+            let entry = sector_stats.entry(sector.as_str()).or_insert((0, 0));
+            entry.1 += 1; // total
+            if metrics.sharpe > 0.0 {
+                entry.0 += 1; // profitable
+            }
+        }
+    }
+
+    // Sort sectors by hit rate descending
+    let mut sector_list: Vec<_> = sector_stats
+        .iter()
+        .map(|(sector, (profitable, total))| {
+            let hit_rate = *profitable as f64 / *total as f64 * 100.0;
+            (*sector, hit_rate)
+        })
+        .collect();
+    sector_list.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+    // Format top 4 sectors
+    sector_list
+        .iter()
+        .take(4)
+        .map(|(sector, rate)| format!("{} {:.0}%", sector, rate))
+        .collect::<Vec<_>>()
+        .join("  ")
 }
 
 /// Draw empty leaderboard state
@@ -778,9 +911,24 @@ fn draw_help(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
     let view_mode = app.results.view_mode_name();
     let scope_label = app.yolo.view_scope.display_name();
 
-    let lines = vec![Line::from(vec![
+    // Build help text based on view mode
+    let mut spans = vec![
         Span::styled("\u{2191}\u{2193}: ", Style::default().fg(colors::CYAN)),
         Span::styled("Select  ", Style::default().fg(colors::FG_DARK)),
+    ];
+
+    // Show expand/collapse help in Leaderboard view
+    if app.results.view_mode == ResultsViewMode::Leaderboard {
+        if app.results.expanded_leaderboard_index.is_some() {
+            spans.push(Span::styled("h/\u{2190}: ", Style::default().fg(colors::CYAN)));
+            spans.push(Span::styled("Collapse  ", Style::default().fg(colors::FG_DARK)));
+        } else {
+            spans.push(Span::styled("l/\u{2192}: ", Style::default().fg(colors::CYAN)));
+            spans.push(Span::styled("Expand  ", Style::default().fg(colors::FG_DARK)));
+        }
+    }
+
+    spans.extend([
         Span::styled("Enter: ", Style::default().fg(colors::CYAN)),
         Span::styled("Chart  ", Style::default().fg(colors::FG_DARK)),
         Span::styled("'s': ", Style::default().fg(colors::CYAN)),
@@ -799,8 +947,9 @@ fn draw_help(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
                 .fg(colors::MAGENTA)
                 .add_modifier(Modifier::BOLD),
         ),
-    ])];
+    ]);
 
+    let lines = vec![Line::from(spans)];
     let para = Paragraph::new(lines).block(panel_block("Controls", is_active));
 
     f.render_widget(para, area);

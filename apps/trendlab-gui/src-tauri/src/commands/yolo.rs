@@ -284,10 +284,16 @@ pub async fn start_yolo_mode(
     state: State<'_, AppState>,
     randomization_pct: f64,
 ) -> Result<StartYoloResponse, GuiError> {
+    tracing::info!(
+        randomization_pct = %randomization_pct,
+        "Starting YOLO mode"
+    );
+
     // Check if already running
     {
         let yolo = state.yolo.read().unwrap();
         if yolo.enabled {
+            tracing::warn!("YOLO mode already running, rejecting start request");
             return Err(GuiError::InvalidState(
                 "YOLO mode is already running".to_string(),
             ));
@@ -431,10 +437,23 @@ async fn run_yolo_loop(
     let per_symbol_path = Path::new("artifacts/leaderboard.json");
     let cross_symbol_path = Path::new("artifacts/cross_symbol_leaderboard.json");
 
+    tracing::info!(
+        job_id = %job_id,
+        symbols = symbols.len(),
+        strategies = strategies.len(),
+        "YOLO loop starting"
+    );
+
     // Load or create leaderboards
     let mut per_symbol_leaderboard = Leaderboard::load_or_new(per_symbol_path, 4);
     let mut cross_symbol_leaderboard =
         CrossSymbolLeaderboard::load_or_new(cross_symbol_path, 4, CrossSymbolRankMetric::AvgSharpe);
+
+    tracing::debug!(
+        prev_iterations = cross_symbol_leaderboard.total_iterations,
+        prev_configs = cross_symbol_leaderboard.total_configs_tested,
+        "Loaded existing leaderboards"
+    );
 
     let mut iteration = cross_symbol_leaderboard.total_iterations;
     let total_symbols = symbols.len();
@@ -490,6 +509,12 @@ async fn run_yolo_loop(
         iteration += 1;
         per_symbol_leaderboard.total_iterations = iteration;
         cross_symbol_leaderboard.total_iterations = iteration;
+
+        tracing::info!(
+            iteration = iteration,
+            configs_to_test = configs_per_iteration,
+            "Starting YOLO iteration"
+        );
 
         // Emit progress
         let _ = app.emit(

@@ -74,13 +74,15 @@ fn render_full(frame: &mut Frame, state: &CompanionState) {
     let area = frame.area();
 
     // Main layout: status bar, progress, results, logs
+    // Give more space to logs when there are more log entries
+    let log_height = if state.logs().len() > 6 { 12 } else { 8 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Status bar
-            Constraint::Length(5),  // Progress section
-            Constraint::Min(8),     // Results table
-            Constraint::Length(8),  // Logs
+            Constraint::Length(3),              // Status bar
+            Constraint::Length(5),              // Progress section
+            Constraint::Min(8),                 // Results table
+            Constraint::Length(log_height),     // Logs (dynamic)
         ])
         .split(area);
 
@@ -248,10 +250,17 @@ fn render_results(frame: &mut Frame, area: Rect, state: &CompanionState) {
 
 /// Render the logs section.
 fn render_logs(frame: &mut Frame, area: Rect, state: &CompanionState) {
+    let log_count = state.logs().len();
+    let title_text = if log_count > 0 {
+        format!(" Log ({}) ", log_count)
+    } else {
+        " Log ".to_string()
+    };
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(colors::DARK))
-        .title(Span::styled(" Log ", Style::default().fg(colors::CYAN)));
+        .title(Span::styled(title_text, Style::default().fg(colors::CYAN)));
 
     let logs = state.logs();
 
@@ -263,11 +272,16 @@ fn render_logs(frame: &mut Frame, area: Rect, state: &CompanionState) {
         return;
     }
 
+    // Calculate how many lines we can show (area height - 2 for borders)
+    let max_lines = (area.height.saturating_sub(2)) as usize;
+    let max_lines = max_lines.max(1); // At least 1 line
+
     let lines: Vec<Line> = logs
         .iter()
-        .take(6) // Show at most 6 log lines
+        .take(max_lines)
         .map(|entry| {
             let level_style = match entry.level {
+                LogLevel::Trace => Style::default().fg(colors::COMMENT).add_modifier(Modifier::DIM),
                 LogLevel::Debug => Style::default().fg(colors::COMMENT),
                 LogLevel::Info => Style::default().fg(colors::BLUE),
                 LogLevel::Warn => Style::default().fg(colors::YELLOW),
@@ -276,10 +290,18 @@ fn render_logs(frame: &mut Frame, area: Rect, state: &CompanionState) {
 
             let time = entry.ts.format("%H:%M:%S").to_string();
 
+            // Truncate message if too long to prevent wrapping issues
+            let max_msg_len = area.width.saturating_sub(20) as usize;
+            let message = if entry.message.len() > max_msg_len && max_msg_len > 3 {
+                format!("{}...", &entry.message[..max_msg_len - 3])
+            } else {
+                entry.message.clone()
+            };
+
             Line::from(vec![
                 Span::styled(format!("[{}] ", time), Style::default().fg(colors::COMMENT)),
                 Span::styled(format!("{:5} ", entry.level), level_style),
-                Span::styled(&entry.message, Style::default().fg(colors::FG)),
+                Span::styled(message, Style::default().fg(colors::FG)),
             ])
         })
         .collect();

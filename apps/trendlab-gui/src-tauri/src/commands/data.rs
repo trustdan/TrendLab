@@ -227,11 +227,11 @@ pub async fn fetch_data(
                     drop(cs);
 
                     // Log success
-                    log::info!("Fetched {} bars for {}", bars_count, symbol);
+                    tracing::info!("Fetched {} bars for {}", bars_count, symbol);
                 }
                 Err(e) => {
                     failed += 1;
-                    log::error!("Failed to fetch {}: {}", symbol, e);
+                    tracing::error!("Failed to fetch {}: {}", symbol, e);
                 }
             }
         }
@@ -292,7 +292,7 @@ async fn fetch_symbol(
     let quality_report = checker.check(&bars);
 
     if !quality_report.is_clean() {
-        log::warn!(
+        tracing::warn!(
             "{}: {} quality issues found",
             symbol,
             quality_report.issues.len()

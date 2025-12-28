@@ -201,16 +201,25 @@ fn draw_single_equity_chart(f: &mut Frame, app: &App, area: Rect, is_active: boo
         return;
     }
 
-    // Prepare equity data
+    let total_bars = app.chart.equity_curve.len();
+
+    // Apply zoom and scroll to get visible range
+    let visible_count = ((total_bars as f64 / app.chart.zoom_level) as usize).max(10);
+    let max_scroll = total_bars.saturating_sub(visible_count);
+    let scroll_offset = app.chart.scroll_offset.min(max_scroll);
+    let start_idx = scroll_offset;
+    let end_idx = (start_idx + visible_count).min(total_bars);
+
+    // Prepare visible equity data (re-indexed from 0)
     let equity_data: Vec<(f64, f64)> = app
         .chart
-        .equity_curve
+        .equity_curve[start_idx..end_idx]
         .iter()
         .enumerate()
         .map(|(i, v)| (i as f64, *v))
         .collect();
 
-    // Calculate bounds
+    // Calculate bounds for visible data
     let x_max = equity_data.len() as f64;
     let y_min = equity_data
         .iter()
@@ -233,14 +242,24 @@ fn draw_single_equity_chart(f: &mut Frame, app: &App, area: Rect, is_active: boo
         .style(Style::default().fg(colors::GREEN))
         .data(&equity_data)];
 
-    // Add drawdown overlay if enabled
+    // Add drawdown overlay if enabled (also sliced to visible range)
     let drawdown_data: Vec<(f64, f64)> =
-        if app.chart.show_drawdown && !app.chart.drawdown_curve.is_empty() {
+        if app.chart.show_drawdown && app.chart.drawdown_curve.len() > end_idx {
             // Scale drawdown to fit in the same chart (inverted, as percentage)
             let dd_scale = (y_max - y_min) / 50.0; // Max 50% drawdown fills chart
             app.chart
+                .drawdown_curve[start_idx..end_idx]
+                .iter()
+                .enumerate()
+                .map(|(i, dd)| (i as f64, y_max + dd * dd_scale))
+                .collect()
+        } else if app.chart.show_drawdown && !app.chart.drawdown_curve.is_empty() {
+            // Fallback: use what we have
+            let dd_scale = (y_max - y_min) / 50.0;
+            app.chart
                 .drawdown_curve
                 .iter()
+                .take(end_idx.saturating_sub(start_idx))
                 .enumerate()
                 .map(|(i, dd)| (i as f64, y_max + dd * dd_scale))
                 .collect()
@@ -259,8 +278,11 @@ fn draw_single_equity_chart(f: &mut Frame, app: &App, area: Rect, is_active: boo
         );
     }
 
-    // Use dates if available, otherwise fall back to day indices
-    let x_labels: Vec<Span> = if !app.chart.equity_dates.is_empty() {
+    // Use dates if available (sliced to visible range), otherwise fall back to day indices
+    let x_labels: Vec<Span> = if app.chart.equity_dates.len() >= end_idx {
+        generate_date_labels(&app.chart.equity_dates[start_idx..end_idx].to_vec())
+    } else if !app.chart.equity_dates.is_empty() {
+        // Fallback: use available dates
         generate_date_labels(&app.chart.equity_dates)
     } else {
         generate_index_labels(x_max)
@@ -313,33 +335,55 @@ fn draw_multi_ticker_chart(f: &mut Frame, app: &App, area: Rect, is_active: bool
         return;
     }
 
-    // Prepare all curve data
+    // Find max data length across all curves
+    let total_bars = app
+        .chart
+        .ticker_curves
+        .iter()
+        .map(|c| c.equity.len())
+        .max()
+        .unwrap_or(0);
+
+    // Apply zoom and scroll to get visible range
+    let visible_count = ((total_bars as f64 / app.chart.zoom_level) as usize).max(10);
+    let max_scroll = total_bars.saturating_sub(visible_count);
+    let scroll_offset = app.chart.scroll_offset.min(max_scroll);
+    let start_idx = scroll_offset;
+    let end_idx = (start_idx + visible_count).min(total_bars);
+
+    // Prepare all curve data (sliced to visible range)
     let mut all_data: Vec<Vec<(f64, f64)>> = Vec::new();
     let mut y_min = f64::MAX;
     let mut y_max = f64::MIN;
-    let mut x_max = 0.0_f64;
 
     for curve in &app.chart.ticker_curves {
+        let curve_end = end_idx.min(curve.equity.len());
+        let curve_start = start_idx.min(curve.equity.len());
         let data: Vec<(f64, f64)> = curve
             .equity
+            .get(curve_start..curve_end)
+            .unwrap_or(&[])
             .iter()
             .enumerate()
             .map(|(i, v)| (i as f64, *v))
             .collect();
 
-        if !data.is_empty() {
-            x_max = x_max.max(data.len() as f64);
-            for (_, y) in &data {
-                y_min = y_min.min(*y);
-                y_max = y_max.max(*y);
-            }
+        for (_, y) in &data {
+            y_min = y_min.min(*y);
+            y_max = y_max.max(*y);
         }
         all_data.push(data);
     }
 
+    let x_max = (end_idx - start_idx) as f64;
+
     // Apply margins
-    y_min *= 0.95;
-    y_max *= 1.05;
+    if y_min != f64::MAX {
+        y_min *= 0.95;
+    }
+    if y_max != f64::MIN {
+        y_max *= 1.05;
+    }
 
     // Create datasets for each ticker
     let datasets: Vec<Dataset> = all_data
@@ -357,13 +401,20 @@ fn draw_multi_ticker_chart(f: &mut Frame, app: &App, area: Rect, is_active: bool
         })
         .collect();
 
-    // Use dates from first curve if available, otherwise fall back to indices
+    // Use dates from first curve if available (sliced), otherwise fall back to indices
     let x_labels: Vec<Span> = app
         .chart
         .ticker_curves
         .first()
-        .filter(|c| !c.dates.is_empty())
-        .map(|c| generate_date_labels(&c.dates))
+        .filter(|c| c.dates.len() >= end_idx)
+        .map(|c| generate_date_labels(&c.dates[start_idx..end_idx].to_vec()))
+        .or_else(|| {
+            app.chart
+                .ticker_curves
+                .first()
+                .filter(|c| !c.dates.is_empty())
+                .map(|c| generate_date_labels(&c.dates))
+        })
         .unwrap_or_else(|| generate_index_labels(x_max));
 
     let y_labels = vec![
@@ -404,16 +455,25 @@ fn draw_portfolio_chart(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
         return;
     }
 
-    // Prepare portfolio data
+    let total_bars = app.chart.portfolio_curve.len();
+
+    // Apply zoom and scroll to get visible range
+    let visible_count = ((total_bars as f64 / app.chart.zoom_level) as usize).max(10);
+    let max_scroll = total_bars.saturating_sub(visible_count);
+    let scroll_offset = app.chart.scroll_offset.min(max_scroll);
+    let start_idx = scroll_offset;
+    let end_idx = (start_idx + visible_count).min(total_bars);
+
+    // Prepare visible portfolio data (re-indexed from 0)
     let portfolio_data: Vec<(f64, f64)> = app
         .chart
-        .portfolio_curve
+        .portfolio_curve[start_idx..end_idx]
         .iter()
         .enumerate()
         .map(|(i, v)| (i as f64, *v))
         .collect();
 
-    // Calculate bounds
+    // Calculate bounds for visible data
     let x_max = portfolio_data.len() as f64;
     let y_min = portfolio_data
         .iter()
@@ -435,13 +495,20 @@ fn draw_portfolio_chart(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
         .style(Style::default().fg(colors::CYAN))
         .data(&portfolio_data)];
 
-    // Use dates from first ticker curve if available (portfolio uses same dates)
+    // Use dates from first ticker curve if available (sliced), otherwise fall back to indices
     let x_labels: Vec<Span> = app
         .chart
         .ticker_curves
         .first()
-        .filter(|c| !c.dates.is_empty())
-        .map(|c| generate_date_labels(&c.dates))
+        .filter(|c| c.dates.len() >= end_idx)
+        .map(|c| generate_date_labels(&c.dates[start_idx..end_idx].to_vec()))
+        .or_else(|| {
+            app.chart
+                .ticker_curves
+                .first()
+                .filter(|c| !c.dates.is_empty())
+                .map(|c| generate_date_labels(&c.dates))
+        })
         .unwrap_or_else(|| generate_index_labels(x_max));
 
     let y_labels = vec![
@@ -555,6 +622,16 @@ fn draw_strategy_comparison_chart(f: &mut Frame, app: &App, area: Rect, is_activ
         .take(MAX_STRATEGY_CURVES)
         .collect();
 
+    // Find max data length across all curves
+    let total_bars = top_curves.iter().map(|c| c.equity.len()).max().unwrap_or(0);
+
+    // Apply zoom and scroll to get visible range
+    let visible_count = ((total_bars as f64 / app.chart.zoom_level) as usize).max(10);
+    let max_scroll = total_bars.saturating_sub(visible_count);
+    let scroll_offset = app.chart.scroll_offset.min(max_scroll);
+    let start_idx = scroll_offset;
+    let end_idx = (start_idx + visible_count).min(total_bars);
+
     // Split area: legend line at top, chart below
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -566,33 +643,39 @@ fn draw_strategy_comparison_chart(f: &mut Frame, app: &App, area: Rect, is_activ
         .style(Style::default().bg(colors::BG));
     f.render_widget(legend, chunks[0]);
 
-    // Prepare curve data for top strategies only
+    // Prepare curve data for top strategies only (sliced to visible range)
     let mut all_data: Vec<Vec<(f64, f64)>> = Vec::new();
     let mut y_min = f64::MAX;
     let mut y_max = f64::MIN;
-    let mut x_max = 0.0_f64;
 
     for curve in &top_curves {
+        let curve_end = end_idx.min(curve.equity.len());
+        let curve_start = start_idx.min(curve.equity.len());
         let data: Vec<(f64, f64)> = curve
             .equity
+            .get(curve_start..curve_end)
+            .unwrap_or(&[])
             .iter()
             .enumerate()
             .map(|(i, v)| (i as f64, *v))
             .collect();
 
-        if !data.is_empty() {
-            x_max = x_max.max(data.len() as f64);
-            for (_, y) in &data {
-                y_min = y_min.min(*y);
-                y_max = y_max.max(*y);
-            }
+        for (_, y) in &data {
+            y_min = y_min.min(*y);
+            y_max = y_max.max(*y);
         }
         all_data.push(data);
     }
 
+    let x_max = (end_idx - start_idx) as f64;
+
     // Apply margins
-    y_min *= 0.95;
-    y_max *= 1.05;
+    if y_min != f64::MAX {
+        y_min *= 0.95;
+    }
+    if y_max != f64::MIN {
+        y_max *= 1.05;
+    }
 
     // Create datasets for each top strategy
     let datasets: Vec<Dataset> = all_data
@@ -611,11 +694,17 @@ fn draw_strategy_comparison_chart(f: &mut Frame, app: &App, area: Rect, is_activ
         })
         .collect();
 
-    // Use dates from first strategy curve if available
+    // Use dates from first strategy curve if available (sliced)
     let x_labels: Vec<Span> = top_curves
         .first()
-        .filter(|c| !c.dates.is_empty())
-        .map(|c| generate_date_labels(&c.dates))
+        .filter(|c| c.dates.len() >= end_idx)
+        .map(|c| generate_date_labels(&c.dates[start_idx..end_idx].to_vec()))
+        .or_else(|| {
+            top_curves
+                .first()
+                .filter(|c| !c.dates.is_empty())
+                .map(|c| generate_date_labels(&c.dates))
+        })
         .unwrap_or_else(|| generate_index_labels(x_max));
 
     let y_labels = vec![
@@ -654,6 +743,22 @@ fn draw_per_ticker_best_chart(f: &mut Frame, app: &App, area: Rect, is_active: b
         return;
     }
 
+    // Find max data length across all curves
+    let total_bars = app
+        .chart
+        .ticker_best_strategies
+        .iter()
+        .map(|t| t.equity.len())
+        .max()
+        .unwrap_or(0);
+
+    // Apply zoom and scroll to get visible range
+    let visible_count = ((total_bars as f64 / app.chart.zoom_level) as usize).max(10);
+    let max_scroll = total_bars.saturating_sub(visible_count);
+    let scroll_offset = app.chart.scroll_offset.min(max_scroll);
+    let start_idx = scroll_offset;
+    let end_idx = (start_idx + visible_count).min(total_bars);
+
     // Split area: legend line at top, chart below
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -665,33 +770,39 @@ fn draw_per_ticker_best_chart(f: &mut Frame, app: &App, area: Rect, is_active: b
         .style(Style::default().bg(colors::BG));
     f.render_widget(legend, chunks[0]);
 
-    // Prepare all curve data
+    // Prepare all curve data (sliced to visible range)
     let mut all_data: Vec<Vec<(f64, f64)>> = Vec::new();
     let mut y_min = f64::MAX;
     let mut y_max = f64::MIN;
-    let mut x_max = 0.0_f64;
 
     for ticker_best in &app.chart.ticker_best_strategies {
+        let curve_end = end_idx.min(ticker_best.equity.len());
+        let curve_start = start_idx.min(ticker_best.equity.len());
         let data: Vec<(f64, f64)> = ticker_best
             .equity
+            .get(curve_start..curve_end)
+            .unwrap_or(&[])
             .iter()
             .enumerate()
             .map(|(i, v)| (i as f64, *v))
             .collect();
 
-        if !data.is_empty() {
-            x_max = x_max.max(data.len() as f64);
-            for (_, y) in &data {
-                y_min = y_min.min(*y);
-                y_max = y_max.max(*y);
-            }
+        for (_, y) in &data {
+            y_min = y_min.min(*y);
+            y_max = y_max.max(*y);
         }
         all_data.push(data);
     }
 
+    let x_max = (end_idx - start_idx) as f64;
+
     // Apply margins
-    y_min *= 0.95;
-    y_max *= 1.05;
+    if y_min != f64::MAX {
+        y_min *= 0.95;
+    }
+    if y_max != f64::MIN {
+        y_max *= 1.05;
+    }
 
     // Create datasets for each ticker's best strategy
     let datasets: Vec<Dataset> = all_data
@@ -714,13 +825,20 @@ fn draw_per_ticker_best_chart(f: &mut Frame, app: &App, area: Rect, is_active: b
         })
         .collect();
 
-    // Use dates from first ticker's best strategy if available
+    // Use dates from first ticker's best strategy if available (sliced)
     let x_labels: Vec<Span> = app
         .chart
         .ticker_best_strategies
         .first()
-        .filter(|t| !t.dates.is_empty())
-        .map(|t| generate_date_labels(&t.dates))
+        .filter(|t| t.dates.len() >= end_idx)
+        .map(|t| generate_date_labels(&t.dates[start_idx..end_idx].to_vec()))
+        .or_else(|| {
+            app.chart
+                .ticker_best_strategies
+                .first()
+                .filter(|t| !t.dates.is_empty())
+                .map(|t| generate_date_labels(&t.dates))
+        })
         .unwrap_or_else(|| generate_index_labels(x_max));
 
     let y_labels = vec![

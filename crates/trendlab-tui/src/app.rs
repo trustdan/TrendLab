@@ -159,20 +159,21 @@ fn jitter_date_range_percent(
     min_span_days: i64,
 ) -> (NaiveDate, NaiveDate) {
     let span = (end - start).num_days().abs().max(1);
+    // Only jitter the start date; end date stays fixed to maximize data coverage
     let mag_start = rng.gen_range(min_pct..=max_pct);
-    let mag_end = rng.gen_range(min_pct..=max_pct);
+    // Start date can shift either direction
     let shift_start =
         (span as f64 * mag_start).round() as i64 * if rng.gen_bool(0.5) { 1 } else { -1 };
-    let shift_end = (span as f64 * mag_end).round() as i64 * if rng.gen_bool(0.5) { 1 } else { -1 };
+    // End date only shifts forward (never backward) to ensure we always include recent data.
+    // This prevents YOLO mode from accidentally cutting off years of recent market data.
+    // The shift is clamped to max_date anyway, so forward shifts have no effect when end == max_date.
 
     let mut s = start
         .checked_add_signed(chrono::Duration::days(shift_start))
         .unwrap_or(start)
         .clamp(min_date, max_date);
-    let mut e = end
-        .checked_add_signed(chrono::Duration::days(shift_end))
-        .unwrap_or(end)
-        .clamp(min_date, max_date);
+    // Keep end date at the original value (no jitter) to maximize data coverage
+    let mut e = end.clamp(min_date, max_date);
 
     if e < s {
         std::mem::swap(&mut s, &mut e);
@@ -1190,6 +1191,67 @@ pub struct YoloState {
     pub total_configs_tested: u64,
     /// When YOLO mode was started this session
     pub started_at: Option<DateTime<Utc>>,
+    /// Whether the YOLO config modal is shown
+    pub show_config: bool,
+    /// The config modal state
+    pub config: YoloConfigState,
+}
+
+/// YOLO mode configuration modal state
+#[derive(Debug, Clone)]
+pub struct YoloConfigState {
+    /// Which field is currently focused
+    pub focused_field: YoloConfigField,
+    /// Start date for the backtest period
+    pub start_date: NaiveDate,
+    /// End date for the backtest period
+    pub end_date: NaiveDate,
+    /// Randomization percentage (0.0 to 1.0)
+    pub randomization_pct: f64,
+    /// Sweep depth for parameter coverage
+    pub sweep_depth: SweepDepth,
+}
+
+/// Fields in the YOLO config modal
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum YoloConfigField {
+    StartDate,
+    EndDate,
+    Randomization,
+    SweepDepth,
+}
+
+impl Default for YoloConfigState {
+    fn default() -> Self {
+        let today = chrono::Local::now().date_naive();
+        Self {
+            focused_field: YoloConfigField::StartDate,
+            start_date: today - chrono::Duration::days(5 * 365),
+            end_date: today,
+            randomization_pct: 0.30,
+            sweep_depth: SweepDepth::Quick,
+        }
+    }
+}
+
+impl YoloConfigField {
+    pub fn next(self) -> Self {
+        match self {
+            Self::StartDate => Self::EndDate,
+            Self::EndDate => Self::Randomization,
+            Self::Randomization => Self::SweepDepth,
+            Self::SweepDepth => Self::StartDate,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::StartDate => Self::SweepDepth,
+            Self::EndDate => Self::StartDate,
+            Self::Randomization => Self::EndDate,
+            Self::SweepDepth => Self::Randomization,
+        }
+    }
 }
 
 impl Default for YoloState {
@@ -1213,6 +1275,8 @@ impl Default for YoloState {
             session_configs_tested: 0,
             total_configs_tested: 0,
             started_at: None,
+            show_config: false,
+            config: YoloConfigState::default(),
         }
     }
 }
@@ -1318,6 +1382,8 @@ pub struct ResultsState {
     pub selected_ticker_index: usize,
     /// Selected leaderboard index (in Leaderboard view)
     pub selected_leaderboard_index: usize,
+    /// Expanded leaderboard index (for in-place drill-down, None = collapsed)
+    pub expanded_leaderboard_index: Option<usize>,
     /// Statistical analysis for the currently selected config
     pub selected_analysis: Option<trendlab_core::StatisticalAnalysis>,
     /// ID of the config for which analysis is being shown
@@ -1740,11 +1806,11 @@ impl App {
             ..Default::default()
         };
 
-        // Fetch date defaults used by TUI fetches.
-        let fetch_default_start = NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
-        let fetch_default_end = NaiveDate::from_ymd_opt(2024, 12, 31).unwrap();
+        // Fetch date defaults: 5 years back from today to today.
+        // Dynamic calculation ensures we always use recent data.
         let today = chrono::Local::now().date_naive();
-        let fetch_default_end = fetch_default_end.min(today);
+        let fetch_default_start = today - chrono::Duration::days(5 * 365);
+        let fetch_default_end = today;
 
         let mut fetch_range = (fetch_default_start, fetch_default_end);
 
@@ -2342,8 +2408,20 @@ impl App {
                 }
             }
             Panel::Results => {
-                if self.results.selected_index > 0 {
-                    self.results.selected_index -= 1;
+                // Collapse expanded row when navigating
+                self.results.expanded_leaderboard_index = None;
+
+                match self.results.view_mode {
+                    ResultsViewMode::Leaderboard => {
+                        if self.results.selected_leaderboard_index > 0 {
+                            self.results.selected_leaderboard_index -= 1;
+                        }
+                    }
+                    _ => {
+                        if self.results.selected_index > 0 {
+                            self.results.selected_index -= 1;
+                        }
+                    }
                 }
             }
             Panel::Chart => {
@@ -2388,10 +2466,27 @@ impl App {
                 }
             }
             Panel::Results => {
-                if !self.results.results.is_empty()
-                    && self.results.selected_index < self.results.results.len() - 1
-                {
-                    self.results.selected_index += 1;
+                // Collapse expanded row when navigating
+                self.results.expanded_leaderboard_index = None;
+
+                match self.results.view_mode {
+                    ResultsViewMode::Leaderboard => {
+                        let max_idx = self
+                            .yolo
+                            .cross_symbol_leaderboard()
+                            .map(|lb| lb.entries.len().saturating_sub(1))
+                            .unwrap_or(0);
+                        if self.results.selected_leaderboard_index < max_idx {
+                            self.results.selected_leaderboard_index += 1;
+                        }
+                    }
+                    _ => {
+                        if !self.results.results.is_empty()
+                            && self.results.selected_index < self.results.results.len() - 1
+                        {
+                            self.results.selected_index += 1;
+                        }
+                    }
                 }
             }
             Panel::Chart => {
@@ -2417,6 +2512,12 @@ impl App {
                     self.chart.scroll_offset -= 1;
                 }
             }
+            Panel::Results => {
+                // Collapse leaderboard row in Leaderboard view
+                if self.results.view_mode == ResultsViewMode::Leaderboard {
+                    self.collapse_leaderboard_row();
+                }
+            }
             _ => {}
         }
     }
@@ -2439,8 +2540,31 @@ impl App {
             Panel::Chart => {
                 self.chart.scroll_offset += 1;
             }
+            Panel::Results => {
+                // Expand leaderboard row in Leaderboard view
+                if self.results.view_mode == ResultsViewMode::Leaderboard {
+                    self.expand_leaderboard_row();
+                }
+            }
             _ => {}
         }
+    }
+
+    /// Expand the currently selected leaderboard row to show details.
+    pub fn expand_leaderboard_row(&mut self) {
+        if self.results.view_mode == ResultsViewMode::Leaderboard {
+            self.results.expanded_leaderboard_index = Some(self.results.selected_leaderboard_index);
+        }
+    }
+
+    /// Collapse any expanded leaderboard row.
+    pub fn collapse_leaderboard_row(&mut self) {
+        self.results.expanded_leaderboard_index = None;
+    }
+
+    /// Check if a leaderboard row is expanded.
+    pub fn is_leaderboard_expanded(&self) -> bool {
+        self.results.expanded_leaderboard_index.is_some()
     }
 
     fn adjust_strategy_param(&mut self, delta: i32) {
@@ -2617,6 +2741,13 @@ impl App {
                             .equity
                             .iter()
                             .map(|p| p.equity)
+                            .collect();
+                        // Extract dates from backtest result
+                        self.chart.equity_dates = result
+                            .backtest_result
+                            .equity
+                            .iter()
+                            .map(|p| p.ts)
                             .collect();
                         // Calculate drawdown curve
                         self.chart.drawdown_curve = calculate_drawdown(&self.chart.equity_curve);
@@ -3384,8 +3515,16 @@ impl App {
         let existing_cross_symbol_leaderboard =
             CrossSymbolLeaderboard::load(std::path::Path::new("artifacts/cross_symbol_leaderboard.json")).ok();
 
+        // Provide symbol -> sector_id mapping so YOLO can do sector-aware validation.
+        let sector_lookup = self.data.universe.build_sector_id_lookup();
+        let symbol_sector_ids: HashMap<String, String> = selected
+            .iter()
+            .filter_map(|sym| sector_lookup.get(sym).map(|sector| (sym.clone(), sector.clone())))
+            .collect();
+
         let cmd = WorkerCommand::StartYoloMode {
             symbols: selected.clone(),
+            symbol_sector_ids,
             start: self.fetch_range.0,
             end: self.fetch_range.1,
             strategy_grid,

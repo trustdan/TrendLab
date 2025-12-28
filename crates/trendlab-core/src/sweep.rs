@@ -311,12 +311,26 @@ pub fn run_sweep(bars: &[Bar], grid: &SweepGrid, backtest_config: BacktestConfig
     let started_at = Utc::now();
 
     let combinations = grid.combinations();
+    let total_configs = combinations.len();
+
+    tracing::info!(
+        sweep_id = %sweep_id,
+        configs = total_configs,
+        bars = bars.len(),
+        "Starting parameter sweep"
+    );
 
     let config_results: Vec<SweepConfigResult> = combinations
         .par_iter()
         .map(|&(entry, exit)| {
             let config_id = ConfigId::new(entry, exit);
             let mut strategy = DonchianBreakoutStrategy::new(entry, exit);
+
+            tracing::trace!(
+                entry = entry,
+                exit = exit,
+                "Evaluating config"
+            );
 
             let backtest_result =
                 run_backtest(bars, &mut strategy, backtest_config).expect("Backtest failed");
@@ -332,6 +346,14 @@ pub fn run_sweep(bars: &[Bar], grid: &SweepGrid, backtest_config: BacktestConfig
         .collect();
 
     let completed_at = Utc::now();
+    let elapsed_ms = (completed_at - started_at).num_milliseconds();
+
+    tracing::info!(
+        sweep_id = %sweep_id,
+        configs = total_configs,
+        elapsed_ms = elapsed_ms,
+        "Sweep completed"
+    );
 
     SweepResult {
         sweep_id,
@@ -2661,6 +2683,7 @@ pub struct StrategyBestResult {
     pub symbol: Option<String>, // None for aggregate
     pub metrics: Metrics,
     pub equity_curve: Vec<f64>,
+    pub dates: Vec<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Comparison entry summarizing a strategy's performance.
@@ -2770,6 +2793,12 @@ impl MultiStrategySweepResult {
                     .iter()
                     .map(|p| p.equity)
                     .collect();
+                let dates: Vec<chrono::DateTime<chrono::Utc>> = config_result
+                    .backtest_result
+                    .equity
+                    .iter()
+                    .map(|p| p.ts)
+                    .collect();
                 self.best_per_symbol.insert(
                     symbol.clone(),
                     StrategyBestResult {
@@ -2781,6 +2810,7 @@ impl MultiStrategySweepResult {
                         symbol: Some(symbol),
                         metrics: config_result.metrics.clone(),
                         equity_curve,
+                        dates,
                     },
                 );
             }
@@ -2834,6 +2864,12 @@ impl MultiStrategySweepResult {
                     .iter()
                     .map(|p| p.equity)
                     .collect();
+                let dates: Vec<chrono::DateTime<chrono::Utc>> = config_result
+                    .backtest_result
+                    .equity
+                    .iter()
+                    .map(|p| p.ts)
+                    .collect();
                 self.best_per_strategy.insert(
                     strategy_type,
                     StrategyBestResult {
@@ -2845,6 +2881,7 @@ impl MultiStrategySweepResult {
                         symbol: Some(symbol.clone()),
                         metrics: config_result.metrics.clone(),
                         equity_curve,
+                        dates,
                     },
                 );
             }

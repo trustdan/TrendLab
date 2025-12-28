@@ -6,6 +6,7 @@ members = [
     "crates/trendlab-bdd",
     "crates/trendlab-tui",
     "crates/trendlab-launcher",
+    "crates/trendlab-logging",
     "apps/trendlab-gui/src-tauri",
 ]
 
@@ -45,6 +46,11 @@ toml = "0.8"
 cucumber = "0.21"
 async-trait = "0.1"
 
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+
 # Terminal styling
 colored = "2.1"
 console = "0.15"
@@ -66,3 +72,4 @@ maud = "0.26"
 
 # Internal crates
 trendlab-core = { path = "crates/trendlab-core" }
+trendlab-logging = { path = "crates/trendlab-logging" }

@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
+use tracing::{debug, trace, warn};
 
 use crate::error::GuiError;
 use crate::state::AppState;
@@ -210,11 +211,16 @@ pub fn get_candle_data(
     state: State<'_, AppState>,
     symbol: String,
 ) -> Result<Vec<CandleData>, GuiError> {
+    debug!(symbol = %symbol, "Loading candle data");
+
     // Build path to parquet file
     let parquet_dir = state.data_config.parquet_dir();
     let symbol_dir = parquet_dir.join("1d").join(format!("symbol={}", symbol));
 
+    trace!(path = %symbol_dir.display(), "Checking symbol directory");
+
     if !symbol_dir.exists() {
+        warn!(symbol = %symbol, path = %symbol_dir.display(), "Symbol directory not found");
         return Err(GuiError::NotFound {
             resource: format!("Candle data for {}", symbol),
         });
@@ -223,14 +229,18 @@ pub fn get_candle_data(
     // Find parquet files in the symbol directory
     let mut candles = Vec::new();
 
+    let mut parquet_files_found = 0;
     if let Ok(entries) = std::fs::read_dir(&symbol_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().map(|e| e == "parquet").unwrap_or(false) {
+                parquet_files_found += 1;
+                trace!(file = %path.display(), "Scanning parquet file");
                 // Read parquet file using polars
                 if let Ok(df) = polars::prelude::LazyFrame::scan_parquet(&path, Default::default())
                     .and_then(|lf| lf.collect())
                 {
+                    trace!(rows = df.height(), "Parquet file loaded");
                     // Extract columns
                     let dates = df.column("date").ok();
                     let opens = df.column("open").ok();
@@ -287,7 +297,15 @@ pub fn get_candle_data(
     // Sort by time
     candles.sort_by_key(|c| c.time);
 
+    debug!(
+        symbol = %symbol,
+        parquet_files = parquet_files_found,
+        candles = candles.len(),
+        "Candle data loaded"
+    );
+
     if candles.is_empty() {
+        warn!(symbol = %symbol, parquet_files = parquet_files_found, "No candle data found despite directory existing");
         return Err(GuiError::NotFound {
             resource: format!("Candle data for {}", symbol),
         });
@@ -587,12 +605,25 @@ pub fn get_chart_data(state: State<'_, AppState>) -> Result<ChartData, GuiError>
     let chart_state = state.get_chart_state();
     let results_state = state.get_results_state();
 
+    debug!(
+        mode = ?chart_state.mode,
+        symbol = ?chart_state.symbol,
+        strategy = ?chart_state.strategy,
+        config_id = ?chart_state.config_id,
+        results_count = results_state.results.len(),
+        "Getting chart data"
+    );
+
     match chart_state.mode {
         ChartMode::Candlestick => {
-            let symbol = chart_state.symbol.ok_or_else(|| GuiError::InvalidInput {
-                message: "No symbol selected for candlestick chart".to_string(),
+            let symbol = chart_state.symbol.clone().ok_or_else(|| {
+                warn!("Candlestick mode requested but no symbol selected");
+                GuiError::InvalidInput {
+                    message: "No symbol selected for candlestick chart".to_string(),
+                }
             })?;
 
+            debug!(symbol = %symbol, "Fetching candlestick data");
             let candles = get_candle_data(state.clone(), symbol)?;
 
             Ok(ChartData {
@@ -604,6 +635,7 @@ pub fn get_chart_data(state: State<'_, AppState>) -> Result<ChartData, GuiError>
             })
         }
         ChartMode::Equity => {
+            debug!("Equity mode: searching for matching result");
             // Find result matching symbol/strategy/config
             let result = results_state
                 .results
@@ -627,14 +659,32 @@ pub fn get_chart_data(state: State<'_, AppState>) -> Result<ChartData, GuiError>
                 })
                 .or_else(|| {
                     // Fall back to selected result
+                    trace!(selected_id = ?results_state.selected_id, "No direct match, falling back to selected result");
                     results_state
                         .selected_id
                         .as_ref()
                         .and_then(|id| results_state.results.iter().find(|r| &r.id == id))
                 })
-                .ok_or_else(|| GuiError::NotFound {
-                    resource: "No matching result for equity chart".to_string(),
+                .ok_or_else(|| {
+                    warn!(
+                        symbol = ?chart_state.symbol,
+                        strategy = ?chart_state.strategy,
+                        config_id = ?chart_state.config_id,
+                        selected_id = ?results_state.selected_id,
+                        results_count = results_state.results.len(),
+                        "No matching result found for equity chart"
+                    );
+                    GuiError::NotFound {
+                        resource: "No matching result for equity chart".to_string(),
+                    }
                 })?;
+
+            debug!(
+                result_id = %result.id,
+                result_symbol = %result.symbol,
+                result_strategy = %result.strategy,
+                "Found matching result for equity chart"
+            );
 
             let equity = get_equity_curve(state.clone(), result.id.clone())?;
 

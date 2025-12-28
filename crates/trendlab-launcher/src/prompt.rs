@@ -136,3 +136,96 @@ fn clear_and_reset(stdout: &mut io::Stdout) -> io::Result<()> {
         SetForegroundColor(Color::Reset)
     )
 }
+
+/// Display the logging prompt.
+///
+/// This is shown before the mode selection prompt to ask if the user
+/// wants to enable logging. Returns `true` if logging should be enabled.
+///
+/// Pressing [L] enables logging, any other key continues without logging.
+pub fn show_logging_prompt() -> io::Result<bool> {
+    terminal::enable_raw_mode()?;
+    let result = show_logging_prompt_inner();
+    terminal::disable_raw_mode()?;
+    result
+}
+
+fn show_logging_prompt_inner() -> io::Result<bool> {
+    let mut stdout = io::stdout();
+
+    // Clear screen
+    execute!(stdout, terminal::Clear(ClearType::All), cursor::MoveTo(0, 0))?;
+
+    // Print banner
+    execute!(stdout, SetForegroundColor(Color::Cyan))?;
+    for line in BANNER.lines() {
+        execute!(stdout, Print(line), Print("\r\n"))?;
+    }
+
+    // Print subtitle
+    execute!(
+        stdout,
+        SetForegroundColor(Color::DarkGrey),
+        Print("            Trend-Following Backtest Lab\r\n"),
+        Print("\r\n"),
+    )?;
+
+    // Print logging prompt box
+    execute!(
+        stdout,
+        SetForegroundColor(Color::Blue),
+        Print("  ╭─────────────────────────────────────╮\r\n"),
+        Print("  │                                     │\r\n"),
+    )?;
+
+    execute!(
+        stdout,
+        Print("  │   Press "),
+        SetForegroundColor(Color::Green),
+        Print("[L]"),
+        SetForegroundColor(Color::Blue),
+        Print(" to enable logging       │\r\n"),
+    )?;
+
+    execute!(
+        stdout,
+        SetForegroundColor(Color::DarkGrey),
+        Print("  │   Press any other key to continue   │\r\n"),
+        SetForegroundColor(Color::Blue),
+        Print("  │                                     │\r\n"),
+        SetForegroundColor(Color::DarkGrey),
+        Print("  │   (or --log / --no-log to skip)     │\r\n"),
+        SetForegroundColor(Color::Blue),
+        Print("  │                                     │\r\n"),
+        Print("  ╰─────────────────────────────────────╯\r\n"),
+        SetForegroundColor(Color::Reset),
+    )?;
+
+    stdout.flush()?;
+
+    // Wait for any key press
+    loop {
+        if event::poll(Duration::from_millis(100))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    match key.code {
+                        KeyCode::Char('l') | KeyCode::Char('L') => {
+                            clear_and_reset(&mut stdout)?;
+                            return Ok(true);
+                        }
+                        KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                            // Ctrl+C - treat as no logging
+                            clear_and_reset(&mut stdout)?;
+                            return Ok(false);
+                        }
+                        _ => {
+                            // Any other key - continue without logging
+                            clear_and_reset(&mut stdout)?;
+                            return Ok(false);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

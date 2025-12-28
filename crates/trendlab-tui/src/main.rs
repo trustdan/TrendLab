@@ -20,6 +20,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use trendlab_logging::LogConfig;
 
 mod app;
 mod panels;
@@ -30,6 +31,16 @@ use app::{App, Panel};
 use worker::{spawn_worker, WorkerChannels, WorkerCommand, WorkerUpdate};
 
 fn main() -> Result<()> {
+    // Initialize logging from environment (set by launcher)
+    // TUI logs to file only to avoid interfering with the terminal UI
+    let log_config = LogConfig::from_env();
+    let _log_guard = if log_config.enabled {
+        tracing::info!("TUI starting with logging enabled");
+        trendlab_logging::init_tui_logging(&log_config)
+    } else {
+        None
+    };
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -130,6 +141,11 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
     // Handle startup modal
     if app.startup.active {
         return handle_startup_key(app, code, channels);
+    }
+
+    // Handle YOLO config modal
+    if app.yolo.show_config {
+        return handle_yolo_config_key(app, code, channels);
     }
 
     // Handle search mode in Data panel
@@ -247,9 +263,14 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
         }
 
         KeyCode::Char('y') | KeyCode::Char('Y') => {
-            // 'y' for YOLO mode - continuous auto-optimization
+            // 'y' for YOLO mode - show config modal
             if !app.yolo.enabled && !app.sweep.is_running {
-                app.start_yolo_mode(channels);
+                // Initialize config from current app state
+                app.yolo.config.start_date = app.fetch_range.0;
+                app.yolo.config.end_date = app.fetch_range.1;
+                app.yolo.config.randomization_pct = app.yolo.randomization_pct;
+                app.yolo.config.focused_field = app::YoloConfigField::StartDate;
+                app.yolo.show_config = true;
             } else if app.yolo.enabled {
                 app.status_message = "YOLO mode running. Press ESC to stop.".to_string();
             } else if app.sweep.is_running {
@@ -535,6 +556,118 @@ fn handle_startup_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -
             app.start_full_auto(channels);
             KeyResult::Continue
         }
+        _ => KeyResult::Continue,
+    }
+}
+
+/// Handle key input for YOLO config modal
+fn handle_yolo_config_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyResult {
+    use app::YoloConfigField;
+    use trendlab_core::SweepDepth;
+
+    match code {
+        KeyCode::Esc => {
+            // Close modal without starting YOLO
+            app.yolo.show_config = false;
+            app.status_message = "YOLO config cancelled.".to_string();
+            KeyResult::Continue
+        }
+
+        KeyCode::Tab | KeyCode::Down | KeyCode::Char('j') => {
+            // Move to next field
+            app.yolo.config.focused_field = app.yolo.config.focused_field.next();
+            KeyResult::Continue
+        }
+
+        KeyCode::BackTab | KeyCode::Up | KeyCode::Char('k') => {
+            // Move to previous field
+            app.yolo.config.focused_field = app.yolo.config.focused_field.prev();
+            KeyResult::Continue
+        }
+
+        KeyCode::Left | KeyCode::Char('h') => {
+            // Decrease value
+            match app.yolo.config.focused_field {
+                YoloConfigField::StartDate => {
+                    // Move start date back 30 days
+                    app.yolo.config.start_date -= chrono::Duration::days(30);
+                }
+                YoloConfigField::EndDate => {
+                    // Move end date back 30 days (but not before start)
+                    let new_end = app.yolo.config.end_date - chrono::Duration::days(30);
+                    if new_end > app.yolo.config.start_date {
+                        app.yolo.config.end_date = new_end;
+                    }
+                }
+                YoloConfigField::Randomization => {
+                    // Decrease by 5%
+                    app.yolo.config.randomization_pct =
+                        (app.yolo.config.randomization_pct - 0.05).max(0.0);
+                }
+                YoloConfigField::SweepDepth => {
+                    // Cycle to previous depth
+                    let depths = SweepDepth::all();
+                    let current_idx = depths
+                        .iter()
+                        .position(|d| *d == app.yolo.config.sweep_depth)
+                        .unwrap_or(0);
+                    if current_idx > 0 {
+                        app.yolo.config.sweep_depth = depths[current_idx - 1];
+                    }
+                }
+            }
+            KeyResult::Continue
+        }
+
+        KeyCode::Right | KeyCode::Char('l') => {
+            // Increase value
+            match app.yolo.config.focused_field {
+                YoloConfigField::StartDate => {
+                    // Move start date forward 30 days (but not past end)
+                    let new_start = app.yolo.config.start_date + chrono::Duration::days(30);
+                    if new_start < app.yolo.config.end_date {
+                        app.yolo.config.start_date = new_start;
+                    }
+                }
+                YoloConfigField::EndDate => {
+                    // Move end date forward 30 days (but not past today)
+                    let today = chrono::Local::now().date_naive();
+                    let new_end = app.yolo.config.end_date + chrono::Duration::days(30);
+                    if new_end <= today {
+                        app.yolo.config.end_date = new_end;
+                    } else {
+                        app.yolo.config.end_date = today;
+                    }
+                }
+                YoloConfigField::Randomization => {
+                    // Increase by 5%
+                    app.yolo.config.randomization_pct =
+                        (app.yolo.config.randomization_pct + 0.05).min(1.0);
+                }
+                YoloConfigField::SweepDepth => {
+                    // Cycle to next depth
+                    let depths = SweepDepth::all();
+                    let current_idx = depths
+                        .iter()
+                        .position(|d| *d == app.yolo.config.sweep_depth)
+                        .unwrap_or(0);
+                    if current_idx < depths.len() - 1 {
+                        app.yolo.config.sweep_depth = depths[current_idx + 1];
+                    }
+                }
+            }
+            KeyResult::Continue
+        }
+
+        KeyCode::Enter => {
+            // Apply config and start YOLO mode
+            app.fetch_range = (app.yolo.config.start_date, app.yolo.config.end_date);
+            app.yolo.randomization_pct = app.yolo.config.randomization_pct;
+            app.yolo.show_config = false;
+            app.start_yolo_mode(channels);
+            KeyResult::Continue
+        }
+
         _ => KeyResult::Continue,
     }
 }
@@ -905,7 +1038,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                         strategy_type: entry.strategy_type,
                         config_display: best.config_id.display(),
                         equity: best.equity_curve.clone(),
-                        dates: vec![], // TODO: Add dates to StrategyBestResult
+                        dates: best.dates.clone(),
                         metrics: best.metrics.clone(),
                     });
                 }
@@ -920,7 +1053,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                     strategy_type: best.strategy_type,
                     config_display: best.config_id.display(),
                     equity: best.equity_curve.clone(),
-                    dates: vec![], // TODO: Add dates to StrategyBestResult
+                    dates: best.dates.clone(),
                     metrics: best.metrics.clone(),
                 });
             }

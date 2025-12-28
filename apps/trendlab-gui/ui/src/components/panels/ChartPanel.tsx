@@ -72,15 +72,28 @@ export function ChartPanel() {
 
   useKeyboardNavigation(handleAction);
 
-  // Load chart state on mount
+  // Load chart state and data on mount (sequential to avoid race condition)
   useEffect(() => {
-    loadChartState();
-  }, [loadChartState]);
+    let cancelled = false;
+    const init = async () => {
+      await loadChartState();
+      if (!cancelled) {
+        await loadChartData();
+      }
+    };
+    init();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadChartState, loadChartData]);
 
-  // Load chart data when mode or selection changes
+  // Reload chart data when mode or selection changes (after initial load)
   useEffect(() => {
+    // Skip on first render - handled by init above
+    const isInitialRender = chartData === null && !chartLoading && !chartError;
+    if (isInitialRender) return;
     loadChartData();
-  }, [loadChartData, chartMode, chartSymbol]);
+  }, [chartMode, chartSymbol]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle mode change
   const handleModeChange = useCallback(

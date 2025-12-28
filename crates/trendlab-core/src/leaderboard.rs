@@ -179,6 +179,145 @@ pub fn compute_confidence_from_equity(equity_curve: &[f64]) -> Option<Confidence
     }
 }
 
+/// Compute a confidence grade for *cross-symbol* results using cross-sectional evidence.
+///
+/// Rationale:
+/// - `compute_confidence_from_equity` measures time-series significance of returns.
+/// - For YOLO cross-symbol aggregation we care about robustness *across symbols*.
+///
+/// This grades confidence by bootstrapping the mean per-symbol Sharpe ratio and
+/// checking whether the lower bound is meaningfully positive.
+///
+/// Returns `Insufficient` if there are too few symbols to be meaningful.
+pub fn compute_cross_symbol_confidence_from_metrics(
+    per_symbol: &HashMap<String, Metrics>,
+) -> ConfidenceGrade {
+    use crate::statistics::{bootstrap_ci, BootstrapConfig};
+
+    // Need enough symbols to make a cross-sectional statement.
+    // (10 is a pragmatic minimum; typical YOLO runs use 30-100+)
+    if per_symbol.len() < 10 {
+        return ConfidenceGrade::Insufficient;
+    }
+
+    let sharpes: Vec<f64> = per_symbol.values().map(|m| m.sharpe).collect();
+    if sharpes.len() < 10 {
+        return ConfidenceGrade::Insufficient;
+    }
+
+    // Tail/robustness guardrails.
+    // These thresholds are intentionally conservative: YOLO should avoid strategies
+    // that have strong averages but catastrophic tails.
+    let min_symbol_sharpe = sharpes
+        .iter()
+        .copied()
+        .fold(f64::INFINITY, f64::min);
+    let positive_frac = sharpes.iter().filter(|&&x| x > 0.0).count() as f64 / sharpes.len() as f64;
+
+    // Bootstrap the mean Sharpe across symbols.
+    let cfg = BootstrapConfig::quick();
+    let result = match bootstrap_ci(&sharpes, |xs| xs.iter().sum::<f64>() / xs.len() as f64, &cfg) {
+        Ok(r) => r,
+        Err(_) => return ConfidenceGrade::Insufficient,
+    };
+
+    // Grade thresholds:
+    // - High: mean Sharpe is strongly positive with a reasonably tight CI
+    // - Medium: mean Sharpe is significantly positive (ci_lower > 0)
+    // - Low: not significantly positive
+    //
+    // NOTE: These thresholds are intentionally less strict than the time-series version
+    // because cross-sectional uncertainty behaves differently.
+    if result.ci_lower > 0.50
+        && result.ci_width() < 0.75
+        && positive_frac >= 0.80
+        && min_symbol_sharpe > -0.25
+    {
+        ConfidenceGrade::High
+    } else if result.ci_lower > 0.0 && positive_frac >= 0.70 && min_symbol_sharpe > -0.75 {
+        ConfidenceGrade::Medium
+    } else {
+        ConfidenceGrade::Low
+    }
+}
+
+/// Compute a confidence grade for *cross-sector* robustness.
+///
+/// This is a stricter, intent-aligned validation for YOLO mode:
+/// - Group per-symbol metrics into sectors
+/// - Compute mean Sharpe per sector
+/// - Bootstrap the mean across sectors
+/// - Add guardrails so a single "bad sector" can prevent a High grade
+///
+/// Returns `None` if there isn't enough sector coverage to make a meaningful statement.
+pub fn compute_cross_sector_confidence_from_metrics(
+    per_symbol: &HashMap<String, Metrics>,
+    per_symbol_sectors: &HashMap<String, String>,
+) -> Option<ConfidenceGrade> {
+    use crate::statistics::{bootstrap_ci, BootstrapConfig};
+
+    // Need a reasonable number of symbols total (prevents tiny-sample weirdness).
+    if per_symbol.len() < 10 {
+        return None;
+    }
+
+    // Group Sharpe values by sector id.
+    let mut by_sector: HashMap<String, Vec<f64>> = HashMap::new();
+    for (sym, metrics) in per_symbol {
+        let Some(sector_id) = per_symbol_sectors.get(sym) else {
+            continue;
+        };
+        by_sector.entry(sector_id.clone()).or_default().push(metrics.sharpe);
+    }
+
+    // Need enough distinct sectors to talk about "cross-sector" robustness.
+    if by_sector.len() < 5 {
+        return None;
+    }
+
+    // Compute sector mean Sharpe.
+    let mut sector_means: Vec<f64> = Vec::with_capacity(by_sector.len());
+    for sharpes in by_sector.values() {
+        if sharpes.is_empty() {
+            continue;
+        }
+        let mean = sharpes.iter().sum::<f64>() / sharpes.len() as f64;
+        sector_means.push(mean);
+    }
+
+    if sector_means.len() < 5 {
+        return None;
+    }
+
+    let worst_sector_mean = sector_means
+        .iter()
+        .copied()
+        .fold(f64::INFINITY, f64::min);
+    let positive_sectors = sector_means.iter().filter(|&&x| x > 0.0).count();
+    let positive_frac = positive_sectors as f64 / sector_means.len() as f64;
+
+    // Bootstrap the mean across sectors (equal-weighted by sector).
+    let cfg = BootstrapConfig::quick();
+    let result = bootstrap_ci(&sector_means, |xs| xs.iter().sum::<f64>() / xs.len() as f64, &cfg)
+        .ok()?;
+
+    // Sector-aware grading:
+    // - High: significantly strong, tight, and no sector is outright bad
+    // - Medium: significantly positive and most sectors are positive
+    // - Low: otherwise
+    if result.ci_lower > 0.50
+        && result.ci_width() < 0.75
+        && positive_frac >= 0.80
+        && worst_sector_mean > 0.0
+    {
+        Some(ConfidenceGrade::High)
+    } else if result.ci_lower > 0.0 && positive_frac >= 0.70 && worst_sector_mean > -0.25 {
+        Some(ConfidenceGrade::Medium)
+    } else {
+        Some(ConfidenceGrade::Low)
+    }
+}
+
 // =============================================================================
 // Leaderboard
 // =============================================================================
@@ -236,22 +375,42 @@ impl Leaderboard {
     /// - If full and new Sharpe > worst: replace worst
     pub fn try_insert(&mut self, entry: LeaderboardEntry) -> bool {
         let hash = entry.config_hash();
+        let new_sharpe = entry.metrics.sharpe;
+        let symbol = entry.symbol.as_deref().unwrap_or("N/A");
 
         // Check for existing entry with same config
         if let Some(pos) = self.entries.iter().position(|e| e.config_hash() == hash) {
             // Same config exists - only replace if better Sharpe
-            if entry.metrics.sharpe > self.entries[pos].metrics.sharpe {
+            if new_sharpe > self.entries[pos].metrics.sharpe {
+                tracing::debug!(
+                    symbol = %symbol,
+                    old_sharpe = %self.entries[pos].metrics.sharpe,
+                    new_sharpe = %new_sharpe,
+                    "Leaderboard: replaced existing entry with better Sharpe"
+                );
                 self.entries[pos] = entry;
                 self.sort_and_rerank();
                 self.last_updated = Utc::now();
                 return true;
             }
+            tracing::trace!(
+                symbol = %symbol,
+                existing_sharpe = %self.entries[pos].metrics.sharpe,
+                new_sharpe = %new_sharpe,
+                "Leaderboard: rejected duplicate (not better)"
+            );
             return false;
         }
 
         // New config - check if we should add it
         if self.entries.len() < self.max_entries {
             // Not full, just add
+            tracing::debug!(
+                symbol = %symbol,
+                sharpe = %new_sharpe,
+                rank = self.entries.len() + 1,
+                "Leaderboard: added new entry (not full)"
+            );
             self.entries.push(entry);
             self.sort_and_rerank();
             self.last_updated = Utc::now();
@@ -260,8 +419,14 @@ impl Leaderboard {
 
         // Full - check if better than worst
         if let Some(worst) = self.entries.last() {
-            if entry.metrics.sharpe > worst.metrics.sharpe {
+            if new_sharpe > worst.metrics.sharpe {
                 // Replace worst
+                tracing::debug!(
+                    symbol = %symbol,
+                    sharpe = %new_sharpe,
+                    replaced_sharpe = %worst.metrics.sharpe,
+                    "Leaderboard: replaced worst entry"
+                );
                 self.entries.pop();
                 self.entries.push(entry);
                 self.sort_and_rerank();
@@ -270,6 +435,11 @@ impl Leaderboard {
             }
         }
 
+        tracing::trace!(
+            symbol = %symbol,
+            sharpe = %new_sharpe,
+            "Leaderboard: rejected (worse than worst)"
+        );
         false
     }
 
@@ -582,21 +752,44 @@ impl CrossSymbolLeaderboard {
     pub fn try_insert(&mut self, entry: AggregatedConfigResult) -> bool {
         let hash = entry.config_hash();
         let new_value = entry.aggregate_metrics.rank_value(self.rank_by);
+        let config_desc = format!("{:?}", entry.config_id);
+        let num_symbols = entry.symbols.len();
 
         // Check for existing entry with same config
         if let Some(pos) = self.entries.iter().position(|e| e.config_hash() == hash) {
             let existing_value = self.entries[pos].aggregate_metrics.rank_value(self.rank_by);
             if new_value > existing_value {
+                tracing::debug!(
+                    config = %config_desc,
+                    symbols = num_symbols,
+                    old_value = %existing_value,
+                    new_value = %new_value,
+                    "CrossSymbolLeaderboard: replaced existing entry"
+                );
                 self.entries[pos] = entry;
                 self.sort_and_rerank();
                 self.last_updated = Utc::now();
                 return true;
             }
+            tracing::trace!(
+                config = %config_desc,
+                existing_value = %existing_value,
+                new_value = %new_value,
+                "CrossSymbolLeaderboard: rejected duplicate (not better)"
+            );
             return false;
         }
 
         // New config
         if self.entries.len() < self.max_entries {
+            tracing::debug!(
+                config = %config_desc,
+                symbols = num_symbols,
+                avg_sharpe = %entry.aggregate_metrics.avg_sharpe,
+                hit_rate = %entry.aggregate_metrics.hit_rate,
+                rank = self.entries.len() + 1,
+                "CrossSymbolLeaderboard: added new entry"
+            );
             self.entries.push(entry);
             self.sort_and_rerank();
             self.last_updated = Utc::now();
@@ -607,6 +800,13 @@ impl CrossSymbolLeaderboard {
         if let Some(worst) = self.entries.last() {
             let worst_value = worst.aggregate_metrics.rank_value(self.rank_by);
             if new_value > worst_value {
+                tracing::debug!(
+                    config = %config_desc,
+                    symbols = num_symbols,
+                    new_value = %new_value,
+                    replaced_value = %worst_value,
+                    "CrossSymbolLeaderboard: replaced worst entry"
+                );
                 self.entries.pop();
                 self.entries.push(entry);
                 self.sort_and_rerank();
@@ -615,6 +815,11 @@ impl CrossSymbolLeaderboard {
             }
         }
 
+        tracing::trace!(
+            config = %config_desc,
+            new_value = %new_value,
+            "CrossSymbolLeaderboard: rejected (worse than worst)"
+        );
         false
     }
 

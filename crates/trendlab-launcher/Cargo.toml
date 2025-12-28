@@ -31,6 +31,10 @@ thiserror.workspace = true
 # For colored console output (prompt)
 colored.workspace = true
 
+# Logging
+tracing.workspace = true
+trendlab-logging.workspace = true
+
 # Platform-specific dependencies
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

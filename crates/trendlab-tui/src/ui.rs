@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, Panel};
+use crate::app::{App, Panel, YoloConfigField};
 use crate::panels;
 
 /// Tokyo Night color palette
@@ -79,6 +79,11 @@ pub fn draw(f: &mut Frame, app: &App) {
     // Startup modal overlay (draw last so it's on top)
     if app.startup.active {
         draw_startup_modal(f, app);
+    }
+
+    // YOLO config modal overlay
+    if app.yolo.show_config {
+        draw_yolo_config_modal(f, app);
     }
 }
 
@@ -397,4 +402,187 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(vertical);
 
     horizontal_layout[1]
+}
+
+fn draw_yolo_config_modal(f: &mut Frame, app: &App) {
+    use trendlab_core::SweepDepth;
+
+    // Centered popup (smaller than startup modal)
+    let area = centered_rect(60, 50, f.area());
+
+    let config = &app.yolo.config;
+    let focused = config.focused_field;
+
+    let mut lines: Vec<Line> = vec![
+        Line::from(vec![
+            Span::styled(
+                "YOLO Mode Configuration",
+                Style::default()
+                    .fg(colors::MAGENTA)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
+    ];
+
+    // Start Date field
+    let start_date_style = if focused == YoloConfigField::StartDate {
+        Style::default()
+            .fg(colors::GREEN)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(colors::FG)
+    };
+    let start_marker = if focused == YoloConfigField::StartDate {
+        "▶ "
+    } else {
+        "  "
+    };
+    lines.push(Line::from(vec![
+        Span::styled(start_marker, start_date_style),
+        Span::styled("Start Date: ", Style::default().fg(colors::FG_DARK)),
+        Span::styled(
+            config.start_date.format("%Y-%m-%d").to_string(),
+            start_date_style,
+        ),
+    ]));
+
+    // End Date field
+    let end_date_style = if focused == YoloConfigField::EndDate {
+        Style::default()
+            .fg(colors::GREEN)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(colors::FG)
+    };
+    let end_marker = if focused == YoloConfigField::EndDate {
+        "▶ "
+    } else {
+        "  "
+    };
+    lines.push(Line::from(vec![
+        Span::styled(end_marker, end_date_style),
+        Span::styled("End Date:   ", Style::default().fg(colors::FG_DARK)),
+        Span::styled(
+            config.end_date.format("%Y-%m-%d").to_string(),
+            end_date_style,
+        ),
+    ]));
+
+    // Randomization percentage
+    let random_style = if focused == YoloConfigField::Randomization {
+        Style::default()
+            .fg(colors::GREEN)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(colors::FG)
+    };
+    let random_marker = if focused == YoloConfigField::Randomization {
+        "▶ "
+    } else {
+        "  "
+    };
+    lines.push(Line::from(vec![
+        Span::styled(random_marker, random_style),
+        Span::styled("Randomize:  ", Style::default().fg(colors::FG_DARK)),
+        Span::styled(format!("{:.0}%", config.randomization_pct * 100.0), random_style),
+    ]));
+
+    // Sweep depth
+    let depth_style = if focused == YoloConfigField::SweepDepth {
+        Style::default()
+            .fg(colors::GREEN)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(colors::FG)
+    };
+    let depth_marker = if focused == YoloConfigField::SweepDepth {
+        "▶ "
+    } else {
+        "  "
+    };
+    lines.push(Line::from(vec![
+        Span::styled(depth_marker, depth_style),
+        Span::styled("Sweep Depth:", Style::default().fg(colors::FG_DARK)),
+        Span::styled(format!(" {}", config.sweep_depth.name()), depth_style),
+    ]));
+
+    lines.push(Line::from(""));
+
+    // Show sweep depth options horizontally when focused
+    if focused == YoloConfigField::SweepDepth {
+        let depths = SweepDepth::all();
+        let mut depth_spans = vec![Span::raw("    ")];
+        for (i, depth) in depths.iter().enumerate() {
+            if i > 0 {
+                depth_spans.push(Span::styled("  |  ", Style::default().fg(colors::FG_DARK)));
+            }
+            let is_selected = *depth == config.sweep_depth;
+            let style = if is_selected {
+                Style::default()
+                    .fg(colors::CYAN)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(colors::FG_DARK)
+            };
+            depth_spans.push(Span::styled(depth.name(), style));
+        }
+        lines.push(Line::from(depth_spans));
+        lines.push(Line::from(""));
+    }
+
+    // Help text
+    lines.push(Line::from(vec![
+        Span::styled("↑↓", Style::default().fg(colors::CYAN)),
+        Span::styled(" navigate  ", Style::default().fg(colors::FG_DARK)),
+        Span::styled("←→", Style::default().fg(colors::CYAN)),
+        Span::styled(" adjust value", Style::default().fg(colors::FG_DARK)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Enter", Style::default().fg(colors::YELLOW)),
+        Span::styled(" start YOLO  ", Style::default().fg(colors::FG_DARK)),
+        Span::styled("Esc", Style::default().fg(colors::RED)),
+        Span::styled(" cancel", Style::default().fg(colors::FG_DARK)),
+    ]));
+
+    lines.push(Line::from(""));
+
+    // Show what YOLO will do
+    lines.push(Line::from(vec![Span::styled(
+        format!(
+            "Will sweep {} from {} to {}",
+            config.sweep_depth.name().to_lowercase(),
+            config.start_date.format("%Y-%m-%d"),
+            config.end_date.format("%Y-%m-%d")
+        ),
+        Style::default().fg(colors::FG_DARK),
+    )]));
+    if config.randomization_pct > 0.0 {
+        lines.push(Line::from(vec![Span::styled(
+            format!(
+                "with ±{:.0}% date randomization",
+                config.randomization_pct * 100.0
+            ),
+            Style::default().fg(colors::ORANGE),
+        )]));
+    }
+
+    // Clear the area first
+    f.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(colors::BORDER_ACTIVE))
+        .style(Style::default().bg(colors::BG))
+        .title(Span::styled(
+            " YOLO Config ",
+            Style::default()
+                .fg(colors::BLUE)
+                .add_modifier(Modifier::BOLD),
+        ));
+
+    let para = Paragraph::new(lines)
+        .block(block)
+        .style(Style::default().fg(colors::FG).bg(colors::BG));
+    f.render_widget(para, area);
 }

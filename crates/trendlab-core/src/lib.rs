@@ -79,7 +79,8 @@ pub use indicators_polars::{
     true_range_expr, williams_r_expr, IndicatorSet, IndicatorSpec,
 };
 pub use leaderboard::{
-    compute_confidence_from_equity, generate_session_id, AggregatedConfigResult,
+    compute_confidence_from_equity, compute_cross_sector_confidence_from_metrics,
+    compute_cross_symbol_confidence_from_metrics, generate_session_id, AggregatedConfigResult,
     AggregatedMetrics, CrossSymbolLeaderboard, CrossSymbolRankMetric, Leaderboard,
     LeaderboardEntry, LeaderboardScope,
 };

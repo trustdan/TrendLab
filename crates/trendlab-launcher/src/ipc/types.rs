@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Events sent from GUI to Companion terminal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,12 +81,28 @@ pub enum CompanionEvent {
         max_dd: f64,
     },
 
-    /// Log message.
+    /// Log message (simple format).
     Log {
         /// Log level.
         level: LogLevel,
         /// Log message.
         message: String,
+        /// Timestamp.
+        ts: DateTime<Utc>,
+    },
+
+    /// Detailed log message with tracing context.
+    LogDetailed {
+        /// Log level.
+        level: LogLevel,
+        /// Target module path (e.g., "trendlab_gui::commands::yolo").
+        target: String,
+        /// Log message.
+        message: String,
+        /// Active span names (outermost to innermost).
+        spans: Vec<String>,
+        /// Additional structured fields from the event.
+        fields: HashMap<String, String>,
         /// Timestamp.
         ts: DateTime<Utc>,
     },
@@ -129,6 +146,8 @@ impl std::fmt::Display for JobType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LogLevel {
+    /// Trace level (most verbose).
+    Trace,
     /// Debug information.
     Debug,
     /// Informational message.
@@ -142,10 +161,23 @@ pub enum LogLevel {
 impl std::fmt::Display for LogLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            LogLevel::Trace => write!(f, "TRACE"),
             LogLevel::Debug => write!(f, "DEBUG"),
             LogLevel::Info => write!(f, "INFO"),
             LogLevel::Warn => write!(f, "WARN"),
             LogLevel::Error => write!(f, "ERROR"),
+        }
+    }
+}
+
+impl From<trendlab_logging::LogLevel> for LogLevel {
+    fn from(level: trendlab_logging::LogLevel) -> Self {
+        match level {
+            trendlab_logging::LogLevel::Trace => LogLevel::Trace,
+            trendlab_logging::LogLevel::Debug => LogLevel::Debug,
+            trendlab_logging::LogLevel::Info => LogLevel::Info,
+            trendlab_logging::LogLevel::Warn => LogLevel::Warn,
+            trendlab_logging::LogLevel::Error => LogLevel::Error,
         }
     }
 }
@@ -198,6 +230,18 @@ mod tests {
                 message: "Sweep started".to_string(),
                 ts: Utc::now(),
             },
+            CompanionEvent::LogDetailed {
+                level: LogLevel::Debug,
+                target: "trendlab_gui::yolo".to_string(),
+                message: "Starting iteration".to_string(),
+                spans: vec!["yolo_mode".to_string(), "iteration_1".to_string()],
+                fields: {
+                    let mut fields = HashMap::new();
+                    fields.insert("configs".to_string(), "100".to_string());
+                    fields
+                },
+                ts: Utc::now(),
+            },
             CompanionEvent::Status {
                 message: "Running sweep...".to_string(),
             },
@@ -227,6 +271,7 @@ mod tests {
 
     #[test]
     fn test_log_level_display() {
+        assert_eq!(LogLevel::Trace.to_string(), "TRACE");
         assert_eq!(LogLevel::Debug.to_string(), "DEBUG");
         assert_eq!(LogLevel::Info.to_string(), "INFO");
         assert_eq!(LogLevel::Warn.to_string(), "WARN");

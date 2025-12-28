@@ -18,6 +18,7 @@ linfa.workspace = true
 linfa-clustering.workspace = true
 ndarray.workspace = true
 rand.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 # Unit tests use standard Rust test framework

@@ -6,21 +6,75 @@ pub mod state;
 
 use state::AppState;
 use tauri::Manager;
+use trendlab_launcher::ipc::CompanionEvent;
+use trendlab_logging::{LogConfig, LogEvent};
+
+/// Forward log events from the tracing layer to the companion terminal via IPC.
+async fn log_forwarder(
+    mut rx: tokio::sync::mpsc::Receiver<LogEvent>,
+    app_handle: tauri::AppHandle,
+) {
+    while let Some(log_event) = rx.recv().await {
+        let state = app_handle.state::<AppState>();
+
+        // Convert LogEvent to CompanionEvent::LogDetailed
+        let companion_event = CompanionEvent::LogDetailed {
+            level: log_event.level.into(),
+            target: log_event.target,
+            message: log_event.message,
+            spans: log_event.spans,
+            fields: log_event.fields,
+            ts: log_event.timestamp,
+        };
+
+        state.emit_to_companion(companion_event).await;
+    }
+}
 
 pub fn run() {
+    // Initialize logging from environment if enabled
+    let log_config = LogConfig::from_env();
+
+    // Create channel for IPC log forwarding (if logging enabled)
+    let (log_tx, log_rx) = if log_config.enabled {
+        let (tx, rx) = tokio::sync::mpsc::channel::<LogEvent>(1000);
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
+
+    // Initialize logging (file + optional IPC)
+    let _log_guard = if log_config.enabled {
+        tracing::info!("GUI starting with logging enabled");
+        trendlab_logging::init_gui_logging(&log_config, log_tx)
+    } else {
+        None
+    };
+
     let app_state = AppState::new();
     // Initialize cached symbols from parquet directory
     app_state.init_cached_symbols();
 
     tauri::Builder::default()
         .manage(app_state)
-        .setup(|app| {
-            // Initialize companion client in async context
+        .setup(move |app| {
             let app_handle = app.handle().clone();
+
+            // Initialize companion client in async context
+            let app_handle_companion = app_handle.clone();
             tauri::async_runtime::spawn(async move {
-                let state = app_handle.state::<AppState>();
+                let state = app_handle_companion.state::<AppState>();
                 state.init_companion().await;
             });
+
+            // Start log forwarder if logging is enabled
+            if let Some(rx) = log_rx {
+                let app_handle_logs = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    log_forwarder(rx, app_handle_logs).await;
+                });
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {

@@ -116,6 +116,10 @@ pub enum WorkerCommand {
     StartYoloMode {
         /// Symbols to sweep
         symbols: Vec<String>,
+        /// Optional mapping of symbol -> sector_id (e.g., "AAPL" -> "technology")
+        ///
+        /// If provided, YOLO results can be enriched with sector info for sector-aware validation.
+        symbol_sector_ids: HashMap<String, String>,
         /// Date range start
         start: NaiveDate,
         /// Date range end
@@ -470,6 +474,7 @@ fn worker_loop(
 
             WorkerCommand::StartYoloMode {
                 symbols,
+                symbol_sector_ids,
                 start,
                 end,
                 strategy_grid,
@@ -480,6 +485,7 @@ fn worker_loop(
             } => {
                 handle_yolo_mode(
                     &symbols,
+                    &symbol_sector_ids,
                     start,
                     end,
                     &strategy_grid,
@@ -1540,6 +1546,7 @@ fn handle_compute_analysis(
 /// - Leaderboard: per-symbol best configs (secondary)
 fn handle_yolo_mode(
     symbols: &[String],
+    symbol_sector_ids: &HashMap<String, String>,
     start: NaiveDate,
     end: NaiveDate,
     base_grid: &MultiStrategyGrid,
@@ -1754,6 +1761,12 @@ fn handle_yolo_mode(
                                     .iter()
                                     .map(|e| e.equity)
                                     .collect(),
+                                dates: result
+                                    .backtest_result
+                                    .equity
+                                    .iter()
+                                    .map(|e| e.ts)
+                                    .collect(),
                             });
                         }
                     }
@@ -1771,16 +1784,33 @@ fn handle_yolo_mode(
                 let (combined_equity, combined_dates) =
                     combine_equity_curves(&per_symbol_equity, &per_symbol_dates, 100_000.0);
 
-                // Compute confidence grade from combined equity curve
-                let confidence_grade =
-                    trendlab_core::compute_confidence_from_equity(&combined_equity);
+                // Build per-symbol sector mapping for this config (only for symbols that actually produced metrics)
+                let mut per_symbol_sectors: HashMap<String, String> = HashMap::new();
+                for sym in per_symbol_metrics.keys() {
+                    if let Some(sector_id) = symbol_sector_ids.get(sym) {
+                        per_symbol_sectors.insert(sym.clone(), sector_id.clone());
+                    }
+                }
+
+                // Confidence for YOLO cross-symbol results:
+                // Prefer sector-aware robustness when we have enough sector coverage; otherwise fall back
+                // to cross-sectional (per-symbol) bootstrap.
+                let confidence_grade = Some(
+                    trendlab_core::compute_cross_sector_confidence_from_metrics(
+                        &per_symbol_metrics,
+                        &per_symbol_sectors,
+                    )
+                    .unwrap_or_else(|| {
+                        trendlab_core::compute_cross_symbol_confidence_from_metrics(&per_symbol_metrics)
+                    }),
+                );
 
                 let aggregated_result = AggregatedConfigResult {
                     rank: 0, // Will be set by leaderboard
                     strategy_type: strategy_config.strategy_type,
                     config_id: strategy_config_id.clone(),
                     symbols: per_symbol_metrics.keys().cloned().collect(),
-                    per_symbol_sectors: std::collections::HashMap::new(), // TODO: Fill from universe in Phase 2
+                    per_symbol_sectors,
                     per_symbol_metrics,
                     aggregate_metrics: aggregate_metrics.clone(),
                     combined_equity_curve: combined_equity,

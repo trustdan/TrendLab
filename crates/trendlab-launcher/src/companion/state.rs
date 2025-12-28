@@ -266,6 +266,23 @@ impl CompanionState {
                 self.add_log(level, &message);
             }
 
+            CompanionEvent::LogDetailed {
+                level,
+                target,
+                message,
+                spans,
+                fields: _,
+                ts: _,
+            } => {
+                // Format the message with span context if present
+                let formatted = if spans.is_empty() {
+                    format!("[{}] {}", target, message)
+                } else {
+                    format!("[{} > {}] {}", target, spans.join(" > "), message)
+                };
+                self.add_log(level, &formatted);
+            }
+
             CompanionEvent::Status { message } => {
                 self.status = message;
             }

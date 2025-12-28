@@ -128,6 +128,11 @@ export const createChartSlice: SliceCreator<ChartSlice> = (set, get) => ({
   loadChartState: async () => {
     try {
       const state = await invoke<ChartState>('get_chart_state');
+      console.debug('[Chart] Loaded chart state:', {
+        mode: state.mode,
+        symbol: state.symbol,
+        strategy: state.strategy,
+      });
       set({
         chartMode: state.mode,
         chartSymbol: state.symbol ?? null,
@@ -136,6 +141,7 @@ export const createChartSlice: SliceCreator<ChartSlice> = (set, get) => ({
         chartOverlays: state.overlays,
       });
     } catch (error) {
+      console.error('[Chart] Error loading state:', error);
       set({ chartError: String(error) });
     }
   },
@@ -145,8 +151,14 @@ export const createChartSlice: SliceCreator<ChartSlice> = (set, get) => ({
 
     try {
       const data = await invoke<ChartData>('get_chart_data');
+      console.debug('[Chart] Loaded chart data:', {
+        hasCandles: !!data.candles?.length,
+        hasEquity: !!data.equity?.length,
+        hasCurves: !!data.curves?.length,
+      });
       set({ chartData: data, chartLoading: false });
     } catch (error) {
+      console.error('[Chart] Error loading data:', error);
       set({ chartError: String(error), chartLoading: false, chartData: null });
     }
   },

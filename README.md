@@ -594,7 +594,101 @@ See [docs/roadmap-tauri-gui.md](docs/roadmap-tauri-gui.md) for the detailed impl
 - **Phase 1-6**: Core panels implemented (Data, Strategy, Sweep, Results, Chart)
 - **Phase 7**: Polish (keyboard nav, accessibility, performance) - Complete
 - **Phase 8**: Unified Launcher + Companion Mode - Complete
-- **YOLO Mode**: Auto-optimization with leaderboard - Planned
+- **YOLO Mode**: Auto-optimization with leaderboard - Complete
+
+## YOLO Mode
+
+YOLO Mode is TrendLab's autonomous strategy discovery engine. It continuously explores the parameter space, tracking winning configurations in a persistent leaderboard.
+
+### How It Works
+
+1. **Random Exploration**: Samples strategy configurations with configurable randomization (default 15%)
+2. **Parallel Execution**: Runs backtests across all selected tickers simultaneously
+3. **Leaderboard Ranking**: Maintains top N configurations ranked by Sharpe ratio
+4. **Cross-Symbol Aggregation**: Identifies configs that work across multiple symbols
+5. **Session Persistence**: Results persist across sessions for long-running research
+
+### Leaderboard Views
+
+| View | Description |
+|------|-------------|
+| **Per-Symbol** | Top strategies for each individual ticker |
+| **Cross-Symbol** | Aggregated performance across all tickers (primary view) |
+| **Session** | Results from current session only |
+| **All-Time** | Combined results across all sessions |
+
+Toggle between Session and All-Time views with `t` key.
+
+### Cross-Symbol Metrics
+
+| Metric | Description |
+|--------|-------------|
+| **Avg Sharpe** | Mean Sharpe ratio across all symbols |
+| **Min Sharpe** | Worst-performing symbol (robustness check) |
+| **Hit Rate** | Percentage of symbols with positive Sharpe |
+| **Geo Mean CAGR** | Geometric mean of CAGR across symbols |
+
+### Confidence Grades
+
+Each leaderboard entry displays a statistical confidence badge based on bootstrap analysis.
+
+Important nuance: **YOLO mode is about robustness**, not just “is this equity curve significant?”.
+TrendLab uses different evidence depending on what data is available:
+
+- **Per-Symbol leaderboard**: time-series bootstrap on the strategy’s equity curve (daily returns)
+- **Cross-Symbol leaderboard (default)**: cross-sectional bootstrap on mean per-symbol Sharpe across symbols
+- **Cross-Symbol leaderboard (sector-aware)**: when sector mappings are available and sector coverage is sufficient,
+  we bootstrap across **per-sector mean Sharpe** and apply guardrails (e.g., “worst sector isn’t bad”)
+
+| Badge | Grade | Meaning |
+|-------|-------|---------|
+| ✓✓ (green) | High | CI lower bound > 0.5, tight CI, plus robustness guardrails (e.g., no ugly tail / no bad sector) |
+| ✓ (yellow) | Medium | CI lower bound > 0, plus robustness guardrails (e.g., most symbols/sectors positive, worst bucket not too negative) |
+| ○ (orange) | Low | CI includes 0, wide CI, or robustness guardrails fail |
+| ? (gray) | Insufficient | Not enough samples (e.g., too few days / symbols / sectors) |
+
+### TUI Controls
+
+| Key | Action |
+|-----|--------|
+| `y` | Toggle YOLO mode on/off |
+| `t` | Toggle Session/All-Time view |
+| `↑/↓` | Navigate leaderboard entries |
+| `Enter` | View selected config in Chart panel |
+
+## Statistical Rigor
+
+TrendLab includes a comprehensive statistical analysis suite to guard against overfitting and data mining bias.
+
+### Sector Analysis
+
+Analyze strategy performance by market sector with functions like `sector_performance()`, `sector_summary_ranked()`, `top_per_sector()`, `sector_dispersion()`, and `sector_vs_universe()`.
+
+### ML Clustering
+
+Group similar strategy configurations using K-means clustering via the linfa crate. Clustering helps identify redundant configurations, regime specialists, and robust outliers.
+
+### Walk-Forward Validation
+
+Test out-of-sample performance with rolling validation windows using `generate_walk_forward_folds()` and `WalkForwardConfig`. Also supports time-series cross-validation with `generate_ts_cv_splits()`.
+
+### Bootstrap Confidence Intervals
+
+Compute statistical confidence for Sharpe ratios with `bootstrap_sharpe()`. Presets available: `quick()` (1,000 iterations), `default()` (10,000), `thorough()` (50,000).
+
+### False Discovery Rate Control
+
+Control for multiple comparisons when testing many configurations:
+
+| Method | Controls | Use Case |
+|--------|----------|----------|
+| Benjamini-Hochberg | FDR | Exploratory research |
+| Holm-Bonferroni | FWER | Publication, high stakes |
+| Bonferroni | FWER | Very conservative |
+
+### Permutation Testing
+
+Test if strategy performance differs from random with `permutation_test()`.
 
 ## Backtest Architecture
 
@@ -859,15 +953,15 @@ Goichi Hosoda's multi-component Japanese trend system:
 
 ## Strategy Roadmap
 
-Upcoming strategies organized in implementation phases:
+All planned strategy phases are now complete:
 
-### Phase 1: ATR-Based Channels (Partial ✅)
+### Phase 1: ATR-Based Channels ✅ Complete
 
 | Strategy           | Description                                | Key Parameters                      | Status |
 | ------------------ | ------------------------------------------ | ----------------------------------- | ------ |
 | **Keltner Channel**| Breakout on EMA ± ATR bands                | ema_period, atr_period, multiplier  | ✅ |
-| **STARC Bands**    | Breakout on SMA ± ATR bands                | sma_period, atr_period, multiplier  | Pending |
-| **Supertrend**     | ATR-based trailing stop with regime flips  | atr_period, multiplier              | Pending |
+| **STARC Bands**    | Breakout on SMA ± ATR bands                | sma_period, atr_period, multiplier  | ✅ |
+| **Supertrend**     | ATR-based trailing stop with regime flips  | atr_period, multiplier              | ✅ |
 
 ### Phase 2: Momentum & Direction ✅ Complete
 
@@ -877,29 +971,37 @@ Upcoming strategies organized in implementation phases:
 | **Aroon**             | High/low recency oscillator crossover     | period                                  | ✅ |
 | **Heikin-Ashi**       | Smoothed candle regime detection          | confirmation_bars                       | ✅ |
 
-**Phase 2 Indicators Implemented:**
-- +DM/-DM (directional movement), +DI/-DI (directional indicators), ADX
-- Aroon Up/Down with bars-since-high/low calculation
-- Heikin-Ashi OHLC transform with EWM smoothing
-
-### Phase 3: Price Structure (Pending)
+### Phase 3: Price Structure ✅ Complete
 
 | Strategy           | Description                                 | Key Parameters              | Status |
 | ------------------ | ------------------------------------------- | --------------------------- | ------ |
-| **52-Week High**   | Proximity to annual high (George & Hwang)   | period, entry_pct, exit_pct | Pending |
-| **Darvas Box**     | Classic box breakout (Nicolas Darvas)       | confirmation_bars           | Pending |
-| **Larry Williams** | Range expansion volatility breakout         | range_mult, atr_stop_mult   | Pending |
-| **Bollinger Squeeze** | Volatility contraction breakout          | period, std_mult, squeeze_threshold | Pending |
+| **52-Week High**   | Proximity to annual high (George & Hwang)   | period, entry_pct, exit_pct | ✅ |
+| **Darvas Box**     | Classic box breakout (Nicolas Darvas)       | confirmation_bars           | ✅ |
+| **Larry Williams** | Range expansion volatility breakout         | range_mult, atr_stop_mult   | ✅ |
+| **Bollinger Squeeze** | Volatility contraction breakout          | period, std_mult, squeeze_threshold | ✅ |
 
-New indicators needed: Rolling max/min, Darvas box detection, Bollinger bandwidth
+### Phase 4: Oscillators ✅ Complete
 
-### Phase 4: Complex & Ensemble ✅ Complete
+| Strategy              | Description                                | Key Parameters                     | Status |
+| --------------------- | ------------------------------------------ | ---------------------------------- | ------ |
+| **RSI**               | Wilder's momentum oscillator               | period, oversold, overbought       | ✅ |
+| **MACD**              | Moving Average Convergence Divergence      | fast, slow, signal, entry_mode     | ✅ |
+| **Stochastic**        | %K/%D momentum oscillator                  | k_period, k_smooth, d_period       | ✅ |
+| **Williams %R**       | Inverted stochastic (-100 to 0)            | period                             | ✅ |
+| **CCI**               | Commodity Channel Index                    | period                             | ✅ |
+| **ROC**               | Rate of Change momentum                    | period                             | ✅ |
+
+### Phase 5: Hybrid & Complex ✅ Complete
 
 | Strategy                  | Description                                  | Key Parameters                  | Status |
 | ------------------------- | -------------------------------------------- | ------------------------------- | ------ |
 | **Parabolic SAR**         | Wilder's stop-and-reverse trailing stop      | af_start, af_step, af_max       | ✅ |
 | **Opening Range Breakout**| Weekly/monthly range breakout adaptation     | range_bars, period              | ✅ |
 | **Multi-Horizon Ensemble**| Vote across multiple lookback periods        | base_strategy, horizons, voting | ✅ |
+| **RSI + Bollinger**       | Mean reversion with volatility bands         | rsi_period, bb_period, bb_std   | ✅ |
+| **MACD + ADX Filter**     | Momentum with trend strength filter          | fast, slow, signal, adx_threshold | ✅ |
+| **Oscillator Confluence** | RSI + Stochastic dual confirmation           | rsi_period, stoch_k, stoch_d    | ✅ |
+| **Ichimoku Cloud**        | Japanese multi-component trend system        | tenkan, kijun, senkou_b         | ✅ |
 
 **Ensemble Voting Methods:**
 
@@ -926,6 +1028,13 @@ All indicators are pure functions with no lookahead:
 | ATR Wilder | Wilder's smoothed ATR | `indicators.rs` |
 | Parabolic SAR | Wilder's stop-and-reverse with AF/EP | `indicators.rs` |
 | Opening Range | Weekly/Monthly/Rolling period detection | `indicators.rs` |
+| RSI | Relative Strength Index with Wilder smoothing | `indicators.rs` |
+| MACD | Moving Average Convergence Divergence | `indicators.rs` |
+| Stochastic | %K/%D oscillator with smoothing | `indicators.rs` |
+| Williams %R | Momentum oscillator (-100 to 0) | `indicators.rs` |
+| CCI | Commodity Channel Index | `indicators.rs` |
+| ROC | Rate of Change percentage | `indicators.rs` |
+| Ichimoku | Tenkan, Kijun, Senkou Span A/B, Chikou | `indicators.rs` |
 | Keltner Channel | EMA ± ATR bands | `indicators_polars.rs` |
 | DMI/ADX | +DI, -DI, ADX directional movement | `indicators_polars.rs` |
 | Aroon Up/Down | Bars since high/low oscillator | `indicators_polars.rs` |
@@ -1069,7 +1178,7 @@ Compact equity curve visualization in a single line:
 
 ## BDD Test Coverage
 
-24 Gherkin feature files covering:
+34 Gherkin feature files covering:
 
 | Feature | Tests |
 |---------|-------|
@@ -1086,7 +1195,17 @@ Compact equity curve visualization in a single line:
 | `strategy_dmi_adx.feature` | DMI/ADX directional movement |
 | `strategy_aroon.feature` | Aroon oscillator crossovers |
 | `strategy_heikin_ashi.feature` | Heikin-Ashi regime detection |
-| `indicators.feature` | SMA, EMA, Donchian, ATR, DMI, Aroon, HA |
+| `strategy_rsi.feature` | RSI oversold/overbought crossovers |
+| `strategy_macd.feature` | MACD signal line crossovers |
+| `strategy_stochastic.feature` | Stochastic %K/%D crossovers |
+| `strategy_williams_r.feature` | Williams %R extreme crossovers |
+| `strategy_cci.feature` | CCI trend breakout signals |
+| `strategy_roc.feature` | Rate of Change momentum crossovers |
+| `strategy_rsi_bollinger.feature` | RSI + Bollinger mean reversion |
+| `strategy_macd_adx.feature` | MACD + ADX trend-filtered momentum |
+| `strategy_oscillator_confluence.feature` | RSI + Stochastic multi-confirmation |
+| `strategy_ichimoku.feature` | Ichimoku Cloud trend signals |
+| `indicators.feature` | SMA, EMA, Donchian, ATR, DMI, Aroon, HA, RSI, MACD, Stochastic |
 | `invariants.feature` | No-lookahead, accounting identity |
 | `costs.feature` | Fees and slippage handling |
 | `volatility_sizing.feature` | ATR-based sizing |
