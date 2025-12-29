@@ -466,10 +466,10 @@ fn draw_aggregated_view(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
 
                 let best_cagr = summaries
                     .iter()
-                    .max_by(|a, b| a.cagr.partial_cmp(&b.cagr).unwrap());
+                    .max_by(|a, b| a.cagr.partial_cmp(&b.cagr).unwrap_or(std::cmp::Ordering::Equal));
                 let best_sharpe = summaries
                     .iter()
-                    .max_by(|a, b| a.sharpe.partial_cmp(&b.sharpe).unwrap());
+                    .max_by(|a, b| a.sharpe.partial_cmp(&b.sharpe).unwrap_or(std::cmp::Ordering::Equal));
 
                 lines.push(Line::from(vec![
                     Span::styled("  Avg CAGR: ", Style::default().fg(colors::FG_DARK)),
@@ -719,7 +719,7 @@ fn draw_leaderboard_table(
 
             // Row 3: Best symbols by Sharpe
             let mut sorted_symbols: Vec<_> = entry.per_symbol_metrics.iter().collect();
-            sorted_symbols.sort_by(|a, b| b.1.sharpe.partial_cmp(&a.1.sharpe).unwrap());
+            sorted_symbols.sort_by(|a, b| b.1.sharpe.partial_cmp(&a.1.sharpe).unwrap_or(std::cmp::Ordering::Equal));
 
             let best_symbols: String = sorted_symbols
                 .iter()
@@ -863,7 +863,7 @@ fn draw_leaderboard_details(f: &mut Frame, app: &App, area: Rect, is_active: boo
 
             // Best/Worst symbols
             let mut sorted_symbols: Vec<_> = entry.per_symbol_metrics.iter().collect();
-            sorted_symbols.sort_by(|a, b| b.1.sharpe.partial_cmp(&a.1.sharpe).unwrap());
+            sorted_symbols.sort_by(|a, b| b.1.sharpe.partial_cmp(&a.1.sharpe).unwrap_or(std::cmp::Ordering::Equal));
 
             let best_symbols = sorted_symbols
                 .iter()
@@ -961,7 +961,7 @@ fn compute_sector_stats(
             (*sector, hit_rate)
         })
         .collect();
-    sector_list.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    sector_list.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     // Format top 4 sectors
     sector_list

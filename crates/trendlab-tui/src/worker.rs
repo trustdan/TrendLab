@@ -1903,11 +1903,12 @@ fn handle_yolo_mode(
         if cancel_flag.load(Ordering::SeqCst) {
             let _ = per_symbol_leaderboard.save(per_symbol_path);
             let _ = cross_symbol_leaderboard.save(cross_symbol_path);
+            let total_configs = cross_symbol_leaderboard.total_configs_tested;
             let _ = update_tx.send(WorkerUpdate::YoloStopped {
                 cross_symbol_leaderboard,
                 per_symbol_leaderboard,
                 total_iterations: iteration,
-                total_configs_tested: 0,
+                total_configs_tested: total_configs,
             });
             return;
         }

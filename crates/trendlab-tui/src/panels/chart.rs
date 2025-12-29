@@ -228,13 +228,15 @@ fn draw_single_equity_chart(f: &mut Frame, app: &App, area: Rect, is_active: boo
     let y_min = equity_data
         .iter()
         .map(|(_, y)| *y)
-        .min_by(|a, b| a.partial_cmp(b).unwrap())
+        .filter(|y| y.is_finite())
+        .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         .unwrap_or(90000.0)
         * 0.95;
     let y_max = equity_data
         .iter()
         .map(|(_, y)| *y)
-        .max_by(|a, b| a.partial_cmp(b).unwrap())
+        .filter(|y| y.is_finite())
+        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         .unwrap_or(150000.0)
         * 1.05;
 
@@ -247,28 +249,28 @@ fn draw_single_equity_chart(f: &mut Frame, app: &App, area: Rect, is_active: boo
         .data(&equity_data)];
 
     // Add drawdown overlay if enabled (also sliced to visible range)
-    let drawdown_data: Vec<(f64, f64)> =
-        if app.chart.show_drawdown && app.chart.drawdown_curve.len() > end_idx {
+    let drawdown_data: Vec<(f64, f64)> = if app.chart.show_drawdown
+        && !app.chart.drawdown_curve.is_empty()
+    {
+        let dd_len = app.chart.drawdown_curve.len();
+        // Calculate safe bounds for drawdown curve
+        let dd_start = start_idx.min(dd_len);
+        let dd_end = end_idx.min(dd_len);
+
+        if dd_start < dd_end {
             // Scale drawdown to fit in the same chart (inverted, as percentage)
             let dd_scale = (y_max - y_min) / 50.0; // Max 50% drawdown fills chart
-            app.chart.drawdown_curve[start_idx..end_idx]
+            app.chart.drawdown_curve[dd_start..dd_end]
                 .iter()
-                .enumerate()
-                .map(|(i, dd)| (i as f64, y_max + dd * dd_scale))
-                .collect()
-        } else if app.chart.show_drawdown && !app.chart.drawdown_curve.is_empty() {
-            // Fallback: use what we have
-            let dd_scale = (y_max - y_min) / 50.0;
-            app.chart
-                .drawdown_curve
-                .iter()
-                .take(end_idx.saturating_sub(start_idx))
                 .enumerate()
                 .map(|(i, dd)| (i as f64, y_max + dd * dd_scale))
                 .collect()
         } else {
             vec![]
-        };
+        }
+    } else {
+        vec![]
+    };
 
     if app.chart.show_drawdown && !drawdown_data.is_empty() {
         datasets.push(
@@ -360,20 +362,27 @@ fn draw_multi_ticker_chart(f: &mut Frame, app: &App, area: Rect, is_active: bool
     let mut y_max = f64::MIN;
 
     for curve in &app.chart.ticker_curves {
-        let curve_end = end_idx.min(curve.equity.len());
-        let curve_start = start_idx.min(curve.equity.len());
-        let data: Vec<(f64, f64)> = curve
-            .equity
-            .get(curve_start..curve_end)
-            .unwrap_or(&[])
+        let curve_len = curve.equity.len();
+        let curve_start = start_idx.min(curve_len);
+        let curve_end = end_idx.min(curve_len);
+
+        // Skip curves that are entirely outside the visible range
+        if curve_start >= curve_end {
+            all_data.push(vec![]); // Keep indices aligned with ticker_curves
+            continue;
+        }
+
+        let data: Vec<(f64, f64)> = curve.equity[curve_start..curve_end]
             .iter()
             .enumerate()
             .map(|(i, v)| (i as f64, *v))
             .collect();
 
         for (_, y) in &data {
-            y_min = y_min.min(*y);
-            y_max = y_max.max(*y);
+            if y.is_finite() {
+                y_min = y_min.min(*y);
+                y_max = y_max.max(*y);
+            }
         }
         all_data.push(data);
     }
@@ -479,13 +488,15 @@ fn draw_portfolio_chart(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
     let y_min = portfolio_data
         .iter()
         .map(|(_, y)| *y)
-        .min_by(|a, b| a.partial_cmp(b).unwrap())
+        .filter(|y| y.is_finite())
+        .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         .unwrap_or(90000.0)
         * 0.95;
     let y_max = portfolio_data
         .iter()
         .map(|(_, y)| *y)
-        .max_by(|a, b| a.partial_cmp(b).unwrap())
+        .filter(|y| y.is_finite())
+        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         .unwrap_or(150000.0)
         * 1.05;
 
@@ -650,20 +661,27 @@ fn draw_strategy_comparison_chart(f: &mut Frame, app: &App, area: Rect, is_activ
     let mut y_max = f64::MIN;
 
     for curve in &top_curves {
-        let curve_end = end_idx.min(curve.equity.len());
-        let curve_start = start_idx.min(curve.equity.len());
-        let data: Vec<(f64, f64)> = curve
-            .equity
-            .get(curve_start..curve_end)
-            .unwrap_or(&[])
+        let curve_len = curve.equity.len();
+        let curve_start = start_idx.min(curve_len);
+        let curve_end = end_idx.min(curve_len);
+
+        // Skip curves that are entirely outside the visible range
+        if curve_start >= curve_end {
+            all_data.push(vec![]); // Keep indices aligned
+            continue;
+        }
+
+        let data: Vec<(f64, f64)> = curve.equity[curve_start..curve_end]
             .iter()
             .enumerate()
             .map(|(i, v)| (i as f64, *v))
             .collect();
 
         for (_, y) in &data {
-            y_min = y_min.min(*y);
-            y_max = y_max.max(*y);
+            if y.is_finite() {
+                y_min = y_min.min(*y);
+                y_max = y_max.max(*y);
+            }
         }
         all_data.push(data);
     }
@@ -781,20 +799,27 @@ fn draw_per_ticker_best_chart(f: &mut Frame, app: &App, area: Rect, is_active: b
     let mut y_max = f64::MIN;
 
     for ticker_best in &app.chart.ticker_best_strategies {
-        let curve_end = end_idx.min(ticker_best.equity.len());
-        let curve_start = start_idx.min(ticker_best.equity.len());
-        let data: Vec<(f64, f64)> = ticker_best
-            .equity
-            .get(curve_start..curve_end)
-            .unwrap_or(&[])
+        let curve_len = ticker_best.equity.len();
+        let curve_start = start_idx.min(curve_len);
+        let curve_end = end_idx.min(curve_len);
+
+        // Skip curves that are entirely outside the visible range
+        if curve_start >= curve_end {
+            all_data.push(vec![]); // Keep indices aligned
+            continue;
+        }
+
+        let data: Vec<(f64, f64)> = ticker_best.equity[curve_start..curve_end]
             .iter()
             .enumerate()
             .map(|(i, v)| (i as f64, *v))
             .collect();
 
         for (_, y) in &data {
-            y_min = y_min.min(*y);
-            y_max = y_max.max(*y);
+            if y.is_finite() {
+                y_min = y_min.min(*y);
+                y_max = y_max.max(*y);
+            }
         }
         all_data.push(data);
     }
@@ -1480,7 +1505,8 @@ fn draw_chart_info(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
                 .chart
                 .drawdown_curve
                 .iter()
-                .min_by(|a, b| a.partial_cmp(b).unwrap())
+                .filter(|v| v.is_finite())
+                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                 .copied()
                 .unwrap_or(0.0);
             let years = app.chart.equity_curve.len() as f64 / 252.0;

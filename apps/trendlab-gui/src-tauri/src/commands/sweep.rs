@@ -1,8 +1,13 @@
 //! Sweep panel commands - parameter sweeps and cost model configuration
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio;
+use trendlab_core::{
+    run_strategy_sweep_polars_parallel, scan_symbol_parquet_lazy, CostModel as CoreCostModel,
+    PolarsBacktestConfig, StrategyGridConfig, SweepDepth as CoreSweepDepth,
+};
 use trendlab_launcher::ipc::JobType;
 
 use crate::error::GuiError;
@@ -58,6 +63,30 @@ impl SweepDepth {
             SweepDepth::Deep => 400,
             SweepDepth::Exhaustive => 1600,
         }
+    }
+
+    /// Convert to core sweep depth
+    fn as_core(self) -> CoreSweepDepth {
+        match self {
+            SweepDepth::Quick => CoreSweepDepth::Quick,
+            SweepDepth::Normal => CoreSweepDepth::Standard,
+            SweepDepth::Deep => CoreSweepDepth::Comprehensive,
+            SweepDepth::Exhaustive => CoreSweepDepth::Comprehensive,
+        }
+    }
+}
+
+/// Convert a strategy name to a StrategyGridConfig
+fn strategy_name_to_config(name: &str, depth: CoreSweepDepth) -> Option<StrategyGridConfig> {
+    match name.to_lowercase().as_str() {
+        "donchian" | "donchian breakout" => Some(StrategyGridConfig::donchian_with_depth(depth)),
+        "turtle_s1" | "turtle s1" => Some(StrategyGridConfig::turtle_s1()),
+        "turtle_s2" | "turtle s2" => Some(StrategyGridConfig::turtle_s2()),
+        "ma_crossover" | "ma crossover" | "moving average crossover" => {
+            Some(StrategyGridConfig::ma_crossover_with_depth(depth))
+        }
+        "tsmom" | "time series momentum" => Some(StrategyGridConfig::tsmom_with_depth(depth)),
+        _ => None,
     }
 }
 
@@ -376,91 +405,158 @@ pub async fn start_sweep(
     let symbols_clone = symbols.clone();
     let strategies_clone = strategies.clone();
 
+    // Clone cost model for the task
+    let cost_model_clone = {
+        let sweep_state = state.sweep.read().unwrap();
+        sweep_state.cost_model.clone()
+    };
+    let core_depth = depth.as_core();
+
     // Spawn background task
     tokio::spawn(async move {
         let state_handle = app_clone.state::<AppState>();
         let start_time = std::time::Instant::now();
         let mut completed = 0usize;
-        let failed = 0usize;
+        let mut failed = 0usize;
+        let mut actual_total = 0usize;
 
-        // Simulate sweep progress (actual backtest logic would go here)
-        for (si, symbol) in symbols_clone.iter().enumerate() {
-            for (sti, strategy) in strategies_clone.iter().enumerate() {
+        // Configure Polars backtest
+        let polars_config = PolarsBacktestConfig::new(100_000.0, 100.0).with_cost_model(
+            CoreCostModel {
+                fees_bps_per_side: cost_model_clone.fees_bps,
+                slippage_bps: cost_model_clone.slippage_bps,
+            },
+        );
+
+        let parquet_dir = Path::new("data/parquet");
+
+        // Run actual backtests
+        for symbol in &symbols_clone {
+            // Check for cancellation
+            if token.is_cancelled() {
+                let _ = state_handle.sweep.write().map(|mut s| {
+                    s.is_running = false;
+                    s.current_job_id = None;
+                });
+                state_handle
+                    .jobs
+                    .set_status(&job_id_clone, JobStatus::Cancelled);
+
+                let _ = app_clone.emit(
+                    "sweep:cancelled",
+                    EventEnvelope::new(
+                        "sweep:cancelled",
+                        &job_id_clone,
+                        serde_json::json!({
+                            "job_id": job_id_clone,
+                            "completed": completed,
+                        }),
+                    ),
+                );
+
+                state_handle
+                    .companion_job_failed(&job_id_clone, "Cancelled by user")
+                    .await;
+
+                return;
+            }
+
+            // Load data for this symbol from Parquet
+            let df = match scan_symbol_parquet_lazy(parquet_dir, symbol, "1d", None, None) {
+                Ok(lf) => match lf.collect() {
+                    Ok(df) => df,
+                    Err(e) => {
+                        tracing::warn!("Failed to collect DataFrame for {}: {}", symbol, e);
+                        failed += 1;
+                        continue;
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!("Failed to scan Parquet for {}: {}", symbol, e);
+                    failed += 1;
+                    continue;
+                }
+            };
+
+            for strategy in &strategies_clone {
                 // Check for cancellation
                 if token.is_cancelled() {
-                    let _ = state_handle.sweep.write().map(|mut s| {
-                        s.is_running = false;
-                        s.current_job_id = None;
-                    });
-                    state_handle
-                        .jobs
-                        .set_status(&job_id_clone, JobStatus::Cancelled);
-
-                    let _ = app_clone.emit(
-                        "sweep:cancelled",
-                        EventEnvelope::new(
-                            "sweep:cancelled",
-                            &job_id_clone,
-                            serde_json::json!({
-                                "job_id": job_id_clone,
-                                "completed": completed,
-                            }),
-                        ),
-                    );
-
-                    // Emit to companion terminal
-                    state_handle
-                        .companion_job_failed(&job_id_clone, "Cancelled by user")
-                        .await;
-
-                    return;
+                    break;
                 }
 
-                // Simulate processing time per config (very fast for demo)
-                let configs_for_pair = depth.config_multiplier();
-                for config_idx in 0..configs_for_pair {
-                    // Progress update every 10 configs
-                    if config_idx % 10 == 0 {
-                        let current = si * strategies_clone.len() * configs_for_pair
-                            + sti * configs_for_pair
-                            + config_idx;
-
-                        let _ = app_clone.emit(
-                            "sweep:progress",
-                            EventEnvelope::new(
-                                "sweep:progress",
-                                &job_id_clone,
-                                SweepProgressPayload {
-                                    job_id: job_id_clone.clone(),
-                                    current,
-                                    total: total_configs,
-                                    symbol: symbol.clone(),
-                                    strategy: strategy.clone(),
-                                    config_id: format!("{}-{}-{}", symbol, strategy, config_idx),
-                                    message: format!(
-                                        "{} × {} ({}/{})",
-                                        symbol, strategy, current, total_configs
-                                    ),
-                                },
-                            ),
-                        );
-
-                        // Emit to companion terminal
-                        state_handle
-                            .companion_job_progress(
-                                &job_id_clone,
-                                current as u64,
-                                total_configs as u64,
-                                &format!("{} × {}", symbol, strategy),
-                            )
-                            .await;
+                // Convert strategy name to config
+                let strategy_config = match strategy_name_to_config(strategy, core_depth) {
+                    Some(config) => config,
+                    None => {
+                        tracing::warn!("Unknown strategy: {}", strategy);
+                        failed += 1;
+                        continue;
                     }
+                };
 
-                    // Tiny delay to simulate work
-                    tokio::time::sleep(tokio::time::Duration::from_micros(100)).await;
+                // Calculate expected configs for this strategy
+                let expected_configs = strategy_config.config_count();
+                actual_total += expected_configs;
+
+                // Emit progress before running sweep
+                let _ = app_clone.emit(
+                    "sweep:progress",
+                    EventEnvelope::new(
+                        "sweep:progress",
+                        &job_id_clone,
+                        SweepProgressPayload {
+                            job_id: job_id_clone.clone(),
+                            current: completed,
+                            total: total_configs,
+                            symbol: symbol.clone(),
+                            strategy: strategy.clone(),
+                            config_id: format!("{}-{}", symbol, strategy),
+                            message: format!(
+                                "{} × {} ({} configs)",
+                                symbol, strategy, expected_configs
+                            ),
+                        },
+                    ),
+                );
+
+                state_handle
+                    .companion_job_progress(
+                        &job_id_clone,
+                        completed as u64,
+                        total_configs as u64,
+                        &format!("{} × {}", symbol, strategy),
+                    )
+                    .await;
+
+                // Run the actual backtest sweep (blocking in spawn_blocking to avoid blocking async runtime)
+                let df_clone = df.clone();
+                let config_clone = strategy_config.clone();
+                let polars_config_clone = polars_config.clone();
+
+                let sweep_result = tokio::task::spawn_blocking(move || {
+                    run_strategy_sweep_polars_parallel(&df_clone, &config_clone, &polars_config_clone)
+                })
+                .await;
+
+                match sweep_result {
+                    Ok(Ok(result)) => {
+                        completed += result.config_results.len();
+                        tracing::info!(
+                            "Sweep {} × {} completed: {} configs",
+                            symbol,
+                            strategy,
+                            result.config_results.len()
+                        );
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!("Sweep failed for {} × {}: {}", symbol, strategy, e);
+                        failed += expected_configs;
+                    }
+                    Err(e) => {
+                        tracing::error!("Sweep task panicked for {} × {}: {}", symbol, strategy, e);
+                        failed += expected_configs;
+                    }
                 }
-
-                completed += configs_for_pair;
             }
         }
 
@@ -482,7 +578,7 @@ pub async fn start_sweep(
                 &job_id_clone,
                 SweepCompletePayload {
                     job_id: job_id_clone.clone(),
-                    total_configs,
+                    total_configs: actual_total,
                     successful: completed,
                     failed,
                     elapsed_ms: elapsed.as_millis() as u64,
@@ -490,13 +586,12 @@ pub async fn start_sweep(
             ),
         );
 
-        // Emit to companion terminal
         state_handle
             .companion_job_complete(
                 &job_id_clone,
                 &format!(
                     "Completed {} configs, {} successful, {} failed",
-                    total_configs, completed, failed
+                    actual_total, completed, failed
                 ),
                 elapsed.as_millis() as u64,
             )

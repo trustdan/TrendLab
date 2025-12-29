@@ -1237,22 +1237,55 @@ pub struct SweepState {
 
 impl SweepState {
     /// Generate a SweepGrid from current param ranges
-    pub fn to_sweep_grid(&self) -> SweepGrid {
-        let entry_lookbacks: Vec<usize> = self
+    /// Returns Ok(grid) or Err(message) if parameter parsing fails
+    pub fn to_sweep_grid(&self) -> Result<SweepGrid, String> {
+        let entry_result = self
             .param_ranges
             .iter()
-            .find(|(name, _)| name == "entry_lookback")
-            .map(|(_, values)| values.iter().filter_map(|v| v.parse().ok()).collect())
-            .unwrap_or_else(|| vec![10, 20, 30, 40, 50]);
+            .find(|(name, _)| name == "entry_lookback");
 
-        let exit_lookbacks: Vec<usize> = self
+        let exit_result = self
             .param_ranges
             .iter()
-            .find(|(name, _)| name == "exit_lookback")
-            .map(|(_, values)| values.iter().filter_map(|v| v.parse().ok()).collect())
-            .unwrap_or_else(|| vec![5, 10, 15, 20, 25]);
+            .find(|(name, _)| name == "exit_lookback");
 
-        SweepGrid::new(entry_lookbacks, exit_lookbacks)
+        // Parse entry lookbacks with error tracking
+        let entry_lookbacks: Vec<usize> = if let Some((_, values)) = entry_result {
+            let parsed: Vec<usize> = values.iter().filter_map(|v| v.parse().ok()).collect();
+            if parsed.is_empty() && !values.is_empty() {
+                return Err(format!(
+                    "Invalid entry_lookback values: {:?}. Use comma-separated integers like '10,20,30'",
+                    values
+                ));
+            }
+            if parsed.is_empty() {
+                vec![10, 20, 30, 40, 50] // Default if no values provided
+            } else {
+                parsed
+            }
+        } else {
+            vec![10, 20, 30, 40, 50]
+        };
+
+        // Parse exit lookbacks with error tracking
+        let exit_lookbacks: Vec<usize> = if let Some((_, values)) = exit_result {
+            let parsed: Vec<usize> = values.iter().filter_map(|v| v.parse().ok()).collect();
+            if parsed.is_empty() && !values.is_empty() {
+                return Err(format!(
+                    "Invalid exit_lookback values: {:?}. Use comma-separated integers like '5,10,15'",
+                    values
+                ));
+            }
+            if parsed.is_empty() {
+                vec![5, 10, 15, 20, 25] // Default if no values provided
+            } else {
+                parsed
+            }
+        } else {
+            vec![5, 10, 15, 20, 25]
+        };
+
+        Ok(SweepGrid::new(entry_lookbacks, exit_lookbacks))
     }
 }
 
@@ -1509,7 +1542,7 @@ impl ResultsState {
                 if let Some(best) = sweep_result
                     .config_results
                     .iter()
-                    .max_by(|a, b| a.metrics.cagr.partial_cmp(&b.metrics.cagr).unwrap())
+                    .max_by(|a, b| a.metrics.cagr.partial_cmp(&b.metrics.cagr).unwrap_or(std::cmp::Ordering::Equal))
                 {
                     self.ticker_summaries.push(TickerSummary {
                         symbol: symbol.clone(),
@@ -3459,7 +3492,13 @@ impl App {
                 return;
             }
 
-            let grid = self.sweep.to_sweep_grid();
+            let grid = match self.sweep.to_sweep_grid() {
+                Ok(g) => g,
+                Err(msg) => {
+                    self.status_message = msg;
+                    return;
+                }
+            };
             let backtest_config = BacktestConfig {
                 initial_cash: 100_000.0,
                 fill_model: FillModel::NextOpen,
@@ -3523,7 +3562,13 @@ impl App {
             return;
         }
 
-        let grid = self.sweep.to_sweep_grid();
+        let grid = match self.sweep.to_sweep_grid() {
+            Ok(g) => g,
+            Err(msg) => {
+                self.status_message = msg;
+                return;
+            }
+        };
         let backtest_config = BacktestConfig {
             initial_cash: 100_000.0,
             fill_model: FillModel::NextOpen,
