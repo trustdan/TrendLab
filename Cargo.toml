@@ -45,6 +45,7 @@ toml = "0.8"
 # Testing
 cucumber = "0.21"
 async-trait = "0.1"
+criterion = { version = "0.5", features = ["html_reports"] }
 
 # Logging
 tracing = "0.1"

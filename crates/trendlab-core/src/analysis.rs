@@ -250,8 +250,8 @@ impl Default for TrendRegimeAnalysis {
         Self {
             by_regime: std::collections::HashMap::new(),
             ma_period: 50,
-            strong_threshold: 0.02,  // 2% per period
-            weak_threshold: 0.005,   // 0.5% per period
+            strong_threshold: 0.02, // 2% per period
+            weak_threshold: 0.005,  // 0.5% per period
         }
     }
 }

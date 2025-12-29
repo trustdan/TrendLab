@@ -411,8 +411,7 @@ where
         .unwrap_or(point_estimate);
 
     // Compute standard error and mean
-    let bootstrap_mean: f64 =
-        bootstrap_stats.iter().sum::<f64>() / config.base.n_iterations as f64;
+    let bootstrap_mean: f64 = bootstrap_stats.iter().sum::<f64>() / config.base.n_iterations as f64;
     let variance: f64 = bootstrap_stats
         .iter()
         .map(|x| (x - bootstrap_mean).powi(2))
@@ -1515,8 +1514,12 @@ mod tests {
             block_bootstrap_ci(&data, |x| x.iter().sum::<f64>() / x.len() as f64, &config).unwrap();
 
         // Should produce same results as regular bootstrap with same config
-        let iid_result =
-            bootstrap_ci(&data, |x| x.iter().sum::<f64>() / x.len() as f64, &config.base).unwrap();
+        let iid_result = bootstrap_ci(
+            &data,
+            |x| x.iter().sum::<f64>() / x.len() as f64,
+            &config.base,
+        )
+        .unwrap();
 
         // Point estimates should be identical
         assert!((result.point_estimate - iid_result.point_estimate).abs() < 0.001);

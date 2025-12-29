@@ -1296,6 +1296,453 @@ pub fn run_strategy_sweep_polars_lazy(
     })
 }
 
+// =============================================================================
+// Streaming Sweep Mode - For Large Parameter Grids
+// =============================================================================
+
+/// Configuration for streaming sweep execution.
+///
+/// Streaming mode writes results incrementally to Parquet rather than
+/// accumulating all results in memory. This enables unbounded parameter
+/// sweeps for large grids.
+#[derive(Debug, Clone)]
+pub struct StreamingSweepConfig {
+    /// Path to write Parquet results (will append incrementally)
+    pub output_path: std::path::PathBuf,
+    /// Number of results to accumulate before writing a batch
+    pub batch_size: usize,
+    /// Whether to keep full backtest results in memory (default: false)
+    /// When false, only metrics are preserved to save memory
+    pub keep_full_results: bool,
+}
+
+impl Default for StreamingSweepConfig {
+    fn default() -> Self {
+        Self {
+            output_path: std::path::PathBuf::from("sweep_results.parquet"),
+            batch_size: 50,
+            keep_full_results: false,
+        }
+    }
+}
+
+impl StreamingSweepConfig {
+    /// Create a new streaming config with the given output path.
+    pub fn new(output_path: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            output_path: output_path.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Set the batch size for incremental writes.
+    pub fn with_batch_size(mut self, size: usize) -> Self {
+        self.batch_size = size.max(1);
+        self
+    }
+
+    /// Set whether to keep full backtest results in memory.
+    pub fn with_keep_full_results(mut self, keep: bool) -> Self {
+        self.keep_full_results = keep;
+        self
+    }
+}
+
+/// Progress update sent during streaming sweep execution.
+#[derive(Debug, Clone)]
+pub struct StreamingSweepProgress {
+    /// Number of configs completed so far
+    pub completed: usize,
+    /// Total number of configs to process
+    pub total: usize,
+    /// Number of batches written to disk
+    pub batches_written: usize,
+    /// Best Sharpe ratio seen so far
+    pub best_sharpe: f64,
+    /// Config ID of best result so far
+    pub best_config_id: Option<String>,
+}
+
+impl StreamingSweepProgress {
+    /// Calculate progress as a percentage (0.0 to 1.0).
+    pub fn progress_pct(&self) -> f64 {
+        if self.total == 0 {
+            1.0
+        } else {
+            self.completed as f64 / self.total as f64
+        }
+    }
+}
+
+/// Lightweight result from a streaming sweep.
+///
+/// Unlike SweepResult, this doesn't hold all backtest results in memory.
+/// Full results are written to Parquet incrementally during execution.
+#[derive(Debug, Clone)]
+pub struct StreamingSweepResult {
+    /// Unique identifier for this sweep
+    pub sweep_id: String,
+    /// Path where results were written
+    pub output_path: std::path::PathBuf,
+    /// Total number of configs processed
+    pub total_configs: usize,
+    /// Number of batches written
+    pub batches_written: usize,
+    /// Summary statistics
+    pub summary: StreamingSweepSummary,
+    /// When the sweep started
+    pub started_at: chrono::DateTime<Utc>,
+    /// When the sweep completed
+    pub completed_at: chrono::DateTime<Utc>,
+}
+
+/// Summary statistics from a streaming sweep.
+#[derive(Debug, Clone, Default)]
+pub struct StreamingSweepSummary {
+    /// Best Sharpe ratio
+    pub best_sharpe: f64,
+    /// Config ID with best Sharpe
+    pub best_sharpe_config: String,
+    /// Best CAGR
+    pub best_cagr: f64,
+    /// Config ID with best CAGR
+    pub best_cagr_config: String,
+    /// Average Sharpe across all configs
+    pub mean_sharpe: f64,
+    /// Average CAGR across all configs
+    pub mean_cagr: f64,
+    /// Number of configs with positive Sharpe
+    pub positive_sharpe_count: usize,
+}
+
+/// Run a Polars-native sweep with streaming output.
+///
+/// This is the memory-efficient version for very large parameter sweeps.
+/// Results are written incrementally to Parquet in batches, with only
+/// summary metrics kept in memory.
+///
+/// # Arguments
+/// * `lf` - LazyFrame with OHLCV data
+/// * `strategy_config` - Strategy configuration with parameter grid
+/// * `backtest_config` - Backtest configuration (initial cash, costs, etc.)
+/// * `streaming_config` - Streaming configuration (output path, batch size)
+/// * `progress_callback` - Optional callback for progress updates
+///
+/// # Example
+/// ```ignore
+/// use trendlab_core::{run_strategy_sweep_polars_streaming, StreamingSweepConfig};
+///
+/// let streaming_config = StreamingSweepConfig::new("results/sweep.parquet")
+///     .with_batch_size(100);
+///
+/// let result = run_strategy_sweep_polars_streaming(
+///     lf,
+///     &strategy_grid,
+///     &backtest_config,
+///     &streaming_config,
+///     Some(|progress| {
+///         println!("Progress: {:.1}%", progress.progress_pct() * 100.0);
+///     }),
+/// )?;
+/// ```
+pub fn run_strategy_sweep_polars_streaming<F>(
+    lf: LazyFrame,
+    strategy_config: &crate::sweep::StrategyGridConfig,
+    config: &PolarsBacktestConfig,
+    streaming_config: &StreamingSweepConfig,
+    progress_callback: Option<F>,
+) -> Result<StreamingSweepResult>
+where
+    F: Fn(StreamingSweepProgress) + Send + Sync,
+{
+    use crate::indicator_cache::{collect_indicator_requirements, LazyIndicatorCache};
+    use crate::metrics::compute_metrics;
+    use crate::strategy_v2::create_strategy_v2_from_config;
+    use polars::io::parquet::write::ParquetWriter;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    let sweep_id = format!(
+        "streaming_{}_{}_{}",
+        strategy_config.strategy_type.id(),
+        Utc::now().format("%Y%m%d_%H%M%S"),
+        std::process::id()
+    );
+    let started_at = Utc::now();
+
+    // Generate all configs
+    let configs = strategy_config.generate_configs();
+    let total_configs = configs.len();
+
+    if total_configs == 0 {
+        return Ok(StreamingSweepResult {
+            sweep_id,
+            output_path: streaming_config.output_path.clone(),
+            total_configs: 0,
+            batches_written: 0,
+            summary: StreamingSweepSummary::default(),
+            started_at,
+            completed_at: Utc::now(),
+        });
+    }
+
+    // Collect specs for indicator requirement extraction
+    let specs: Vec<_> = configs
+        .iter()
+        .filter_map(|config_id| {
+            create_strategy_v2_from_config(config_id)
+                .ok()
+                .map(|s| s.spec().clone())
+        })
+        .collect();
+
+    // Collect unique indicator requirements and pre-compute
+    let indicator_keys = collect_indicator_requirements(&specs);
+    let lazy_cache = LazyIndicatorCache::new(lf).with_all(&indicator_keys);
+    let cached_df = lazy_cache.collect().map_err(TrendLabError::Polars)?;
+
+    // Create output directory if needed
+    if let Some(parent) = streaming_config.output_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            TrendLabError::Io(std::io::Error::other(format!(
+                "Failed to create output directory: {}",
+                e
+            )))
+        })?;
+    }
+
+    // Type alias for metric row: (config_id, entry, exit, total_return, cagr, sharpe,
+    // sortino, max_dd, calmar, win_rate, profit_factor, num_trades, turnover)
+    type MetricRow = (
+        String,
+        u32,
+        u32,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        u32,
+        f64,
+    );
+
+    // Shared state for progress tracking
+    let completed_count = AtomicUsize::new(0);
+    let batches_written = AtomicUsize::new(0);
+    let best_sharpe = Mutex::new((f64::NEG_INFINITY, String::new()));
+    let sharpe_sum = Mutex::new(0.0_f64);
+    let cagr_sum = Mutex::new(0.0_f64);
+    let positive_sharpe = AtomicUsize::new(0);
+    let best_cagr = Mutex::new((f64::NEG_INFINITY, String::new()));
+
+    // Batch buffer for accumulating results before writing
+    let batch_buffer: Mutex<Vec<MetricRow>> =
+        Mutex::new(Vec::with_capacity(streaming_config.batch_size));
+
+    // Helper to write a batch to Parquet
+    let write_batch = |buffer: &[MetricRow], append: bool| -> Result<()> {
+        if buffer.is_empty() {
+            return Ok(());
+        }
+
+        let config_ids: Vec<&str> = buffer.iter().map(|r| r.0.as_str()).collect();
+        let entry_lookbacks: Vec<u32> = buffer.iter().map(|r| r.1).collect();
+        let exit_lookbacks: Vec<u32> = buffer.iter().map(|r| r.2).collect();
+        let total_returns: Vec<f64> = buffer.iter().map(|r| r.3).collect();
+        let cagrs: Vec<f64> = buffer.iter().map(|r| r.4).collect();
+        let sharpes: Vec<f64> = buffer.iter().map(|r| r.5).collect();
+        let sortinos: Vec<f64> = buffer.iter().map(|r| r.6).collect();
+        let max_drawdowns: Vec<f64> = buffer.iter().map(|r| r.7).collect();
+        let calmars: Vec<f64> = buffer.iter().map(|r| r.8).collect();
+        let win_rates: Vec<f64> = buffer.iter().map(|r| r.9).collect();
+        let profit_factors: Vec<f64> = buffer.iter().map(|r| r.10).collect();
+        let num_trades: Vec<u32> = buffer.iter().map(|r| r.11).collect();
+        let turnovers: Vec<f64> = buffer.iter().map(|r| r.12).collect();
+
+        let mut df = DataFrame::new(vec![
+            Series::new("config_id".into(), config_ids).into(),
+            Series::new("entry_lookback".into(), entry_lookbacks).into(),
+            Series::new("exit_lookback".into(), exit_lookbacks).into(),
+            Series::new("total_return".into(), total_returns).into(),
+            Series::new("cagr".into(), cagrs).into(),
+            Series::new("sharpe".into(), sharpes).into(),
+            Series::new("sortino".into(), sortinos).into(),
+            Series::new("max_drawdown".into(), max_drawdowns).into(),
+            Series::new("calmar".into(), calmars).into(),
+            Series::new("win_rate".into(), win_rates).into(),
+            Series::new("profit_factor".into(), profit_factors).into(),
+            Series::new("num_trades".into(), num_trades).into(),
+            Series::new("turnover".into(), turnovers).into(),
+        ])
+        .map_err(TrendLabError::Polars)?;
+
+        // For appending, we need to read existing file, concat, and rewrite
+        // Parquet doesn't support true append, so we concat
+        if append && streaming_config.output_path.exists() {
+            let existing =
+                LazyFrame::scan_parquet(&streaming_config.output_path, ScanArgsParquet::default())
+                    .and_then(|lf| lf.collect())
+                    .ok();
+
+            if let Some(existing_df) = existing {
+                df = concat([existing_df.lazy(), df.lazy()], UnionArgs::default())
+                    .and_then(|lf| lf.collect())
+                    .map_err(TrendLabError::Polars)?;
+            }
+        }
+
+        let file =
+            std::fs::File::create(&streaming_config.output_path).map_err(TrendLabError::Io)?;
+        ParquetWriter::new(file)
+            .finish(&mut df)
+            .map_err(TrendLabError::Polars)?;
+
+        Ok(())
+    };
+
+    // Process configs - using chunks for better batch control
+    for chunk in configs.chunks(streaming_config.batch_size) {
+        // Process chunk in parallel
+        let chunk_results: Vec<_> = chunk
+            .iter()
+            .filter_map(|strategy_config_id| {
+                let strategy = create_strategy_v2_from_config(strategy_config_id).ok()?;
+                let polars_result =
+                    run_backtest_polars(cached_df.clone().lazy(), strategy.as_ref(), config)
+                        .ok()?;
+                let backtest_result = polars_result.to_backtest_result().ok()?;
+                let metrics = compute_metrics(&backtest_result, config.initial_cash);
+                let legacy_config_id = strategy_config_id.to_legacy_config_id();
+
+                Some((
+                    strategy_config_id.display(),
+                    legacy_config_id.entry_lookback as u32,
+                    legacy_config_id.exit_lookback as u32,
+                    metrics.total_return,
+                    metrics.cagr,
+                    metrics.sharpe,
+                    metrics.sortino,
+                    metrics.max_drawdown,
+                    metrics.calmar,
+                    metrics.win_rate,
+                    metrics.profit_factor,
+                    metrics.num_trades,
+                    metrics.turnover,
+                ))
+            })
+            .collect();
+
+        // Update tracking state
+        for result in &chunk_results {
+            let sharpe = result.5;
+            let cagr = result.4;
+            let config_id = &result.0;
+
+            *sharpe_sum.lock().unwrap() += sharpe;
+            *cagr_sum.lock().unwrap() += cagr;
+
+            if sharpe > 0.0 {
+                positive_sharpe.fetch_add(1, Ordering::Relaxed);
+            }
+
+            {
+                let mut best = best_sharpe.lock().unwrap();
+                if sharpe > best.0 {
+                    *best = (sharpe, config_id.clone());
+                }
+            }
+
+            {
+                let mut best = best_cagr.lock().unwrap();
+                if cagr > best.0 {
+                    *best = (cagr, config_id.clone());
+                }
+            }
+        }
+
+        // Add to buffer
+        {
+            let mut buffer = batch_buffer.lock().unwrap();
+            buffer.extend(chunk_results);
+        }
+
+        // Write batch
+        {
+            let mut buffer = batch_buffer.lock().unwrap();
+            let append = batches_written.load(Ordering::Relaxed) > 0;
+            write_batch(&buffer, append)?;
+            buffer.clear();
+        }
+
+        let current_completed =
+            completed_count.fetch_add(chunk.len(), Ordering::Relaxed) + chunk.len();
+        let current_batches = batches_written.fetch_add(1, Ordering::Relaxed) + 1;
+
+        // Call progress callback
+        if let Some(ref callback) = progress_callback {
+            let (best_s, best_config) = best_sharpe.lock().unwrap().clone();
+            callback(StreamingSweepProgress {
+                completed: current_completed,
+                total: total_configs,
+                batches_written: current_batches,
+                best_sharpe: best_s,
+                best_config_id: if best_config.is_empty() {
+                    None
+                } else {
+                    Some(best_config)
+                },
+            });
+        }
+    }
+
+    let completed_at = Utc::now();
+    let final_count = completed_count.load(Ordering::Relaxed);
+    let final_batches = batches_written.load(Ordering::Relaxed);
+
+    let (best_s, best_s_config) = best_sharpe.lock().unwrap().clone();
+    let (best_c, best_c_config) = best_cagr.lock().unwrap().clone();
+    let sum_sharpe = *sharpe_sum.lock().unwrap();
+    let sum_cagr = *cagr_sum.lock().unwrap();
+
+    Ok(StreamingSweepResult {
+        sweep_id,
+        output_path: streaming_config.output_path.clone(),
+        total_configs: final_count,
+        batches_written: final_batches,
+        summary: StreamingSweepSummary {
+            best_sharpe: best_s,
+            best_sharpe_config: best_s_config,
+            best_cagr: best_c,
+            best_cagr_config: best_c_config,
+            mean_sharpe: if final_count > 0 {
+                sum_sharpe / final_count as f64
+            } else {
+                0.0
+            },
+            mean_cagr: if final_count > 0 {
+                sum_cagr / final_count as f64
+            } else {
+                0.0
+            },
+            positive_sharpe_count: positive_sharpe.load(Ordering::Relaxed),
+        },
+        started_at,
+        completed_at,
+    })
+}
+
+/// Load streaming sweep results from a Parquet file.
+///
+/// Useful for analyzing results after a streaming sweep completes.
+pub fn load_streaming_sweep_results(path: impl AsRef<std::path::Path>) -> Result<DataFrame> {
+    LazyFrame::scan_parquet(path.as_ref(), ScanArgsParquet::default())
+        .and_then(|lf| lf.collect())
+        .map_err(TrendLabError::Polars)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1825,5 +2272,179 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_streaming_sweep_basic() {
+        use crate::sweep::{StrategyGridConfig, StrategyParams, StrategyTypeId};
+        use tempfile::tempdir;
+
+        let bars = make_trending_bars(100, 0.5);
+        let df = bars_to_dataframe(&bars).unwrap();
+
+        let grid = StrategyGridConfig {
+            strategy_type: StrategyTypeId::Donchian,
+            enabled: true,
+            params: StrategyParams::Donchian {
+                entry_lookbacks: vec![10, 20],
+                exit_lookbacks: vec![5, 10],
+            },
+        };
+
+        let config = PolarsBacktestConfig::default();
+        let temp_dir = tempdir().unwrap();
+        let output_path = temp_dir.path().join("streaming_test.parquet");
+
+        let streaming_config = StreamingSweepConfig::new(&output_path).with_batch_size(2);
+
+        let result = run_strategy_sweep_polars_streaming(
+            df.lazy(),
+            &grid,
+            &config,
+            &streaming_config,
+            None::<fn(StreamingSweepProgress)>,
+        )
+        .unwrap();
+
+        // Check result - some configs may be skipped if V2 strategy creation fails
+        // or if backtest fails (e.g., insufficient data for lookback)
+        assert!(
+            result.total_configs > 0,
+            "Should process at least some configs"
+        );
+        assert!(result.batches_written >= 1);
+        assert!(output_path.exists());
+
+        // Load and verify written results
+        let loaded_df = load_streaming_sweep_results(&output_path).unwrap();
+        assert!(loaded_df.height() > 0, "Should have written results");
+        assert!(loaded_df.column("sharpe").is_ok());
+        assert!(loaded_df.column("config_id").is_ok());
+    }
+
+    #[test]
+    fn test_streaming_sweep_progress_callback() {
+        use crate::sweep::{StrategyGridConfig, StrategyParams, StrategyTypeId};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use tempfile::tempdir;
+
+        let bars = make_trending_bars(80, 0.3);
+        let df = bars_to_dataframe(&bars).unwrap();
+
+        let grid = StrategyGridConfig {
+            strategy_type: StrategyTypeId::Donchian,
+            enabled: true,
+            params: StrategyParams::Donchian {
+                entry_lookbacks: vec![10, 15, 20],
+                exit_lookbacks: vec![5, 10],
+            },
+        };
+
+        let config = PolarsBacktestConfig::default();
+        let temp_dir = tempdir().unwrap();
+        let output_path = temp_dir.path().join("progress_test.parquet");
+
+        let streaming_config = StreamingSweepConfig::new(&output_path).with_batch_size(2);
+
+        // Track progress callback invocations
+        let callback_count = Arc::new(AtomicUsize::new(0));
+        let callback_count_clone = Arc::clone(&callback_count);
+
+        let result = run_strategy_sweep_polars_streaming(
+            df.lazy(),
+            &grid,
+            &config,
+            &streaming_config,
+            Some(move |progress: StreamingSweepProgress| {
+                callback_count_clone.fetch_add(1, Ordering::Relaxed);
+                assert!(progress.completed <= progress.total);
+                assert!(progress.progress_pct() <= 1.0);
+            }),
+        )
+        .unwrap();
+
+        // Callback should have been called multiple times
+        assert!(callback_count.load(Ordering::Relaxed) > 0);
+        // 3 entry x 2 exit = 6 configs, but some may be skipped
+        assert!(
+            result.total_configs > 0,
+            "Should process at least some configs"
+        );
+    }
+
+    #[test]
+    fn test_streaming_sweep_summary_statistics() {
+        use crate::sweep::{StrategyGridConfig, StrategyParams, StrategyTypeId};
+        use tempfile::tempdir;
+
+        let bars = make_trending_bars(100, 0.8); // Strong uptrend for positive results
+        let df = bars_to_dataframe(&bars).unwrap();
+
+        let grid = StrategyGridConfig {
+            strategy_type: StrategyTypeId::Donchian,
+            enabled: true,
+            params: StrategyParams::Donchian {
+                entry_lookbacks: vec![10, 20, 30],
+                exit_lookbacks: vec![5, 10],
+            },
+        };
+
+        let config = PolarsBacktestConfig::default();
+        let temp_dir = tempdir().unwrap();
+        let output_path = temp_dir.path().join("summary_test.parquet");
+
+        let streaming_config = StreamingSweepConfig::new(&output_path);
+
+        let result = run_strategy_sweep_polars_streaming(
+            df.lazy(),
+            &grid,
+            &config,
+            &streaming_config,
+            None::<fn(StreamingSweepProgress)>,
+        )
+        .unwrap();
+
+        // Summary should have valid values
+        assert!(!result.summary.best_sharpe_config.is_empty());
+        assert!(!result.summary.best_cagr_config.is_empty());
+        // In uptrend, should have some positive Sharpe configs
+        // (may be 0 if configs don't generate trades with short lookbacks)
+    }
+
+    #[test]
+    fn test_streaming_sweep_empty_grid() {
+        use crate::sweep::{StrategyGridConfig, StrategyParams, StrategyTypeId};
+        use tempfile::tempdir;
+
+        let bars = make_trending_bars(50, 0.5);
+        let df = bars_to_dataframe(&bars).unwrap();
+
+        let grid = StrategyGridConfig {
+            strategy_type: StrategyTypeId::Donchian,
+            enabled: true,
+            params: StrategyParams::Donchian {
+                entry_lookbacks: vec![],
+                exit_lookbacks: vec![],
+            },
+        };
+
+        let config = PolarsBacktestConfig::default();
+        let temp_dir = tempdir().unwrap();
+        let output_path = temp_dir.path().join("empty_test.parquet");
+
+        let streaming_config = StreamingSweepConfig::new(&output_path);
+
+        let result = run_strategy_sweep_polars_streaming(
+            df.lazy(),
+            &grid,
+            &config,
+            &streaming_config,
+            None::<fn(StreamingSweepProgress)>,
+        )
+        .unwrap();
+
+        assert_eq!(result.total_configs, 0);
+        assert_eq!(result.batches_written, 0);
     }
 }

@@ -11,7 +11,7 @@ use anyhow::Result;
 use crossterm::{
     event::{
         self, poll, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind,
-        MouseEventKind,
+        KeyModifiers, MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -118,6 +118,23 @@ fn run_app<B: ratatui::backend::Backend>(
             match event::read()? {
                 Event::Key(key) => {
                     if key.kind == KeyEventKind::Press {
+                        // Handle Ctrl+d/u for Help panel page navigation
+                        if app.active_panel == Panel::Help
+                            && key.modifiers.contains(KeyModifiers::CONTROL)
+                        {
+                            match key.code {
+                                KeyCode::Char('d') => {
+                                    app.help_page_down();
+                                    continue;
+                                }
+                                KeyCode::Char('u') => {
+                                    app.help_page_up();
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
+
                         match handle_key(app, key.code, channels) {
                             KeyResult::Quit => return Ok(()),
                             KeyResult::Continue => {}
@@ -541,6 +558,44 @@ fn trigger_search(app: &mut App, channels: &WorkerChannels) {
     } else {
         app.data.search_suggestions.clear();
         app.data.search_loading = false;
+    }
+}
+
+/// Handle keys in Help panel search mode.
+fn handle_help_search_key(app: &mut App, code: KeyCode) -> KeyResult {
+    match code {
+        KeyCode::Esc => {
+            // Exit search mode
+            app.help.search_mode = false;
+            KeyResult::Continue
+        }
+
+        KeyCode::Enter => {
+            // Confirm search and exit search mode
+            app.help.search_mode = false;
+            // Jump to first match if any
+            if !app.help.search_matches.is_empty() {
+                app.help.search_index = 0;
+                if let Some(&line) = app.help.search_matches.first() {
+                    app.help.scroll_offset = line;
+                }
+            }
+            KeyResult::Continue
+        }
+
+        KeyCode::Backspace => {
+            app.help.search_query.pop();
+            app.update_help_search_matches();
+            KeyResult::Continue
+        }
+
+        KeyCode::Char(c) => {
+            app.help.search_query.push(c);
+            app.update_help_search_matches();
+            KeyResult::Continue
+        }
+
+        _ => KeyResult::Continue,
     }
 }
 

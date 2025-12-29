@@ -470,7 +470,10 @@ pub fn compute_trend_regime_analysis(
         std::collections::HashMap::new();
     for trade in trades {
         let entry_ts = trade.entry.ts.timestamp();
-        let regime = ts_to_regime.get(&entry_ts).copied().unwrap_or(TrendRegime::Neutral);
+        let regime = ts_to_regime
+            .get(&entry_ts)
+            .copied()
+            .unwrap_or(TrendRegime::Neutral);
         regime_trades.entry(regime).or_default().push(trade);
     }
 
@@ -481,9 +484,15 @@ pub fn compute_trend_regime_analysis(
     // Build results
     let mut by_regime = std::collections::HashMap::new();
     for regime in TrendRegime::all() {
-        let trades = regime_trades.get(regime).map(|v| v.as_slice()).unwrap_or(&[]);
+        let trades = regime_trades
+            .get(regime)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
         let n_days = *regime_days.get(regime).unwrap_or(&0);
-        let returns = regime_returns.get(regime).map(|v| v.as_slice()).unwrap_or(&[]);
+        let returns = regime_returns
+            .get(regime)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
 
         by_regime.insert(
             *regime,
@@ -508,7 +517,10 @@ fn split_returns_by_trend_regime(
         std::collections::HashMap::new();
 
     for (ts, ret) in returns {
-        let regime = ts_to_regime.get(ts).copied().unwrap_or(TrendRegime::Neutral);
+        let regime = ts_to_regime
+            .get(ts)
+            .copied()
+            .unwrap_or(TrendRegime::Neutral);
         by_regime.entry(regime).or_default().push(*ret);
     }
 
@@ -582,9 +594,15 @@ pub fn compute_drawdown_regime_analysis(
     // Build results
     let mut by_regime = std::collections::HashMap::new();
     for regime in DrawdownRegime::all() {
-        let trades = regime_trades.get(regime).map(|v| v.as_slice()).unwrap_or(&[]);
+        let trades = regime_trades
+            .get(regime)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
         let n_days = *regime_days.get(regime).unwrap_or(&0);
-        let returns = regime_returns.get(regime).map(|v| v.as_slice()).unwrap_or(&[]);
+        let returns = regime_returns
+            .get(regime)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
 
         by_regime.insert(
             *regime,
@@ -670,7 +688,13 @@ pub fn compute_regime_concentration_score(
         if let Some(trend) = trend_analysis {
             let returns: Vec<f64> = TrendRegime::all()
                 .iter()
-                .map(|r| trend.by_regime.get(r).map(|m| m.total_return).unwrap_or(0.0))
+                .map(|r| {
+                    trend
+                        .by_regime
+                        .get(r)
+                        .map(|m| m.total_return)
+                        .unwrap_or(0.0)
+                })
                 .collect();
             let (conc, idx, pct) = compute_hhi_concentration(&returns);
             let regime = TrendRegime::all().get(idx).copied();
@@ -1352,7 +1376,11 @@ mod tests {
         // Equal returns across 3 regimes should give low concentration
         let returns = [10.0, 10.0, 10.0];
         let (conc, _, _) = compute_hhi_concentration(&returns);
-        assert!(conc < 0.1, "Equal returns should have ~0 concentration: {}", conc);
+        assert!(
+            conc < 0.1,
+            "Equal returns should have ~0 concentration: {}",
+            conc
+        );
     }
 
     #[test]
@@ -1360,7 +1388,11 @@ mod tests {
         // All returns from one regime should give concentration = 1
         let returns = [100.0, 0.0, 0.0];
         let (conc, dominant_idx, pct) = compute_hhi_concentration(&returns);
-        assert!(conc > 0.99, "Single dominant should have ~1 concentration: {}", conc);
+        assert!(
+            conc > 0.99,
+            "Single dominant should have ~1 concentration: {}",
+            conc
+        );
         assert_eq!(dominant_idx, 0);
         assert!((pct - 1.0).abs() < 0.01);
     }
@@ -1371,7 +1403,11 @@ mod tests {
         let returns = [50.0, 50.0, 0.0];
         let (conc, _, _) = compute_hhi_concentration(&returns);
         // HHI = 0.5^2 + 0.5^2 + 0 = 0.5, normalized = (0.5 - 0.333) / 0.667 = 0.25
-        assert!(conc > 0.2 && conc < 0.4, "Two equal should have ~0.25 concentration: {}", conc);
+        assert!(
+            conc > 0.2 && conc < 0.4,
+            "Two equal should have ~0.25 concentration: {}",
+            conc
+        );
     }
 
     #[test]
@@ -1380,7 +1416,10 @@ mod tests {
         let returns = [30.0, -10.0, 20.0];
         let (conc, dominant_idx, _) = compute_hhi_concentration(&returns);
         // Should use absolute values for share calculation
-        assert!(conc < 0.5, "Mixed returns should have moderate concentration");
+        assert!(
+            conc < 0.5,
+            "Mixed returns should have moderate concentration"
+        );
         assert_eq!(dominant_idx, 0); // 30 is largest absolute
     }
 
@@ -1388,7 +1427,10 @@ mod tests {
     fn test_hhi_concentration_all_zero() {
         let returns = [0.0, 0.0, 0.0];
         let (conc, _, _) = compute_hhi_concentration(&returns);
-        assert!((conc - 0.0).abs() < 0.01, "All zero should have 0 concentration");
+        assert!(
+            (conc - 0.0).abs() < 0.01,
+            "All zero should have 0 concentration"
+        );
     }
 
     #[test]
@@ -1408,14 +1450,26 @@ mod tests {
     fn test_regime_concentration_score_balanced() {
         // Create a balanced regime analysis
         let vol_analysis = RegimeAnalysis {
-            high_vol: RegimeMetrics { total_return: 0.10, ..Default::default() },
-            neutral_vol: RegimeMetrics { total_return: 0.10, ..Default::default() },
-            low_vol: RegimeMetrics { total_return: 0.10, ..Default::default() },
+            high_vol: RegimeMetrics {
+                total_return: 0.10,
+                ..Default::default()
+            },
+            neutral_vol: RegimeMetrics {
+                total_return: 0.10,
+                ..Default::default()
+            },
+            low_vol: RegimeMetrics {
+                total_return: 0.10,
+                ..Default::default()
+            },
             ..Default::default()
         };
 
         let score = compute_regime_concentration_score(&vol_analysis, None, None);
-        assert!(score.vol_concentration < 0.1, "Balanced should have low concentration");
+        assert!(
+            score.vol_concentration < 0.1,
+            "Balanced should have low concentration"
+        );
         assert!(!score.is_concentrated());
         assert!((score.penalty_factor() - 0.0).abs() < 0.01);
     }
@@ -1424,14 +1478,26 @@ mod tests {
     fn test_regime_concentration_score_concentrated() {
         // Create a concentrated regime analysis (all returns from high vol)
         let vol_analysis = RegimeAnalysis {
-            high_vol: RegimeMetrics { total_return: 0.50, ..Default::default() },
-            neutral_vol: RegimeMetrics { total_return: 0.0, ..Default::default() },
-            low_vol: RegimeMetrics { total_return: 0.0, ..Default::default() },
+            high_vol: RegimeMetrics {
+                total_return: 0.50,
+                ..Default::default()
+            },
+            neutral_vol: RegimeMetrics {
+                total_return: 0.0,
+                ..Default::default()
+            },
+            low_vol: RegimeMetrics {
+                total_return: 0.0,
+                ..Default::default()
+            },
             ..Default::default()
         };
 
         let score = compute_regime_concentration_score(&vol_analysis, None, None);
-        assert!(score.vol_concentration > 0.9, "Concentrated should have high score");
+        assert!(
+            score.vol_concentration > 0.9,
+            "Concentrated should have high score"
+        );
         assert!(score.is_concentrated());
         assert!(score.penalty_factor() > 0.5);
         assert_eq!(score.dominant_vol_regime, Some(VolRegime::High));
@@ -1440,18 +1506,57 @@ mod tests {
     #[test]
     fn test_regime_concentration_score_with_trend() {
         let vol_analysis = RegimeAnalysis {
-            high_vol: RegimeMetrics { total_return: 0.10, ..Default::default() },
-            neutral_vol: RegimeMetrics { total_return: 0.10, ..Default::default() },
-            low_vol: RegimeMetrics { total_return: 0.10, ..Default::default() },
+            high_vol: RegimeMetrics {
+                total_return: 0.10,
+                ..Default::default()
+            },
+            neutral_vol: RegimeMetrics {
+                total_return: 0.10,
+                ..Default::default()
+            },
+            low_vol: RegimeMetrics {
+                total_return: 0.10,
+                ..Default::default()
+            },
             ..Default::default()
         };
 
         let mut by_regime = std::collections::HashMap::new();
-        by_regime.insert(TrendRegime::StrongUp, RegimeMetrics { total_return: 0.50, ..Default::default() });
-        by_regime.insert(TrendRegime::WeakUp, RegimeMetrics { total_return: 0.0, ..Default::default() });
-        by_regime.insert(TrendRegime::Neutral, RegimeMetrics { total_return: 0.0, ..Default::default() });
-        by_regime.insert(TrendRegime::WeakDown, RegimeMetrics { total_return: 0.0, ..Default::default() });
-        by_regime.insert(TrendRegime::StrongDown, RegimeMetrics { total_return: 0.0, ..Default::default() });
+        by_regime.insert(
+            TrendRegime::StrongUp,
+            RegimeMetrics {
+                total_return: 0.50,
+                ..Default::default()
+            },
+        );
+        by_regime.insert(
+            TrendRegime::WeakUp,
+            RegimeMetrics {
+                total_return: 0.0,
+                ..Default::default()
+            },
+        );
+        by_regime.insert(
+            TrendRegime::Neutral,
+            RegimeMetrics {
+                total_return: 0.0,
+                ..Default::default()
+            },
+        );
+        by_regime.insert(
+            TrendRegime::WeakDown,
+            RegimeMetrics {
+                total_return: 0.0,
+                ..Default::default()
+            },
+        );
+        by_regime.insert(
+            TrendRegime::StrongDown,
+            RegimeMetrics {
+                total_return: 0.0,
+                ..Default::default()
+            },
+        );
 
         let trend_analysis = TrendRegimeAnalysis {
             by_regime,

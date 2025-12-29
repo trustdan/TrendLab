@@ -22,3 +22,9 @@ tracing.workspace = true
 
 [dev-dependencies]
 # Unit tests use standard Rust test framework
+criterion.workspace = true
+tempfile = "3.10"
+
+[[bench]]
+name = "sweep_benchmarks"
+harness = false

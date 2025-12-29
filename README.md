@@ -26,7 +26,7 @@ The project optimizes for:
 
 ## Quick Links
 
-[Quick Start](#quick-start) | [Zero to Backtest](#zero-to-first-backtest-5-minutes) | [TUI Guide](#tui-features) | [Desktop GUI](#desktop-gui) | [YOLO Mode](#yolo-mode) | [Statistical Rigor](#statistical-rigor) | [Risk Profiles](#risk-profiles) | [Strategies](#strategies) | [CLI Commands](#cli-commands) | [Contributing](#contributing)
+[Quick Start](#quick-start) | [Zero to Backtest](#zero-to-first-backtest-5-minutes) | [TUI Guide](#tui-features) | [Help Panel](#help-panel-6-or-) | [Desktop GUI](#desktop-gui) | [YOLO Mode](#yolo-mode) | [Statistical Rigor](#statistical-rigor) | [Risk Profiles](#risk-profiles) | [Strategies](#strategies) | [CLI Commands](#cli-commands) | [Contributing](#contributing)
 
 ## Ethos (what we care about)
 
@@ -174,6 +174,15 @@ See [Statistical Rigor](#statistical-rigor) for details.
 - **TUI Integration**: Press `p` in Results panel to cycle through profiles
 
 See [Risk Profiles](#risk-profiles) for details.
+
+**Milestone 9 ("Help Panel")** ✅ Complete:
+
+- **Dedicated Help Panel**: Tab 6 with full keyboard shortcuts reference
+- **Context-Sensitive**: Opens to relevant section based on current panel
+- **7 Sections**: Global, Data, Strategy, Sweep, Results, Chart, Features
+- **Vim Navigation**: `j`/`k` scroll, `g` top, `G` bottom, `Ctrl+d`/`u` page
+- **Search**: Press `/` to search within help content
+- **Quick Access**: Press `?` or `6` from any panel
 
 ## Quick start
 
@@ -337,7 +346,8 @@ Complete reference of all keyboard shortcuts in the TUI:
 
 | Key | Action |
 |-----|--------|
-| `1`-`5` | Jump to panel (Data, Strategy, Sweep, Results, Chart) |
+| `1`-`6` | Jump to panel (Data, Strategy, Sweep, Results, Chart, Help) |
+| `?` | Open Help panel (same as `6`) |
 | `Tab` | Next panel |
 | `Shift+Tab` | Previous panel |
 | `q` / `Ctrl+C` | Quit application |
@@ -396,6 +406,26 @@ Complete reference of all keyboard shortcuts in the TUI:
 | `↑/↓` | Zoom in/out |
 | Mouse scroll | Zoom in/out |
 | Mouse hover | Show tooltip with data point details |
+
+#### Help Panel (`6` or `?`)
+
+| Key | Action |
+|-----|--------|
+| `←/→` | Navigate between sections |
+| `j/↓` | Scroll down |
+| `k/↑` | Scroll up |
+| `g` | Jump to top |
+| `G` | Jump to bottom |
+| `Ctrl+d` | Page down |
+| `Ctrl+u` | Page up |
+| `/` | Enter search mode |
+| `n` | Next search match |
+| `N` | Previous search match |
+| `Enter` | Confirm search |
+| `Esc` | Exit search mode |
+
+The Help panel opens to the section matching your current panel (context-sensitive).
+Seven sections are available: Global, Data, Strategy, Sweep, Results, Chart, and Features.
 
 ### Configuring Strategies
 

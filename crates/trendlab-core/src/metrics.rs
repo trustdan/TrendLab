@@ -362,11 +362,7 @@ mod tests {
 
     #[test]
     fn test_streaks_all_winners() {
-        let trades = vec![
-            make_trade(100.0),
-            make_trade(50.0),
-            make_trade(200.0),
-        ];
+        let trades = vec![make_trade(100.0), make_trade(50.0), make_trade(200.0)];
         let (max_losses, max_wins, avg_losing) = calculate_streaks(&trades);
         assert_eq!(max_losses, 0);
         assert_eq!(max_wins, 3);
@@ -375,11 +371,7 @@ mod tests {
 
     #[test]
     fn test_streaks_all_losers() {
-        let trades = vec![
-            make_trade(-100.0),
-            make_trade(-50.0),
-            make_trade(-200.0),
-        ];
+        let trades = vec![make_trade(-100.0), make_trade(-50.0), make_trade(-200.0)];
         let (max_losses, max_wins, avg_losing) = calculate_streaks(&trades);
         assert_eq!(max_losses, 3);
         assert_eq!(max_wins, 0);
@@ -427,9 +419,9 @@ mod tests {
     fn test_streaks_breakeven_as_loss() {
         // Breakeven (0.0) counts as loss for conservative counting
         let trades = vec![
-            make_trade(100.0),  // W
-            make_trade(0.0),    // L (breakeven)
-            make_trade(-50.0),  // L
+            make_trade(100.0), // W
+            make_trade(0.0),   // L (breakeven)
+            make_trade(-50.0), // L
         ];
         let (max_losses, max_wins, _avg_losing) = calculate_streaks(&trades);
         assert_eq!(max_losses, 2); // Breakeven + loss = 2 streak

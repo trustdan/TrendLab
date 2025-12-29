@@ -97,7 +97,11 @@ impl IndicatorKey {
             IndicatorKey::DMI { period } => format!("dmi_{}", period),
             IndicatorKey::Aroon { period } => format!("aroon_{}", period),
             IndicatorKey::RSI { period } => format!("rsi_{}", period),
-            IndicatorKey::MACD { fast_period, slow_period, .. } => {
+            IndicatorKey::MACD {
+                fast_period,
+                slow_period,
+                ..
+            } => {
                 format!("macd_{}_{}", fast_period, slow_period)
             }
             IndicatorKey::Keltner { ema_period, .. } => format!("kc_{}", ema_period),
@@ -366,7 +370,12 @@ impl IndicatorCache {
         let signal_name = format!("{}_signal", prefix);
         let hist_name = format!("{}_histogram", prefix);
 
-        let lf = apply_macd_exprs(self.df.clone().lazy(), fast_period, slow_period, signal_period);
+        let lf = apply_macd_exprs(
+            self.df.clone().lazy(),
+            fast_period,
+            slow_period,
+            signal_period,
+        );
         let lf = lf.rename(
             ["macd_line", "macd_signal", "macd_histogram"],
             [&line_name, &signal_name, &hist_name],
@@ -377,6 +386,138 @@ impl IndicatorCache {
         self.added_columns.push(line_name);
         self.added_columns.push(signal_name);
         self.added_columns.push(hist_name);
+        Ok(())
+    }
+
+    /// Ensure Bollinger Bands are computed.
+    ///
+    /// Adds columns: bb_{period}_middle, bb_{period}_upper, bb_{period}_lower, bb_{period}_bandwidth
+    pub fn ensure_bollinger(&mut self, period: usize, multiplier: f64) -> PolarsResult<()> {
+        let multiplier_x100 = (multiplier * 100.0) as i32;
+        let key = IndicatorKey::Bollinger {
+            period,
+            multiplier_x100,
+        };
+        if self.computed.contains(&key) {
+            return Ok(());
+        }
+
+        use crate::indicators_polars::bollinger_bands_exprs;
+        let prefix = format!("bb_{}", period);
+        let middle_name = format!("{}_middle", prefix);
+        let upper_name = format!("{}_upper", prefix);
+        let lower_name = format!("{}_lower", prefix);
+        let bandwidth_name = format!("{}_bandwidth", prefix);
+
+        let (middle, upper, lower, _) = bollinger_bands_exprs(period, multiplier);
+
+        // Apply middle, upper, lower first
+        let lf = self.df.clone().lazy().with_columns([
+            middle.alias(&middle_name),
+            upper.alias(&upper_name),
+            lower.alias(&lower_name),
+        ]);
+        // Then compute bandwidth (depends on the columns just added)
+        let lf = lf.with_column(
+            ((col(&upper_name) - col(&lower_name)) / col(&middle_name)).alias(&bandwidth_name),
+        );
+
+        self.df = lf.collect()?;
+        self.computed.insert(key);
+        self.added_columns.push(middle_name);
+        self.added_columns.push(upper_name);
+        self.added_columns.push(lower_name);
+        self.added_columns.push(bandwidth_name);
+        Ok(())
+    }
+
+    /// Ensure Keltner Channel is computed.
+    ///
+    /// Adds columns: kc_{ema}_{atr}_center, kc_{ema}_{atr}_upper, kc_{ema}_{atr}_lower
+    /// Requires true_range as dependency.
+    pub fn ensure_keltner(
+        &mut self,
+        ema_period: usize,
+        atr_period: usize,
+        multiplier: f64,
+    ) -> PolarsResult<()> {
+        let multiplier_x100 = (multiplier * 100.0) as i32;
+        let key = IndicatorKey::Keltner {
+            ema_period,
+            atr_period,
+            multiplier_x100,
+        };
+        if self.computed.contains(&key) {
+            return Ok(());
+        }
+
+        // Keltner requires true_range for ATR
+        self.ensure_true_range()?;
+
+        use crate::indicators_polars::keltner_channel_exprs;
+        let prefix = format!("kc_{}_{}", ema_period, atr_period);
+        let center_name = format!("{}_center", prefix);
+        let upper_name = format!("{}_upper", prefix);
+        let lower_name = format!("{}_lower", prefix);
+
+        let (center, upper, lower) = keltner_channel_exprs(ema_period, atr_period, multiplier);
+
+        let lf = self.df.clone().lazy().with_columns([
+            center.alias(&center_name),
+            upper.alias(&upper_name),
+            lower.alias(&lower_name),
+        ]);
+
+        self.df = lf.collect()?;
+        self.computed.insert(key);
+        self.added_columns.push(center_name);
+        self.added_columns.push(upper_name);
+        self.added_columns.push(lower_name);
+        Ok(())
+    }
+
+    /// Ensure STARC Bands are computed.
+    ///
+    /// Adds columns: starc_{sma}_{atr}_center, starc_{sma}_{atr}_upper, starc_{sma}_{atr}_lower
+    /// Requires true_range as dependency.
+    pub fn ensure_starc(
+        &mut self,
+        sma_period: usize,
+        atr_period: usize,
+        multiplier: f64,
+    ) -> PolarsResult<()> {
+        let multiplier_x100 = (multiplier * 100.0) as i32;
+        let key = IndicatorKey::Starc {
+            sma_period,
+            atr_period,
+            multiplier_x100,
+        };
+        if self.computed.contains(&key) {
+            return Ok(());
+        }
+
+        // STARC requires true_range for ATR
+        self.ensure_true_range()?;
+
+        use crate::indicators_polars::starc_bands_exprs;
+        let prefix = format!("starc_{}_{}", sma_period, atr_period);
+        let center_name = format!("{}_center", prefix);
+        let upper_name = format!("{}_upper", prefix);
+        let lower_name = format!("{}_lower", prefix);
+
+        let (center, upper, lower) = starc_bands_exprs(sma_period, atr_period, multiplier);
+
+        let lf = self.df.clone().lazy().with_columns([
+            center.alias(&center_name),
+            upper.alias(&upper_name),
+            lower.alias(&lower_name),
+        ]);
+
+        self.df = lf.collect()?;
+        self.computed.insert(key);
+        self.added_columns.push(center_name);
+        self.added_columns.push(upper_name);
+        self.added_columns.push(lower_name);
         Ok(())
     }
 
@@ -405,12 +546,27 @@ impl IndicatorCache {
                     slow_period,
                     signal_period,
                 } => self.ensure_macd(*fast_period, *slow_period, *signal_period)?,
+                IndicatorKey::Bollinger {
+                    period,
+                    multiplier_x100,
+                } => self.ensure_bollinger(*period, *multiplier_x100 as f64 / 100.0)?,
+                IndicatorKey::Keltner {
+                    ema_period,
+                    atr_period,
+                    multiplier_x100,
+                } => {
+                    self.ensure_keltner(*ema_period, *atr_period, *multiplier_x100 as f64 / 100.0)?
+                }
+                IndicatorKey::Starc {
+                    sma_period,
+                    atr_period,
+                    multiplier_x100,
+                } => {
+                    self.ensure_starc(*sma_period, *atr_period, *multiplier_x100 as f64 / 100.0)?
+                }
                 // For complex indicators that need special handling, compute inline
-                IndicatorKey::Bollinger { .. }
-                | IndicatorKey::DMI { .. }
+                IndicatorKey::DMI { .. }
                 | IndicatorKey::Aroon { .. }
-                | IndicatorKey::Keltner { .. }
-                | IndicatorKey::Starc { .. }
                 | IndicatorKey::Supertrend { .. }
                 | IndicatorKey::HeikinAshi
                 | IndicatorKey::FiftyTwoWeekHigh { .. } => {
@@ -435,9 +591,7 @@ impl IndicatorCache {
     /// 3. Third batch: ATR, ATRWilder (depend on TrueRange)
     /// 4. Remaining: Complex indicators computed individually
     pub fn ensure_all_batched(&mut self, keys: &[IndicatorKey]) -> PolarsResult<()> {
-        use crate::indicators_polars::{
-            donchian_channel_exprs, ema_close_expr, sma_close_expr,
-        };
+        use crate::indicators_polars::{donchian_channel_exprs, ema_close_expr, sma_close_expr};
 
         // Separate keys by category
         let mut need_true_range = false;
@@ -474,7 +628,11 @@ impl IndicatorCache {
                     // RSI is complex, handle individually
                     complex_keys.push(IndicatorKey::RSI { period: *period });
                 }
-                IndicatorKey::MACD { fast_period, slow_period, signal_period } => {
+                IndicatorKey::MACD {
+                    fast_period,
+                    slow_period,
+                    signal_period,
+                } => {
                     complex_keys.push(IndicatorKey::MACD {
                         fast_period: *fast_period,
                         slow_period: *slow_period,
@@ -614,6 +772,20 @@ impl IndicatorCache {
                     slow_period,
                     signal_period,
                 } => self.ensure_macd(fast_period, slow_period, signal_period)?,
+                IndicatorKey::Bollinger {
+                    period,
+                    multiplier_x100,
+                } => self.ensure_bollinger(period, multiplier_x100 as f64 / 100.0)?,
+                IndicatorKey::Keltner {
+                    ema_period,
+                    atr_period,
+                    multiplier_x100,
+                } => self.ensure_keltner(ema_period, atr_period, multiplier_x100 as f64 / 100.0)?,
+                IndicatorKey::Starc {
+                    sma_period,
+                    atr_period,
+                    multiplier_x100,
+                } => self.ensure_starc(sma_period, atr_period, multiplier_x100 as f64 / 100.0)?,
                 _ => {} // Skip unsupported complex indicators
             }
         }
@@ -696,7 +868,8 @@ impl LazyIndicatorCache {
 
     /// Add Donchian channel to the pending indicators.
     pub fn with_donchian(mut self, lookback: usize) -> Self {
-        self.pending_keys.insert(IndicatorKey::Donchian { lookback });
+        self.pending_keys
+            .insert(IndicatorKey::Donchian { lookback });
         self
     }
 
@@ -722,7 +895,42 @@ impl LazyIndicatorCache {
 
     /// Add rolling max of high to the pending indicators.
     pub fn with_rolling_max_high(mut self, period: usize) -> Self {
-        self.pending_keys.insert(IndicatorKey::RollingMaxHigh { period });
+        self.pending_keys
+            .insert(IndicatorKey::RollingMaxHigh { period });
+        self
+    }
+
+    /// Add Bollinger Bands to the pending indicators.
+    pub fn with_bollinger(mut self, period: usize, multiplier: f64) -> Self {
+        let multiplier_x100 = (multiplier * 100.0) as i32;
+        self.pending_keys.insert(IndicatorKey::Bollinger {
+            period,
+            multiplier_x100,
+        });
+        self
+    }
+
+    /// Add Keltner Channel to the pending indicators.
+    pub fn with_keltner(mut self, ema_period: usize, atr_period: usize, multiplier: f64) -> Self {
+        let multiplier_x100 = (multiplier * 100.0) as i32;
+        self.pending_keys.insert(IndicatorKey::Keltner {
+            ema_period,
+            atr_period,
+            multiplier_x100,
+        });
+        self.has_true_range = true; // Keltner depends on ATR which needs true_range
+        self
+    }
+
+    /// Add STARC Bands to the pending indicators.
+    pub fn with_starc(mut self, sma_period: usize, atr_period: usize, multiplier: f64) -> Self {
+        let multiplier_x100 = (multiplier * 100.0) as i32;
+        self.pending_keys.insert(IndicatorKey::Starc {
+            sma_period,
+            atr_period,
+            multiplier_x100,
+        });
+        self.has_true_range = true; // STARC depends on ATR which needs true_range
         self
     }
 
@@ -731,7 +939,13 @@ impl LazyIndicatorCache {
         for key in keys {
             self.pending_keys.insert(key.clone());
             // Track true range dependency
-            if matches!(key, IndicatorKey::ATR { .. } | IndicatorKey::ATRWilder { .. }) {
+            if matches!(
+                key,
+                IndicatorKey::ATR { .. }
+                    | IndicatorKey::ATRWilder { .. }
+                    | IndicatorKey::Keltner { .. }
+                    | IndicatorKey::Starc { .. }
+            ) {
                 self.has_true_range = true;
             }
         }
@@ -820,6 +1034,69 @@ impl LazyIndicatorCache {
             lf = lf.with_columns(atr_exprs);
         }
 
+        // Collect channel indicators (Bollinger, Keltner, STARC)
+        // These need to be computed individually due to complex dependencies
+        for key in &self.pending_keys {
+            match key {
+                IndicatorKey::Bollinger {
+                    period,
+                    multiplier_x100,
+                } => {
+                    use crate::indicators_polars::bollinger_bands_exprs;
+                    let multiplier = *multiplier_x100 as f64 / 100.0;
+                    let prefix = format!("bb_{}", period);
+                    let (middle, upper, lower, _) = bollinger_bands_exprs(*period, multiplier);
+
+                    lf = lf.with_columns([
+                        middle.alias(format!("{}_middle", prefix)),
+                        upper.alias(format!("{}_upper", prefix)),
+                        lower.alias(format!("{}_lower", prefix)),
+                    ]);
+                    // Bandwidth computed in a second pass
+                    lf = lf.with_column(
+                        ((col(format!("{}_upper", prefix)) - col(format!("{}_lower", prefix)))
+                            / col(format!("{}_middle", prefix)))
+                        .alias(format!("{}_bandwidth", prefix)),
+                    );
+                }
+                IndicatorKey::Keltner {
+                    ema_period,
+                    atr_period,
+                    multiplier_x100,
+                } => {
+                    use crate::indicators_polars::keltner_channel_exprs;
+                    let multiplier = *multiplier_x100 as f64 / 100.0;
+                    let prefix = format!("kc_{}_{}", ema_period, atr_period);
+                    let (center, upper, lower) =
+                        keltner_channel_exprs(*ema_period, *atr_period, multiplier);
+
+                    lf = lf.with_columns([
+                        center.alias(format!("{}_center", prefix)),
+                        upper.alias(format!("{}_upper", prefix)),
+                        lower.alias(format!("{}_lower", prefix)),
+                    ]);
+                }
+                IndicatorKey::Starc {
+                    sma_period,
+                    atr_period,
+                    multiplier_x100,
+                } => {
+                    use crate::indicators_polars::starc_bands_exprs;
+                    let multiplier = *multiplier_x100 as f64 / 100.0;
+                    let prefix = format!("starc_{}_{}", sma_period, atr_period);
+                    let (center, upper, lower) =
+                        starc_bands_exprs(*sma_period, *atr_period, multiplier);
+
+                    lf = lf.with_columns([
+                        center.alias(format!("{}_center", prefix)),
+                        upper.alias(format!("{}_upper", prefix)),
+                        lower.alias(format!("{}_lower", prefix)),
+                    ]);
+                }
+                _ => {}
+            }
+        }
+
         lf
     }
 
@@ -837,7 +1114,9 @@ impl LazyIndicatorCache {
 /// Extract indicator requirements from a strategy specification.
 ///
 /// Returns the set of indicators needed to compute signals for this strategy.
-pub fn extract_indicator_requirements(spec: &crate::strategy_v2::StrategySpec) -> Vec<IndicatorKey> {
+pub fn extract_indicator_requirements(
+    spec: &crate::strategy_v2::StrategySpec,
+) -> Vec<IndicatorKey> {
     use crate::strategy_v2::StrategySpec;
 
     match spec {
@@ -862,17 +1141,27 @@ pub fn extract_indicator_requirements(spec: &crate::strategy_v2::StrategySpec) -
             use crate::indicators::MAType;
             match ma_type {
                 MAType::SMA => vec![
-                    IndicatorKey::SMA { window: *fast_period },
-                    IndicatorKey::SMA { window: *slow_period },
+                    IndicatorKey::SMA {
+                        window: *fast_period,
+                    },
+                    IndicatorKey::SMA {
+                        window: *slow_period,
+                    },
                 ],
                 MAType::EMA => vec![
-                    IndicatorKey::EMA { window: *fast_period },
-                    IndicatorKey::EMA { window: *slow_period },
+                    IndicatorKey::EMA {
+                        window: *fast_period,
+                    },
+                    IndicatorKey::EMA {
+                        window: *slow_period,
+                    },
                 ],
             }
         }
         StrategySpec::Tsmom { lookback } => {
-            vec![IndicatorKey::Tsmom { lookback: *lookback }]
+            vec![IndicatorKey::Tsmom {
+                lookback: *lookback,
+            }]
         }
         StrategySpec::FiftyTwoWeekHigh { period, .. } => {
             vec![IndicatorKey::RollingMaxHigh { period: *period }]
@@ -880,7 +1169,9 @@ pub fn extract_indicator_requirements(spec: &crate::strategy_v2::StrategySpec) -
         StrategySpec::DmiAdx { di_period, .. } => {
             vec![IndicatorKey::DMI { period: *di_period }]
         }
-        StrategySpec::BollingerSqueeze { period, std_mult, .. } => {
+        StrategySpec::BollingerSqueeze {
+            period, std_mult, ..
+        } => {
             vec![IndicatorKey::Bollinger {
                 period: *period,
                 multiplier_x100: (*std_mult * 100.0) as i32,
@@ -911,7 +1202,10 @@ pub fn extract_indicator_requirements(spec: &crate::strategy_v2::StrategySpec) -
                 multiplier_x100: (*multiplier * 100.0) as i32,
             }]
         }
-        StrategySpec::Supertrend { atr_period, multiplier } => {
+        StrategySpec::Supertrend {
+            atr_period,
+            multiplier,
+        } => {
             vec![IndicatorKey::Supertrend {
                 atr_period: *atr_period,
                 multiplier_x100: (*multiplier * 100.0) as i32,
@@ -949,7 +1243,9 @@ pub fn extract_indicator_requirements(spec: &crate::strategy_v2::StrategySpec) -
 }
 
 /// Collect all unique indicator requirements from a set of strategy specifications.
-pub fn collect_indicator_requirements(specs: &[crate::strategy_v2::StrategySpec]) -> Vec<IndicatorKey> {
+pub fn collect_indicator_requirements(
+    specs: &[crate::strategy_v2::StrategySpec],
+) -> Vec<IndicatorKey> {
     let mut seen = HashSet::new();
     let mut result = Vec::new();
 
@@ -977,7 +1273,16 @@ mod tests {
                 let ts = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()
                     + chrono::Duration::days(i as i64);
                 let base = 100.0 + i as f64;
-                Bar::new(ts, base, base + 2.0, base - 1.0, base + 1.0, 1000.0, "TEST", "1d")
+                Bar::new(
+                    ts,
+                    base,
+                    base + 2.0,
+                    base - 1.0,
+                    base + 1.0,
+                    1000.0,
+                    "TEST",
+                    "1d",
+                )
             })
             .collect()
     }
@@ -1192,9 +1497,7 @@ mod tests {
         let lf = df.lazy();
 
         // Build cache with ATR (requires true_range)
-        let cache = LazyIndicatorCache::new(lf)
-            .with_atr(14)
-            .with_atr_wilder(20);
+        let cache = LazyIndicatorCache::new(lf).with_atr(14).with_atr_wilder(20);
 
         let result = cache.collect().unwrap();
 
@@ -1236,9 +1539,7 @@ mod tests {
         let lf = df.lazy();
 
         // Use build() to get LazyFrame without collecting
-        let cache = LazyIndicatorCache::new(lf)
-            .with_sma(10)
-            .with_ema(20);
+        let cache = LazyIndicatorCache::new(lf).with_sma(10).with_ema(20);
 
         // build() returns LazyFrame - we can add more transformations
         let result_lf = cache.build();
@@ -1247,5 +1548,130 @@ mod tests {
         let result = result_lf.collect().unwrap();
         assert!(result.column("sma_10").is_ok());
         assert!(result.column("ema_20").is_ok());
+    }
+
+    #[test]
+    fn test_ensure_bollinger() {
+        let bars = make_test_bars(50);
+        let df = bars_to_dataframe(&bars).unwrap();
+        let mut cache = IndicatorCache::new(df);
+
+        cache.ensure_bollinger(20, 2.0).unwrap();
+
+        assert!(cache.has_indicator(&IndicatorKey::Bollinger {
+            period: 20,
+            multiplier_x100: 200
+        }));
+        assert!(cache.dataframe().column("bb_20_middle").is_ok());
+        assert!(cache.dataframe().column("bb_20_upper").is_ok());
+        assert!(cache.dataframe().column("bb_20_lower").is_ok());
+        assert!(cache.dataframe().column("bb_20_bandwidth").is_ok());
+    }
+
+    #[test]
+    fn test_ensure_keltner() {
+        let bars = make_test_bars(50);
+        let df = bars_to_dataframe(&bars).unwrap();
+        let mut cache = IndicatorCache::new(df);
+
+        cache.ensure_keltner(20, 14, 1.5).unwrap();
+
+        assert!(cache.has_indicator(&IndicatorKey::Keltner {
+            ema_period: 20,
+            atr_period: 14,
+            multiplier_x100: 150
+        }));
+        // Keltner requires true_range as dependency
+        assert!(cache.has_indicator(&IndicatorKey::TrueRange));
+        assert!(cache.dataframe().column("kc_20_14_center").is_ok());
+        assert!(cache.dataframe().column("kc_20_14_upper").is_ok());
+        assert!(cache.dataframe().column("kc_20_14_lower").is_ok());
+    }
+
+    #[test]
+    fn test_ensure_starc() {
+        let bars = make_test_bars(50);
+        let df = bars_to_dataframe(&bars).unwrap();
+        let mut cache = IndicatorCache::new(df);
+
+        cache.ensure_starc(20, 14, 2.0).unwrap();
+
+        assert!(cache.has_indicator(&IndicatorKey::Starc {
+            sma_period: 20,
+            atr_period: 14,
+            multiplier_x100: 200
+        }));
+        // STARC requires true_range as dependency
+        assert!(cache.has_indicator(&IndicatorKey::TrueRange));
+        assert!(cache.dataframe().column("starc_20_14_center").is_ok());
+        assert!(cache.dataframe().column("starc_20_14_upper").is_ok());
+        assert!(cache.dataframe().column("starc_20_14_lower").is_ok());
+    }
+
+    #[test]
+    fn test_ensure_all_batched_with_channels() {
+        let bars = make_test_bars(100);
+        let df = bars_to_dataframe(&bars).unwrap();
+        let mut cache = IndicatorCache::new(df);
+
+        let keys = vec![
+            IndicatorKey::Bollinger {
+                period: 20,
+                multiplier_x100: 200,
+            },
+            IndicatorKey::Keltner {
+                ema_period: 20,
+                atr_period: 14,
+                multiplier_x100: 150,
+            },
+            IndicatorKey::Starc {
+                sma_period: 20,
+                atr_period: 14,
+                multiplier_x100: 200,
+            },
+        ];
+
+        cache.ensure_all_batched(&keys).unwrap();
+
+        // All should be computed
+        for key in &keys {
+            assert!(cache.has_indicator(key), "Missing {:?}", key);
+        }
+
+        // TrueRange should be auto-computed (shared dependency)
+        assert!(cache.has_indicator(&IndicatorKey::TrueRange));
+    }
+
+    #[test]
+    fn test_lazy_cache_with_channels() {
+        let bars = make_test_bars(60);
+        let df = bars_to_dataframe(&bars).unwrap();
+        let lf = df.lazy();
+
+        let cache = LazyIndicatorCache::new(lf)
+            .with_bollinger(20, 2.0)
+            .with_keltner(20, 14, 1.5)
+            .with_starc(20, 14, 2.0);
+
+        let result = cache.collect().unwrap();
+
+        // Bollinger columns
+        assert!(result.column("bb_20_middle").is_ok());
+        assert!(result.column("bb_20_upper").is_ok());
+        assert!(result.column("bb_20_lower").is_ok());
+        assert!(result.column("bb_20_bandwidth").is_ok());
+
+        // Keltner columns
+        assert!(result.column("kc_20_14_center").is_ok());
+        assert!(result.column("kc_20_14_upper").is_ok());
+        assert!(result.column("kc_20_14_lower").is_ok());
+
+        // STARC columns
+        assert!(result.column("starc_20_14_center").is_ok());
+        assert!(result.column("starc_20_14_upper").is_ok());
+        assert!(result.column("starc_20_14_lower").is_ok());
+
+        // True range (dependency)
+        assert!(result.column("true_range").is_ok());
     }
 }

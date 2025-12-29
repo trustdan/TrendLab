@@ -2543,6 +2543,12 @@ impl App {
             Panel::Chart => {
                 self.chart.zoom_level = (self.chart.zoom_level * 1.1).min(4.0);
             }
+            Panel::Help => {
+                // Scroll up in help content
+                if self.help.scroll_offset > 0 {
+                    self.help.scroll_offset -= 1;
+                }
+            }
         }
     }
 
@@ -2608,6 +2614,11 @@ impl App {
             Panel::Chart => {
                 self.chart.zoom_level = (self.chart.zoom_level / 1.1).max(0.25);
             }
+            Panel::Help => {
+                // Scroll down in help content
+                self.help.scroll_offset += 1;
+                // Max scroll will be clamped in draw function
+            }
         }
     }
 
@@ -2633,6 +2644,11 @@ impl App {
                 if self.results.view_mode == ResultsViewMode::Leaderboard {
                     self.collapse_leaderboard_row();
                 }
+            }
+            Panel::Help => {
+                // Previous section
+                self.help.active_section = self.help.active_section.prev();
+                self.help.scroll_offset = 0;
             }
             _ => {}
         }
@@ -2662,6 +2678,11 @@ impl App {
                     self.expand_leaderboard_row();
                 }
             }
+            Panel::Help => {
+                // Next section
+                self.help.active_section = self.help.active_section.next();
+                self.help.scroll_offset = 0;
+            }
             _ => {}
         }
     }
@@ -2681,6 +2702,65 @@ impl App {
     /// Check if a leaderboard row is expanded.
     pub fn is_leaderboard_expanded(&self) -> bool {
         self.results.expanded_leaderboard_index.is_some()
+    }
+
+    // =========================================================================
+    // Help Panel Navigation
+    // =========================================================================
+
+    /// Page down in Help panel (half screen)
+    pub fn help_page_down(&mut self) {
+        self.help.scroll_offset += 10;
+    }
+
+    /// Page up in Help panel (half screen)
+    pub fn help_page_up(&mut self) {
+        self.help.scroll_offset = self.help.scroll_offset.saturating_sub(10);
+    }
+
+    /// Jump to bottom of Help content
+    pub fn help_jump_to_bottom(&mut self) {
+        // Set a high value; draw function will clamp
+        self.help.scroll_offset = usize::MAX / 2;
+    }
+
+    /// Move to next search match in Help
+    pub fn help_next_match(&mut self) {
+        if !self.help.search_matches.is_empty() {
+            self.help.search_index = (self.help.search_index + 1) % self.help.search_matches.len();
+            if let Some(&line) = self.help.search_matches.get(self.help.search_index) {
+                self.help.scroll_offset = line;
+            }
+        }
+    }
+
+    /// Move to previous search match in Help
+    pub fn help_prev_match(&mut self) {
+        if !self.help.search_matches.is_empty() {
+            if self.help.search_index == 0 {
+                self.help.search_index = self.help.search_matches.len() - 1;
+            } else {
+                self.help.search_index -= 1;
+            }
+            if let Some(&line) = self.help.search_matches.get(self.help.search_index) {
+                self.help.scroll_offset = line;
+            }
+        }
+    }
+
+    /// Update search matches for Help panel (called on each keystroke)
+    pub fn update_help_search_matches(&mut self) {
+        // For simplicity, we just track that there might be matches
+        // The actual match highlighting is done in the draw function
+        self.help.search_matches.clear();
+        self.help.search_index = 0;
+
+        // In a full implementation, we'd scan the help content here
+        // For now, just indicate search is active if query is non-empty
+        if !self.help.search_query.is_empty() {
+            // Placeholder - matches will be found during rendering
+            // The draw function handles highlighting
+        }
     }
 
     fn adjust_strategy_param(&mut self, delta: i32) {

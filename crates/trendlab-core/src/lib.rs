@@ -44,10 +44,12 @@ pub use backtest::{
     PyramidTrade, Side, Trade, TradeDirection,
 };
 pub use backtest_polars::{
-    run_backtest_polars, run_donchian_backtest_polars, run_donchian_sweep_polars,
-    run_strategy_sweep_polars, run_strategy_sweep_polars_cached, run_strategy_sweep_polars_lazy,
-    run_strategy_sweep_polars_optimized, run_strategy_sweep_polars_parallel,
-    DonchianBacktestConfig, PolarsBacktestConfig, PolarsBacktestResult,
+    load_streaming_sweep_results, run_backtest_polars, run_donchian_backtest_polars,
+    run_donchian_sweep_polars, run_strategy_sweep_polars, run_strategy_sweep_polars_cached,
+    run_strategy_sweep_polars_lazy, run_strategy_sweep_polars_optimized,
+    run_strategy_sweep_polars_parallel, run_strategy_sweep_polars_streaming,
+    DonchianBacktestConfig, PolarsBacktestConfig, PolarsBacktestResult, StreamingSweepConfig,
+    StreamingSweepProgress, StreamingSweepResult, StreamingSweepSummary,
 };
 // Re-export IntoLazy trait for DataFrame.lazy() calls
 pub use analysis::{
@@ -100,12 +102,12 @@ pub use indicators_polars::{
     true_range_expr, williams_r_expr, IndicatorSet, IndicatorSpec,
 };
 pub use leaderboard::{
-    combine_equity_curves_realistic, combine_equity_curves_simple,
-    compute_confidence_from_equity, compute_cross_sector_confidence_from_metrics,
-    compute_cross_symbol_confidence_from_metrics, generate_session_id, AggregatedConfigResult,
-    AggregatedMetrics, CombinedEquityAggregation, CombinedEquityConfig, CombinedEquityResult,
-    CombinedEquityWeighting, CrossSymbolLeaderboard, CrossSymbolRankMetric, Leaderboard,
-    LeaderboardEntry, LeaderboardScope, RankingWeights, RiskProfile, RobustScoreConfig,
+    combine_equity_curves_realistic, combine_equity_curves_simple, compute_confidence_from_equity,
+    compute_cross_sector_confidence_from_metrics, compute_cross_symbol_confidence_from_metrics,
+    generate_session_id, AggregatedConfigResult, AggregatedMetrics, CombinedEquityAggregation,
+    CombinedEquityConfig, CombinedEquityResult, CombinedEquityWeighting, CrossSymbolLeaderboard,
+    CrossSymbolRankMetric, Leaderboard, LeaderboardEntry, LeaderboardScope, RankingWeights,
+    RiskProfile, RobustScoreConfig,
 };
 pub use metrics::{compute_metrics, Metrics};
 pub use polars::prelude::IntoLazy;

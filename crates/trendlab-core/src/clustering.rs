@@ -135,10 +135,10 @@ pub const EXTENDED_CLUSTER_FEATURES: &[&str] = &[
     "calmar",
     "win_rate",
     "profit_factor",
-    "cvar_95",           // Tail risk
-    "skewness",          // Return asymmetry
-    "kurtosis",          // Fat tails
-    "sharpe_stability",  // Consistency across folds
+    "cvar_95",              // Tail risk
+    "skewness",             // Return asymmetry
+    "kurtosis",             // Fat tails
+    "sharpe_stability",     // Consistency across folds
     "regime_concentration", // Regime dependency
 ];
 
@@ -146,11 +146,11 @@ pub const EXTENDED_CLUSTER_FEATURES: &[&str] = &[
 /// Emphasizes consistency and risk metrics over raw returns.
 pub const ROBUSTNESS_CLUSTER_FEATURES: &[&str] = &[
     "sharpe",
-    "min_sharpe",        // Worst-case performance
-    "sharpe_stability",  // Consistency
+    "min_sharpe",       // Worst-case performance
+    "sharpe_stability", // Consistency
     "max_drawdown",
     "cvar_95",
-    "hit_rate",          // Symbol consistency
+    "hit_rate", // Symbol consistency
     "regime_concentration",
 ];
 
@@ -470,7 +470,10 @@ impl Default for DiverseSelectionConfig {
             descending: true,
             min_clusters: 3,
             max_clusters: 10,
-            features: DEFAULT_CLUSTER_FEATURES.iter().map(|s| s.to_string()).collect(),
+            features: DEFAULT_CLUSTER_FEATURES
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
         }
     }
 }
@@ -489,7 +492,10 @@ impl DiverseSelectionConfig {
 
     /// Use robustness-focused features.
     pub fn with_robustness_features(mut self) -> Self {
-        self.features = ROBUSTNESS_CLUSTER_FEATURES.iter().map(|s| s.to_string()).collect();
+        self.features = ROBUSTNESS_CLUSTER_FEATURES
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         self
     }
 
@@ -516,14 +522,19 @@ pub struct DiverseSelectionResult {
 
 impl DiverseSelectionResult {
     /// Get IDs of selected strategies from the DataFrame.
-    pub fn get_selected_ids(&self, df: &DataFrame, id_column: &str) -> Result<Vec<String>, ClusteringError> {
+    pub fn get_selected_ids(
+        &self,
+        df: &DataFrame,
+        id_column: &str,
+    ) -> Result<Vec<String>, ClusteringError> {
         let ids = df
             .column(id_column)
             .map_err(|_| ClusteringError::MissingColumn(id_column.to_string()))?
             .str()
             .map_err(|_| ClusteringError::MissingColumn(format!("{} is not string", id_column)))?;
 
-        Ok(self.selected_indices
+        Ok(self
+            .selected_indices
             .iter()
             .filter_map(|&idx| ids.get(idx).map(|s| s.to_string()))
             .collect())
@@ -600,9 +611,11 @@ pub fn select_diverse_strategies(
 
     // Sort by rank (descending if descending=true)
     if config.descending {
-        indices_with_ranks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        indices_with_ranks
+            .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     } else {
-        indices_with_ranks.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        indices_with_ranks
+            .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
     }
 
     // Take top N original indices
@@ -613,7 +626,12 @@ pub fn select_diverse_strategies(
         .collect();
 
     // Determine optimal k
-    let k = determine_optimal_k(pre_filter_n, n_select, config.min_clusters, config.max_clusters);
+    let k = determine_optimal_k(
+        pre_filter_n,
+        n_select,
+        config.min_clusters,
+        config.max_clusters,
+    );
 
     // Filter features to only those present in the DataFrame
     let available_features: Vec<&str> = config
@@ -624,7 +642,9 @@ pub fn select_diverse_strategies(
         .collect();
 
     if available_features.is_empty() {
-        return Err(ClusteringError::MissingColumn("No clustering features available".to_string()));
+        return Err(ClusteringError::MissingColumn(
+            "No clustering features available".to_string(),
+        ));
     }
 
     // Cluster the filtered candidates
@@ -748,7 +768,11 @@ fn select_proportionally_from_clusters(
     for (cluster, &allocation) in allocations.iter().enumerate().take(k) {
         let mut members = clustering.cluster_members(cluster);
         // Sort members by rank (descending - best first)
-        members.sort_by(|&a, &b| ranks[b].partial_cmp(&ranks[a]).unwrap_or(std::cmp::Ordering::Equal));
+        members.sort_by(|&a, &b| {
+            ranks[b]
+                .partial_cmp(&ranks[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Take allocated number from this cluster
         let take = allocation.min(members.len());
@@ -766,8 +790,7 @@ pub fn select_diverse_by_sharpe(
     df: &DataFrame,
     n: usize,
 ) -> Result<DiverseSelectionResult, ClusteringError> {
-    let config = DiverseSelectionConfig::with_n(n)
-        .rank_by("sharpe", true);
+    let config = DiverseSelectionConfig::with_n(n).rank_by("sharpe", true);
     select_diverse_strategies(df, &config)
 }
 
@@ -930,46 +953,62 @@ mod tests {
         // Create a larger dataset for diverse selection tests
         // 12 configs in 3 clusters (performance profiles)
         DataFrame::new(vec![
-            Series::new("config_id".into(), vec![
-                "high1", "high2", "high3", "high4",      // High performers
-                "mid1", "mid2", "mid3", "mid4",          // Medium performers
-                "low1", "low2", "low3", "low4",          // Low performers
-            ]).into(),
-            Series::new("sharpe".into(), vec![
-                2.0, 1.9, 1.8, 1.7,   // High
-                1.0, 0.9, 0.8, 0.7,   // Mid
-                0.2, 0.1, 0.0, -0.1,  // Low
-            ]).into(),
-            Series::new("cagr".into(), vec![
-                0.20, 0.19, 0.18, 0.17,
-                0.10, 0.09, 0.08, 0.07,
-                0.02, 0.01, 0.00, -0.01,
-            ]).into(),
-            Series::new("max_drawdown".into(), vec![
-                0.10, 0.11, 0.12, 0.13,
-                0.20, 0.21, 0.22, 0.23,
-                0.35, 0.36, 0.37, 0.38,
-            ]).into(),
-            Series::new("sortino".into(), vec![
-                2.5, 2.4, 2.3, 2.2,
-                1.3, 1.2, 1.1, 1.0,
-                0.3, 0.2, 0.1, 0.0,
-            ]).into(),
-            Series::new("calmar".into(), vec![
-                2.0, 1.7, 1.5, 1.3,
-                0.5, 0.4, 0.4, 0.3,
-                0.06, 0.03, 0.0, -0.03,
-            ]).into(),
-            Series::new("win_rate".into(), vec![
-                0.60, 0.59, 0.58, 0.57,
-                0.52, 0.51, 0.50, 0.49,
-                0.42, 0.41, 0.40, 0.39,
-            ]).into(),
-            Series::new("profit_factor".into(), vec![
-                2.0, 1.9, 1.8, 1.7,
-                1.3, 1.2, 1.1, 1.0,
-                0.9, 0.8, 0.7, 0.6,
-            ]).into(),
+            Series::new(
+                "config_id".into(),
+                vec![
+                    "high1", "high2", "high3", "high4", // High performers
+                    "mid1", "mid2", "mid3", "mid4", // Medium performers
+                    "low1", "low2", "low3", "low4", // Low performers
+                ],
+            )
+            .into(),
+            Series::new(
+                "sharpe".into(),
+                vec![
+                    2.0, 1.9, 1.8, 1.7, // High
+                    1.0, 0.9, 0.8, 0.7, // Mid
+                    0.2, 0.1, 0.0, -0.1, // Low
+                ],
+            )
+            .into(),
+            Series::new(
+                "cagr".into(),
+                vec![
+                    0.20, 0.19, 0.18, 0.17, 0.10, 0.09, 0.08, 0.07, 0.02, 0.01, 0.00, -0.01,
+                ],
+            )
+            .into(),
+            Series::new(
+                "max_drawdown".into(),
+                vec![
+                    0.10, 0.11, 0.12, 0.13, 0.20, 0.21, 0.22, 0.23, 0.35, 0.36, 0.37, 0.38,
+                ],
+            )
+            .into(),
+            Series::new(
+                "sortino".into(),
+                vec![2.5, 2.4, 2.3, 2.2, 1.3, 1.2, 1.1, 1.0, 0.3, 0.2, 0.1, 0.0],
+            )
+            .into(),
+            Series::new(
+                "calmar".into(),
+                vec![
+                    2.0, 1.7, 1.5, 1.3, 0.5, 0.4, 0.4, 0.3, 0.06, 0.03, 0.0, -0.03,
+                ],
+            )
+            .into(),
+            Series::new(
+                "win_rate".into(),
+                vec![
+                    0.60, 0.59, 0.58, 0.57, 0.52, 0.51, 0.50, 0.49, 0.42, 0.41, 0.40, 0.39,
+                ],
+            )
+            .into(),
+            Series::new(
+                "profit_factor".into(),
+                vec![2.0, 1.9, 1.8, 1.7, 1.3, 1.2, 1.1, 1.0, 0.9, 0.8, 0.7, 0.6],
+            )
+            .into(),
         ])
         .unwrap()
     }
@@ -989,8 +1028,7 @@ mod tests {
     #[test]
     fn test_diverse_selection_basic() {
         let df = create_larger_test_df();
-        let config = DiverseSelectionConfig::with_n(6)
-            .rank_by("sharpe", true);
+        let config = DiverseSelectionConfig::with_n(6).rank_by("sharpe", true);
 
         let result = select_diverse_strategies(&df, &config).unwrap();
 
@@ -1006,7 +1044,10 @@ mod tests {
         // Should have strategies from multiple clusters
         let unique_clusters: std::collections::HashSet<_> =
             result.cluster_assignments.iter().collect();
-        assert!(unique_clusters.len() >= 2, "Should select from multiple clusters");
+        assert!(
+            unique_clusters.len() >= 2,
+            "Should select from multiple clusters"
+        );
     }
 
     #[test]
@@ -1018,10 +1059,11 @@ mod tests {
         let ids = result.get_selected_ids(&df, "config_id").unwrap();
 
         // Should include some high performers
-        let high_performers: Vec<_> = ids.iter()
-            .filter(|id| id.starts_with("high"))
-            .collect();
-        assert!(!high_performers.is_empty(), "Should include high performers");
+        let high_performers: Vec<_> = ids.iter().filter(|id| id.starts_with("high")).collect();
+        assert!(
+            !high_performers.is_empty(),
+            "Should include high performers"
+        );
     }
 
     #[test]
@@ -1035,7 +1077,11 @@ mod tests {
         assert!(!result.cluster_distribution.is_empty());
 
         // Total from distribution should match selected count
-        let total: usize = result.cluster_distribution.iter().map(|(_, count)| count).sum();
+        let total: usize = result
+            .cluster_distribution
+            .iter()
+            .map(|(_, count)| count)
+            .sum();
         assert_eq!(total, 6);
     }
 

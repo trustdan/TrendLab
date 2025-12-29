@@ -1384,7 +1384,11 @@ pub fn combine_equity_curves_realistic(
         sharpe,
         cagr,
         num_symbols: aligned_equity.len(),
-        overlap_days: aligned_indices.values().next().map(|v| v.len()).unwrap_or(0),
+        overlap_days: aligned_indices
+            .values()
+            .next()
+            .map(|v| v.len())
+            .unwrap_or(0),
     })
 }
 
@@ -1442,7 +1446,10 @@ fn find_date_intersection(
             .collect();
 
         indices.sort_by_key(|(d, _)| *d);
-        aligned_indices.insert(symbol.clone(), indices.into_iter().map(|(_, i)| i).collect());
+        aligned_indices.insert(
+            symbol.clone(),
+            indices.into_iter().map(|(_, i)| i).collect(),
+        );
     }
 
     Some((aligned_indices, common_dates_vec))
@@ -1529,7 +1536,11 @@ fn combine_returns(
     }
 
     // Get the length of returns (should be same for all symbols after alignment)
-    let return_len = aligned_returns.values().next().map(|r| r.len()).unwrap_or(0);
+    let return_len = aligned_returns
+        .values()
+        .next()
+        .map(|r| r.len())
+        .unwrap_or(0);
     if return_len == 0 {
         return vec![];
     }
@@ -1833,7 +1844,8 @@ impl AggregatedConfigResult {
             }
             CrossSymbolRankMetric::CompositeScore(profile) => {
                 // Delegate to aggregate_metrics.rank_value for composite score
-                self.aggregate_metrics.rank_value(CrossSymbolRankMetric::CompositeScore(profile))
+                self.aggregate_metrics
+                    .rank_value(CrossSymbolRankMetric::CompositeScore(profile))
             }
         }
     }
@@ -2379,7 +2391,10 @@ mod tests {
         // Create two symbols with identical date ranges
         let dates = make_dates(100, 100);
         per_symbol_equity.insert("AAPL".to_string(), make_equity_curve(100, 100_000.0, 0.001));
-        per_symbol_equity.insert("MSFT".to_string(), make_equity_curve(100, 100_000.0, 0.0005));
+        per_symbol_equity.insert(
+            "MSFT".to_string(),
+            make_equity_curve(100, 100_000.0, 0.0005),
+        );
         per_symbol_dates.insert("AAPL".to_string(), dates.clone());
         per_symbol_dates.insert("MSFT".to_string(), dates);
 
@@ -2431,7 +2446,10 @@ mod tests {
 
         let dates = make_dates(100, 100);
         // Low vol symbol (steady 0.1% daily)
-        per_symbol_equity.insert("LOW_VOL".to_string(), make_equity_curve(100, 100_000.0, 0.001));
+        per_symbol_equity.insert(
+            "LOW_VOL".to_string(),
+            make_equity_curve(100, 100_000.0, 0.001),
+        );
         // High vol symbol (noisy)
         let mut high_vol_equity: Vec<f64> = Vec::with_capacity(100);
         let mut val = 100_000.0;
@@ -2639,7 +2657,9 @@ mod tests {
         assert!(vol < 1e-10, "Constant returns should have near-zero vol");
 
         // Mixed returns should have non-zero volatility
-        let mixed_returns: Vec<f64> = (0..50).map(|i| if i % 2 == 0 { 0.02 } else { -0.01 }).collect();
+        let mixed_returns: Vec<f64> = (0..50)
+            .map(|i| if i % 2 == 0 { 0.02 } else { -0.01 })
+            .collect();
         let vol = compute_volatility(&mixed_returns, 60);
         assert!(vol > 0.01, "Mixed returns should have positive vol");
     }
@@ -2649,16 +2669,15 @@ mod tests {
         // No drawdown: monotonically increasing
         let increasing: Vec<f64> = (1..=100).map(|i| i as f64 * 100.0).collect();
         let dd = compute_max_drawdown(&increasing);
-        assert!(dd < 1e-10, "Monotonically increasing should have no drawdown");
+        assert!(
+            dd < 1e-10,
+            "Monotonically increasing should have no drawdown"
+        );
 
         // 50% drawdown
         let with_drawdown: Vec<f64> = vec![100.0, 120.0, 60.0, 80.0];
         let dd = compute_max_drawdown(&with_drawdown);
-        assert!(
-            (dd - 0.5).abs() < 0.01,
-            "Expected 50% drawdown, got {}",
-            dd
-        );
+        assert!((dd - 0.5).abs() < 0.01, "Expected 50% drawdown, got {}", dd);
     }
 
     #[test]
@@ -2667,15 +2686,20 @@ mod tests {
         let positive_returns: Vec<f64> = vec![0.01; 100];
         let sharpe = compute_sharpe_from_returns(&positive_returns, 252.0);
         // With constant returns, Sharpe is infinite (std = 0), so this tests edge case
-        assert!(sharpe == 0.0 || sharpe.is_nan() || sharpe.is_infinite(),
-            "Constant returns result in degenerate Sharpe");
+        assert!(
+            sharpe == 0.0 || sharpe.is_nan() || sharpe.is_infinite(),
+            "Constant returns result in degenerate Sharpe"
+        );
 
         // Mixed but net positive returns
         let mixed: Vec<f64> = (0..252)
             .map(|i| if i % 3 == 0 { -0.005 } else { 0.008 })
             .collect();
         let sharpe = compute_sharpe_from_returns(&mixed, 252.0);
-        assert!(sharpe > 0.0, "Net positive returns should have positive Sharpe");
+        assert!(
+            sharpe > 0.0,
+            "Net positive returns should have positive Sharpe"
+        );
     }
 
     #[test]
@@ -2686,11 +2710,20 @@ mod tests {
 
         let risk_parity = CombinedEquityConfig::risk_parity();
         assert_eq!(risk_parity.weighting, CombinedEquityWeighting::RiskParity);
-        assert_eq!(risk_parity.aggregation, CombinedEquityAggregation::Geometric);
+        assert_eq!(
+            risk_parity.aggregation,
+            CombinedEquityAggregation::Geometric
+        );
 
         let inverse_vol = CombinedEquityConfig::inverse_vol();
-        assert_eq!(inverse_vol.weighting, CombinedEquityWeighting::InverseVolatility);
-        assert_eq!(inverse_vol.aggregation, CombinedEquityAggregation::Geometric);
+        assert_eq!(
+            inverse_vol.weighting,
+            CombinedEquityWeighting::InverseVolatility
+        );
+        assert_eq!(
+            inverse_vol.aggregation,
+            CombinedEquityAggregation::Geometric
+        );
     }
 
     #[test]
@@ -2924,14 +2957,22 @@ mod tests {
         };
 
         // Different profiles should produce different scores
-        let balanced_score = metrics.rank_value(CrossSymbolRankMetric::CompositeScore(RiskProfile::Balanced));
-        let trend_score = metrics.rank_value(CrossSymbolRankMetric::CompositeScore(RiskProfile::TrendOptions));
-        let conservative_score = metrics.rank_value(CrossSymbolRankMetric::CompositeScore(RiskProfile::Conservative));
+        let balanced_score =
+            metrics.rank_value(CrossSymbolRankMetric::CompositeScore(RiskProfile::Balanced));
+        let trend_score = metrics.rank_value(CrossSymbolRankMetric::CompositeScore(
+            RiskProfile::TrendOptions,
+        ));
+        let conservative_score = metrics.rank_value(CrossSymbolRankMetric::CompositeScore(
+            RiskProfile::Conservative,
+        ));
 
         // All scores should be positive for good metrics
         assert!(balanced_score > 0.0, "Balanced score should be positive");
         assert!(trend_score > 0.0, "TrendOptions score should be positive");
-        assert!(conservative_score > 0.0, "Conservative score should be positive");
+        assert!(
+            conservative_score > 0.0,
+            "Conservative score should be positive"
+        );
 
         // Scores should differ based on profile weights
         // (exact ordering depends on metrics, just verify they're different)
