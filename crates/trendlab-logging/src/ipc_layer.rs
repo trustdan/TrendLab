@@ -236,6 +236,13 @@ where
 pub struct IpcLayer;
 
 #[cfg(not(feature = "ipc"))]
+impl Default for IpcLayer {
+    fn default() -> Self {
+        Self
+    }
+}
+
+#[cfg(not(feature = "ipc"))]
 impl IpcLayer {
     pub fn new() -> Self {
         Self

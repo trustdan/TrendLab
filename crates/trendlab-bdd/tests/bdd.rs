@@ -6786,6 +6786,9 @@ fn create_mock_viz_data() -> (
         profit_factor: 1.8,
         num_trades: 20,
         turnover: 4.0,
+        max_consecutive_losses: 0,
+        max_consecutive_wins: 0,
+        avg_losing_streak: 0.0,
     };
 
     let config_result = trendlab_core::SweepConfigResult {

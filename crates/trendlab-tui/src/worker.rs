@@ -11,19 +11,19 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{NaiveDate, Utc};
 use std::collections::HashMap;
 use tracing::{debug, info, trace};
 use trendlab_core::{
-    bars_to_dataframe, compute_analysis, one_sided_mean_pvalue, run_donchian_sweep_polars,
-    run_strategy_sweep_polars_parallel, scan_symbol_parquet_lazy, AggregatedConfigResult,
-    AggregatedMetrics, AggregatedPortfolioResult, AnalysisConfig, BacktestConfig, BacktestResult,
-    Bar, CostModel, CrossSymbolLeaderboard, CrossSymbolRankMetric, DataQualityChecker,
-    DataQualityReport, DonchianBacktestConfig, IntoLazy, Leaderboard, LeaderboardEntry, Metrics,
-    MultiStrategyGrid, MultiStrategySweepResult, MultiSweepResult, OpeningPeriod,
-    PolarsBacktestConfig, RankMetric, StatisticalAnalysis, StrategyBestResult, StrategyConfigId,
-    StrategyGridConfig, StrategyParams, StrategyTypeId, SweepConfigResult, SweepGrid, SweepResult,
-    VotingMethod, WalkForwardConfig, WalkForwardResult,
+    bars_to_dataframe, combine_equity_curves_simple, compute_analysis, one_sided_mean_pvalue,
+    run_donchian_sweep_polars, run_strategy_sweep_polars_parallel, scan_symbol_parquet_lazy,
+    AggregatedConfigResult, AggregatedMetrics, AggregatedPortfolioResult, AnalysisConfig,
+    BacktestConfig, BacktestResult, Bar, CostModel, CrossSymbolLeaderboard, CrossSymbolRankMetric,
+    DataQualityChecker, DataQualityReport, DonchianBacktestConfig, IntoLazy, Leaderboard,
+    LeaderboardEntry, Metrics, MultiStrategyGrid, MultiStrategySweepResult, MultiSweepResult,
+    OpeningPeriod, PolarsBacktestConfig, RankMetric, StatisticalAnalysis, StrategyBestResult,
+    StrategyConfigId, StrategyGridConfig, StrategyParams, StrategyTypeId, SweepConfigResult,
+    SweepGrid, SweepResult, VotingMethod, WalkForwardConfig, WalkForwardResult,
 };
 
 /// Commands sent from TUI thread to worker thread.
@@ -149,6 +149,7 @@ pub struct SymbolSearchResult {
 
 /// Updates sent from worker thread back to TUI thread.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum WorkerUpdate {
     // Symbol search updates
     SearchResults {
@@ -2045,11 +2046,17 @@ fn handle_yolo_mode(
                 }
 
                 // 3. Aggregate metrics across all symbols for this config
-                let aggregate_metrics = AggregatedMetrics::from_per_symbol(&per_symbol_metrics);
+                // Use tail-risk aware aggregation when equity curves are available
+                let aggregate_metrics = AggregatedMetrics::from_per_symbol_with_tail_risk(
+                    &per_symbol_metrics,
+                    &per_symbol_equity,
+                );
 
-                // Create combined equity curve (equal-weighted average, normalized to $100k)
+                // Create combined equity curve using Phase 3A improvements:
+                // - Proper date intersection handling
+                // - Equal-weighted (default), with fallback to legacy for backward compat
                 let (combined_equity, combined_dates) =
-                    combine_equity_curves(&per_symbol_equity, &per_symbol_dates, 100_000.0);
+                    combine_equity_curves_simple(&per_symbol_equity, &per_symbol_dates, 100_000.0);
 
                 // Build per-symbol sector mapping for this config (only for symbols that actually produced metrics)
                 let mut per_symbol_sectors: HashMap<String, String> = HashMap::new();
@@ -2667,59 +2674,6 @@ fn create_single_config_grid(
         enabled: true,
         params,
     }
-}
-
-/// Combine multiple equity curves into a single equal-weighted portfolio curve.
-/// Returns (combined_equity, combined_dates).
-fn combine_equity_curves(
-    per_symbol_equity: &HashMap<String, Vec<f64>>,
-    per_symbol_dates: &HashMap<String, Vec<DateTime<Utc>>>,
-    initial_capital: f64,
-) -> (Vec<f64>, Vec<DateTime<Utc>>) {
-    use chrono::DateTime;
-
-    if per_symbol_equity.is_empty() {
-        return (vec![], vec![]);
-    }
-
-    // Find the minimum length across all curves
-    let min_len = per_symbol_equity
-        .values()
-        .map(|v| v.len())
-        .min()
-        .unwrap_or(0);
-
-    if min_len == 0 {
-        return (vec![], vec![]);
-    }
-
-    // Get dates from the first symbol (assuming aligned)
-    let dates: Vec<DateTime<Utc>> = per_symbol_dates
-        .values()
-        .next()
-        .map(|d| d.iter().take(min_len).cloned().collect())
-        .unwrap_or_default();
-
-    // Normalize each curve to returns, then average
-    let n_symbols = per_symbol_equity.len() as f64;
-    let mut combined = vec![initial_capital; min_len];
-
-    for equity in per_symbol_equity.values() {
-        if equity.is_empty() {
-            continue;
-        }
-        let start_value = equity[0];
-        for (i, &val) in equity.iter().take(min_len).enumerate() {
-            // Convert to return relative to starting capital, then add weighted portion
-            let return_pct = val / start_value;
-            combined[i] += (initial_capital * return_pct - initial_capital) / n_symbols;
-        }
-    }
-
-    // Adjust combined (we added initial_capital for each symbol, need to fix)
-    // Actually the formula above already handles this - each symbol contributes its proportional return
-
-    (combined, dates)
 }
 
 /// Extract a StrategyConfigId from a basic ConfigId based on strategy type.

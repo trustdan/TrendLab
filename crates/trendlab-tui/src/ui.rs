@@ -71,6 +71,7 @@ pub fn draw(f: &mut Frame, app: &App) {
             }
         }
         Panel::Chart => panels::chart::draw(f, app, content_area),
+        Panel::Help => panels::help::draw(f, app, content_area),
     }
 
     // Draw status bar
@@ -141,6 +142,13 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         }
         Panel::Chart => {
             "←→: Scroll  ↑↓: Zoom  m: Mode  v: Volume  c: Crosshair  d: Drawdown  R: Reset defaults"
+        }
+        Panel::Help => {
+            if app.help.search_mode {
+                "Type to search  Enter: Confirm  Esc: Cancel  n/N: Next/Prev match"
+            } else {
+                "←→: Section  j/k: Scroll  /: Search  gg/G: Top/Bottom  Ctrl+d/u: Page"
+            }
         }
     };
 

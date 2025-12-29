@@ -546,6 +546,81 @@ pub fn read_sweep_parquet(path: &std::path::Path) -> PolarsResult<DataFrame> {
     LazyFrame::scan_parquet(path, ScanArgsParquet::default())?.collect()
 }
 
+/// Select diverse strategies from sweep results using clustering.
+///
+/// This function bridges sweep results to the clustering infrastructure,
+/// selecting representative strategies from different parameter regions
+/// rather than just the top N by a single metric.
+///
+/// # Arguments
+/// * `result` - Sweep result containing backtest results for each config
+/// * `config` - Configuration for diverse selection (k, features, ranking metric)
+///
+/// # Returns
+/// DataFrame with selected diverse strategies, sorted by the ranking metric.
+pub fn select_diverse_from_sweep(
+    result: &crate::sweep::SweepResult,
+    config: &crate::clustering::DiverseSelectionConfig,
+) -> Result<DataFrame, crate::clustering::ClusteringError> {
+    use crate::clustering::select_diverse_strategies;
+
+    // Convert sweep to DataFrame
+    let df = sweep_to_dataframe(result).map_err(|e| {
+        crate::clustering::ClusteringError::ClusteringFailed(format!(
+            "Failed to convert sweep to DataFrame: {}",
+            e
+        ))
+    })?;
+
+    // Apply diverse selection and extract selected rows
+    let selection_result = select_diverse_strategies(&df, config)?;
+    selection_result.get_selected_rows(&df)
+}
+
+/// Select diverse strategies from a sweep DataFrame with default settings.
+///
+/// Convenience function that uses sensible defaults:
+/// - Auto-determined clusters based on n
+/// - Default cluster features (sharpe, cagr, max_drawdown, sortino, calmar, win_rate)
+/// - Rank by Sharpe within each cluster
+///
+/// # Arguments
+/// * `df` - DataFrame with sweep results (must have metric columns)
+/// * `n` - Total number of strategies to select
+///
+/// # Returns
+/// DataFrame with `n` diverse strategies selected proportionally from clusters.
+pub fn select_diverse_top_n(
+    df: &DataFrame,
+    n: usize,
+) -> Result<DataFrame, crate::clustering::ClusteringError> {
+    use crate::clustering::{select_diverse_by_sharpe, DiverseSelectionResult};
+
+    let selection_result: DiverseSelectionResult = select_diverse_by_sharpe(df, n)?;
+    selection_result.get_selected_rows(df)
+}
+
+/// Select diverse strategies from sweep, ranking by robust score.
+///
+/// Uses the robustness-focused cluster features and ranks strategies
+/// by robust_score within each cluster for more conservative selection.
+///
+/// # Arguments
+/// * `df` - DataFrame with sweep results (must have metric columns including robust_score)
+/// * `n` - Total number of strategies to select
+///
+/// # Returns
+/// DataFrame with `n` diverse strategies selected by robustness.
+pub fn select_diverse_robust(
+    df: &DataFrame,
+    n: usize,
+) -> Result<DataFrame, crate::clustering::ClusteringError> {
+    use crate::clustering::select_diverse_by_robust_score;
+
+    let selection_result = select_diverse_by_robust_score(df, n)?;
+    selection_result.get_selected_rows(df)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -581,6 +656,9 @@ mod tests {
                     profit_factor: 1.5,
                     num_trades: 10,
                     turnover: 2.0,
+                    max_consecutive_losses: 0,
+                    max_consecutive_wins: 0,
+                    avg_losing_streak: 0.0,
                 },
             },
             SweepConfigResult {
@@ -608,6 +686,9 @@ mod tests {
                     profit_factor: 1.8,
                     num_trades: 15,
                     turnover: 2.5,
+                    max_consecutive_losses: 0,
+                    max_consecutive_wins: 0,
+                    avg_losing_streak: 0.0,
                 },
             },
             SweepConfigResult {
@@ -635,6 +716,9 @@ mod tests {
                     profit_factor: 0.8,
                     num_trades: 8,
                     turnover: 1.5,
+                    max_consecutive_losses: 0,
+                    max_consecutive_wins: 0,
+                    avg_losing_streak: 0.0,
                 },
             },
         ];

@@ -114,7 +114,7 @@ impl KMeansConfig {
     }
 }
 
-/// Default feature columns for strategy clustering.
+/// Default feature columns for strategy clustering (basic metrics).
 pub const DEFAULT_CLUSTER_FEATURES: &[&str] = &[
     "sharpe",
     "cagr",
@@ -123,6 +123,35 @@ pub const DEFAULT_CLUSTER_FEATURES: &[&str] = &[
     "calmar",
     "win_rate",
     "profit_factor",
+];
+
+/// Extended feature columns including tail risk and regime analysis.
+/// Use when statistical analysis has been computed.
+pub const EXTENDED_CLUSTER_FEATURES: &[&str] = &[
+    "sharpe",
+    "cagr",
+    "max_drawdown",
+    "sortino",
+    "calmar",
+    "win_rate",
+    "profit_factor",
+    "cvar_95",           // Tail risk
+    "skewness",          // Return asymmetry
+    "kurtosis",          // Fat tails
+    "sharpe_stability",  // Consistency across folds
+    "regime_concentration", // Regime dependency
+];
+
+/// Robustness-focused features for identifying stable strategies.
+/// Emphasizes consistency and risk metrics over raw returns.
+pub const ROBUSTNESS_CLUSTER_FEATURES: &[&str] = &[
+    "sharpe",
+    "min_sharpe",        // Worst-case performance
+    "sharpe_stability",  // Consistency
+    "max_drawdown",
+    "cvar_95",
+    "hit_rate",          // Symbol consistency
+    "regime_concentration",
 ];
 
 /// Cluster strategy configurations based on performance metrics.
@@ -412,6 +441,347 @@ pub fn cluster_representatives(
     Ok(representatives)
 }
 
+// =============================================================================
+// DIVERSE SELECTION FOR YOLO MODE
+// =============================================================================
+
+/// Configuration for diverse strategy selection.
+#[derive(Debug, Clone)]
+pub struct DiverseSelectionConfig {
+    /// Number of strategies to select
+    pub n_select: usize,
+    /// Column to rank strategies by (e.g., "sharpe", "robust_score")
+    pub rank_column: String,
+    /// Whether higher values are better
+    pub descending: bool,
+    /// Minimum number of clusters to use (auto-scales with n_select)
+    pub min_clusters: usize,
+    /// Maximum number of clusters to use
+    pub max_clusters: usize,
+    /// Features to use for clustering
+    pub features: Vec<String>,
+}
+
+impl Default for DiverseSelectionConfig {
+    fn default() -> Self {
+        Self {
+            n_select: 10,
+            rank_column: "sharpe".to_string(),
+            descending: true,
+            min_clusters: 3,
+            max_clusters: 10,
+            features: DEFAULT_CLUSTER_FEATURES.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+}
+
+impl DiverseSelectionConfig {
+    /// Create a config for selecting n diverse strategies.
+    pub fn with_n(n_select: usize) -> Self {
+        Self {
+            n_select,
+            // Auto-scale clusters to roughly n_select/2 (at least 2 per cluster)
+            min_clusters: (n_select / 4).max(2),
+            max_clusters: (n_select / 2).max(3),
+            ..Default::default()
+        }
+    }
+
+    /// Use robustness-focused features.
+    pub fn with_robustness_features(mut self) -> Self {
+        self.features = ROBUSTNESS_CLUSTER_FEATURES.iter().map(|s| s.to_string()).collect();
+        self
+    }
+
+    /// Rank by a specific column.
+    pub fn rank_by(mut self, column: &str, descending: bool) -> Self {
+        self.rank_column = column.to_string();
+        self.descending = descending;
+        self
+    }
+}
+
+/// Result of diverse selection.
+#[derive(Debug, Clone)]
+pub struct DiverseSelectionResult {
+    /// Indices of selected rows in the original DataFrame
+    pub selected_indices: Vec<usize>,
+    /// Cluster assignments for selected rows
+    pub cluster_assignments: Vec<usize>,
+    /// Cluster ID -> count of selected strategies from that cluster
+    pub cluster_distribution: Vec<(usize, usize)>,
+    /// Clustering result used for selection
+    pub clustering_result: ClusteringResult,
+}
+
+impl DiverseSelectionResult {
+    /// Get IDs of selected strategies from the DataFrame.
+    pub fn get_selected_ids(&self, df: &DataFrame, id_column: &str) -> Result<Vec<String>, ClusteringError> {
+        let ids = df
+            .column(id_column)
+            .map_err(|_| ClusteringError::MissingColumn(id_column.to_string()))?
+            .str()
+            .map_err(|_| ClusteringError::MissingColumn(format!("{} is not string", id_column)))?;
+
+        Ok(self.selected_indices
+            .iter()
+            .filter_map(|&idx| ids.get(idx).map(|s| s.to_string()))
+            .collect())
+    }
+
+    /// Extract selected rows from the original DataFrame.
+    ///
+    /// Returns a new DataFrame containing only the selected rows in their
+    /// original order (sorted by rank as determined during selection).
+    pub fn get_selected_rows(&self, df: &DataFrame) -> Result<DataFrame, ClusteringError> {
+        if self.selected_indices.is_empty() {
+            // Return empty DataFrame with same schema
+            return Ok(df.clone().slice(0, 0));
+        }
+
+        // Build mask for take operation
+        let indices: Vec<u32> = self.selected_indices.iter().map(|&i| i as u32).collect();
+        let idx_arr = polars::prelude::IdxCa::new("idx".into(), &indices);
+
+        df.take(&idx_arr).map_err(ClusteringError::PolarsError)
+    }
+}
+
+/// Select diverse top strategies using clustering.
+///
+/// Instead of just selecting the top N strategies (which may be very similar),
+/// this function clusters strategies first and selects the best from each cluster.
+///
+/// Algorithm:
+/// 1. Pre-filter to top N*2 by rank (performance threshold)
+/// 2. Cluster the filtered strategies
+/// 3. From each cluster, select the top-ranked strategies proportionally
+/// 4. Ensure we get exactly N strategies
+///
+/// # Arguments
+/// * `df` - DataFrame with strategy results
+/// * `config` - Selection configuration
+///
+/// # Returns
+/// DiverseSelectionResult with selected indices and cluster info
+pub fn select_diverse_strategies(
+    df: &DataFrame,
+    config: &DiverseSelectionConfig,
+) -> Result<DiverseSelectionResult, ClusteringError> {
+    let n_rows = df.height();
+    if n_rows == 0 {
+        return Err(ClusteringError::EmptyData);
+    }
+
+    // Clamp n_select to available rows
+    let n_select = config.n_select.min(n_rows);
+
+    // Pre-filter to top N*2 candidates (ensures quality threshold)
+    let pre_filter_n = (n_select * 2).min(n_rows);
+
+    // Sort by rank column and take top N
+    let sort_options = SortMultipleOptions::new().with_order_descending(config.descending);
+    let sorted_df = df
+        .clone()
+        .sort([&config.rank_column], sort_options)
+        .map_err(ClusteringError::PolarsError)?
+        .head(Some(pre_filter_n));
+
+    // Track original indices by sorting the indices alongside the data
+    let mut indices_with_ranks: Vec<(usize, f64)> = df
+        .column(&config.rank_column)
+        .map_err(|_| ClusteringError::MissingColumn(config.rank_column.clone()))?
+        .f64()
+        .map_err(|_| ClusteringError::MissingColumn(format!("{} is not f64", config.rank_column)))?
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (i, v.unwrap_or(f64::NEG_INFINITY)))
+        .collect();
+
+    // Sort by rank (descending if descending=true)
+    if config.descending {
+        indices_with_ranks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    } else {
+        indices_with_ranks.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    }
+
+    // Take top N original indices
+    let original_indices: Vec<usize> = indices_with_ranks
+        .into_iter()
+        .take(pre_filter_n)
+        .map(|(i, _)| i)
+        .collect();
+
+    // Determine optimal k
+    let k = determine_optimal_k(pre_filter_n, n_select, config.min_clusters, config.max_clusters);
+
+    // Filter features to only those present in the DataFrame
+    let available_features: Vec<&str> = config
+        .features
+        .iter()
+        .filter(|f| sorted_df.column(f.as_str()).is_ok())
+        .map(|s| s.as_str())
+        .collect();
+
+    if available_features.is_empty() {
+        return Err(ClusteringError::MissingColumn("No clustering features available".to_string()));
+    }
+
+    // Cluster the filtered candidates
+    let cluster_config = KMeansConfig::with_k(k);
+    let clustering_result = cluster_strategies(&sorted_df, &available_features, &cluster_config)?;
+
+    // Select from each cluster proportionally
+    let selected = select_proportionally_from_clusters(
+        &sorted_df,
+        &clustering_result,
+        &config.rank_column,
+        n_select,
+    )?;
+
+    // Map back to original indices
+    let selected_indices: Vec<usize> = selected.iter().map(|&i| original_indices[i]).collect();
+    let cluster_assignments: Vec<usize> = selected
+        .iter()
+        .map(|&i| clustering_result.labels[i])
+        .collect();
+
+    // Compute cluster distribution
+    let mut distribution = vec![0usize; k];
+    for &cluster in &cluster_assignments {
+        distribution[cluster] += 1;
+    }
+    let cluster_distribution: Vec<(usize, usize)> = distribution
+        .into_iter()
+        .enumerate()
+        .filter(|(_, count)| *count > 0)
+        .collect();
+
+    Ok(DiverseSelectionResult {
+        selected_indices,
+        cluster_assignments,
+        cluster_distribution,
+        clustering_result,
+    })
+}
+
+/// Determine optimal k based on data size and selection count.
+fn determine_optimal_k(n_candidates: usize, n_select: usize, min_k: usize, max_k: usize) -> usize {
+    // Target ~2-3 strategies per cluster
+    let target_k = n_select / 2;
+
+    // Clamp to valid range
+    let k = target_k.max(min_k).min(max_k);
+
+    // Ensure k is valid for the data
+    k.min(n_candidates / 2).max(2)
+}
+
+/// Select strategies proportionally from each cluster.
+fn select_proportionally_from_clusters(
+    df: &DataFrame,
+    clustering: &ClusteringResult,
+    rank_column: &str,
+    n_select: usize,
+) -> Result<Vec<usize>, ClusteringError> {
+    let k = clustering.k;
+    let cluster_sizes = clustering.cluster_sizes();
+    let total_size: usize = cluster_sizes.iter().sum();
+
+    // Calculate proportional allocation per cluster
+    let mut allocations: Vec<usize> = cluster_sizes
+        .iter()
+        .map(|&size| {
+            // Proportional share, at least 1 if cluster is non-empty
+            let share = (size as f64 / total_size as f64) * n_select as f64;
+            share.round() as usize
+        })
+        .collect();
+
+    // Adjust to ensure we get exactly n_select
+    let total_allocated: usize = allocations.iter().sum();
+    if total_allocated < n_select {
+        // Add to largest clusters first
+        let mut sorted_clusters: Vec<usize> = (0..k).collect();
+        sorted_clusters.sort_by_key(|&i| std::cmp::Reverse(cluster_sizes[i]));
+
+        let mut remaining = n_select - total_allocated;
+        for &cluster in &sorted_clusters {
+            if remaining == 0 {
+                break;
+            }
+            if allocations[cluster] < cluster_sizes[cluster] {
+                allocations[cluster] += 1;
+                remaining -= 1;
+            }
+        }
+    } else if total_allocated > n_select {
+        // Remove from smallest allocations first (keeping at least 1)
+        let mut sorted_clusters: Vec<usize> = (0..k).collect();
+        sorted_clusters.sort_by_key(|&i| allocations[i]);
+
+        let mut excess = total_allocated - n_select;
+        for &cluster in &sorted_clusters {
+            if excess == 0 {
+                break;
+            }
+            if allocations[cluster] > 1 {
+                allocations[cluster] -= 1;
+                excess -= 1;
+            }
+        }
+    }
+
+    // Get rank values for sorting within clusters
+    let ranks: Vec<f64> = df
+        .column(rank_column)
+        .map_err(|_| ClusteringError::MissingColumn(rank_column.to_string()))?
+        .f64()
+        .map_err(|_| ClusteringError::MissingColumn(format!("{} is not f64", rank_column)))?
+        .iter()
+        .map(|v| v.unwrap_or(f64::NEG_INFINITY))
+        .collect();
+
+    // Select top-ranked from each cluster
+    let mut selected = Vec::with_capacity(n_select);
+
+    for (cluster, &allocation) in allocations.iter().enumerate().take(k) {
+        let mut members = clustering.cluster_members(cluster);
+        // Sort members by rank (descending - best first)
+        members.sort_by(|&a, &b| ranks[b].partial_cmp(&ranks[a]).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Take allocated number from this cluster
+        let take = allocation.min(members.len());
+        selected.extend(&members[..take]);
+    }
+
+    Ok(selected)
+}
+
+/// Quick helper: select top N diverse strategies by Sharpe.
+///
+/// This is a convenience wrapper for the common case of selecting
+/// diverse high-Sharpe strategies for YOLO mode.
+pub fn select_diverse_by_sharpe(
+    df: &DataFrame,
+    n: usize,
+) -> Result<DiverseSelectionResult, ClusteringError> {
+    let config = DiverseSelectionConfig::with_n(n)
+        .rank_by("sharpe", true);
+    select_diverse_strategies(df, &config)
+}
+
+/// Quick helper: select top N diverse strategies by robust score.
+pub fn select_diverse_by_robust_score(
+    df: &DataFrame,
+    n: usize,
+) -> Result<DiverseSelectionResult, ClusteringError> {
+    let config = DiverseSelectionConfig::with_n(n)
+        .rank_by("robust_score", true)
+        .with_robustness_features();
+    select_diverse_strategies(df, &config)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,5 +920,162 @@ mod tests {
         let result = cluster_strategies(&df, &["sharpe", "nonexistent"], &config);
 
         assert!(matches!(result, Err(ClusteringError::MissingColumn(_))));
+    }
+
+    // =========================================================================
+    // Diverse Selection Tests
+    // =========================================================================
+
+    fn create_larger_test_df() -> DataFrame {
+        // Create a larger dataset for diverse selection tests
+        // 12 configs in 3 clusters (performance profiles)
+        DataFrame::new(vec![
+            Series::new("config_id".into(), vec![
+                "high1", "high2", "high3", "high4",      // High performers
+                "mid1", "mid2", "mid3", "mid4",          // Medium performers
+                "low1", "low2", "low3", "low4",          // Low performers
+            ]).into(),
+            Series::new("sharpe".into(), vec![
+                2.0, 1.9, 1.8, 1.7,   // High
+                1.0, 0.9, 0.8, 0.7,   // Mid
+                0.2, 0.1, 0.0, -0.1,  // Low
+            ]).into(),
+            Series::new("cagr".into(), vec![
+                0.20, 0.19, 0.18, 0.17,
+                0.10, 0.09, 0.08, 0.07,
+                0.02, 0.01, 0.00, -0.01,
+            ]).into(),
+            Series::new("max_drawdown".into(), vec![
+                0.10, 0.11, 0.12, 0.13,
+                0.20, 0.21, 0.22, 0.23,
+                0.35, 0.36, 0.37, 0.38,
+            ]).into(),
+            Series::new("sortino".into(), vec![
+                2.5, 2.4, 2.3, 2.2,
+                1.3, 1.2, 1.1, 1.0,
+                0.3, 0.2, 0.1, 0.0,
+            ]).into(),
+            Series::new("calmar".into(), vec![
+                2.0, 1.7, 1.5, 1.3,
+                0.5, 0.4, 0.4, 0.3,
+                0.06, 0.03, 0.0, -0.03,
+            ]).into(),
+            Series::new("win_rate".into(), vec![
+                0.60, 0.59, 0.58, 0.57,
+                0.52, 0.51, 0.50, 0.49,
+                0.42, 0.41, 0.40, 0.39,
+            ]).into(),
+            Series::new("profit_factor".into(), vec![
+                2.0, 1.9, 1.8, 1.7,
+                1.3, 1.2, 1.1, 1.0,
+                0.9, 0.8, 0.7, 0.6,
+            ]).into(),
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn test_diverse_selection_config() {
+        let config = DiverseSelectionConfig::default();
+        assert_eq!(config.n_select, 10);
+        assert_eq!(config.rank_column, "sharpe");
+        assert!(config.descending);
+
+        let config = DiverseSelectionConfig::with_n(6);
+        assert_eq!(config.n_select, 6);
+        assert!(config.min_clusters >= 2);
+    }
+
+    #[test]
+    fn test_diverse_selection_basic() {
+        let df = create_larger_test_df();
+        let config = DiverseSelectionConfig::with_n(6)
+            .rank_by("sharpe", true);
+
+        let result = select_diverse_strategies(&df, &config).unwrap();
+
+        // Should select exactly 6 strategies
+        assert_eq!(result.selected_indices.len(), 6);
+        assert_eq!(result.cluster_assignments.len(), 6);
+
+        // All selected indices should be valid
+        for &idx in &result.selected_indices {
+            assert!(idx < df.height());
+        }
+
+        // Should have strategies from multiple clusters
+        let unique_clusters: std::collections::HashSet<_> =
+            result.cluster_assignments.iter().collect();
+        assert!(unique_clusters.len() >= 2, "Should select from multiple clusters");
+    }
+
+    #[test]
+    fn test_diverse_selection_selects_top_performers() {
+        let df = create_larger_test_df();
+        let result = select_diverse_by_sharpe(&df, 4).unwrap();
+
+        // Get the config_ids of selected strategies
+        let ids = result.get_selected_ids(&df, "config_id").unwrap();
+
+        // Should include some high performers
+        let high_performers: Vec<_> = ids.iter()
+            .filter(|id| id.starts_with("high"))
+            .collect();
+        assert!(!high_performers.is_empty(), "Should include high performers");
+    }
+
+    #[test]
+    fn test_diverse_selection_cluster_distribution() {
+        let df = create_larger_test_df();
+        let config = DiverseSelectionConfig::with_n(6);
+
+        let result = select_diverse_strategies(&df, &config).unwrap();
+
+        // Check distribution is non-empty
+        assert!(!result.cluster_distribution.is_empty());
+
+        // Total from distribution should match selected count
+        let total: usize = result.cluster_distribution.iter().map(|(_, count)| count).sum();
+        assert_eq!(total, 6);
+    }
+
+    #[test]
+    fn test_diverse_selection_respects_available_features() {
+        // Create a minimal DataFrame with fewer features
+        let df = DataFrame::new(vec![
+            Series::new("config_id".into(), vec!["a", "b", "c", "d", "e", "f"]).into(),
+            Series::new("sharpe".into(), vec![1.5, 1.4, 1.3, 0.5, 0.4, 0.3]).into(),
+            Series::new("cagr".into(), vec![0.15, 0.14, 0.13, 0.05, 0.04, 0.03]).into(),
+        ])
+        .unwrap();
+
+        let config = DiverseSelectionConfig::with_n(4);
+        let result = select_diverse_strategies(&df, &config).unwrap();
+
+        // Should still work with limited features
+        assert_eq!(result.selected_indices.len(), 4);
+    }
+
+    #[test]
+    fn test_select_diverse_by_sharpe_helper() {
+        let df = create_larger_test_df();
+        let result = select_diverse_by_sharpe(&df, 4).unwrap();
+
+        assert_eq!(result.selected_indices.len(), 4);
+    }
+
+    #[test]
+    fn test_determine_optimal_k() {
+        // n_select = 10, should target k = 5 (10/2)
+        assert_eq!(determine_optimal_k(20, 10, 2, 10), 5);
+
+        // Small dataset: target_k = 6/2 = 3, clamped to min(3, 6/2) = 3
+        assert_eq!(determine_optimal_k(6, 6, 2, 10), 3);
+
+        // Very small: target_k = 4/2 = 2, clamped by n_candidates/2 = 2
+        assert_eq!(determine_optimal_k(4, 4, 2, 10), 2);
+
+        // Large selection, k should be clamped to max
+        assert_eq!(determine_optimal_k(100, 30, 3, 8), 8);
     }
 }

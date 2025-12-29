@@ -65,7 +65,9 @@
       "Bash(taskkill:*)",
       "Bash(cmd //c \"taskkill /PID 740376 /F\")",
       "Bash(dir /b \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\apps\\\\trendlab-gui\\\\ui\\\\src\\\\components\\\\panels\")",
-      "Bash(dir /b \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\apps\\\\trendlab-gui\\\\src-tauri\\\\src\\\\commands\")"
+      "Bash(dir /b \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\apps\\\\trendlab-gui\\\\src-tauri\\\\src\\\\commands\")",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nPhase 4: Polars-native backtest engine + indicator cache + enhanced analysis\n\nCore Engine:\n- Add run_strategy_sweep_polars_lazy for optimal performance \\(single LazyFrame collect\\)\n- Add run_strategy_sweep_polars_cached for indicator reuse across configs\n- Create LazyIndicatorCache with batched computation and dependency tracking\n\nClustering & Diversity:\n- Add select_diverse_top_n/robust for clustering-based strategy selection\n- Prevent leaderboard domination by similar configs\n- Support multiple feature sets \\(default, extended, robustness\\)\n\nLeaderboard Enhancements:\n- Add comprehensive LeaderboardEntry with equity curves and dates\n- Add walk-forward validation grades\n- Add confidence scoring with multiple metrics\n\nStatistical Analysis:\n- Add regime detection \\(bull/bear/sideways\\)\n- Add OOS validation with p-values\n- Add FDR-adjusted significance testing\n- Add Sharpe stability and degradation metrics\n\nTUI Updates:\n- Add Help panel \\(Tab 6 / ?\\)\n- Enhance keyboard navigation\n- Add statistical analysis display\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
     ]
   }
 }

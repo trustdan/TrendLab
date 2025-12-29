@@ -2,6 +2,26 @@
 //!
 //! YOLO mode runs parameter sweeps indefinitely, applying jitter each iteration,
 //! and maintaining top-4 leaderboards (per-symbol and cross-symbol).
+//!
+//! ## Clustering Integration (Phase 4)
+//!
+//! When real backtest results are available, diverse selection clustering can be
+//! applied to select representative strategies from different parameter regions:
+//!
+//! ```ignore
+//! use trendlab_core::{
+//!     select_diverse_from_sweep, select_diverse_top_n, select_diverse_robust,
+//!     DiverseSelectionConfig, ROBUSTNESS_CLUSTER_FEATURES,
+//! };
+//!
+//! // After collecting sweep results:
+//! let diverse_df = select_diverse_top_n(&sweep_df, 10)?;
+//! // Or for robust selection:
+//! let diverse_df = select_diverse_robust(&sweep_df, 10)?;
+//! ```
+//!
+//! This prevents the leaderboard from being dominated by very similar configs
+//! from a narrow parameter region.
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -10,6 +30,15 @@ use trendlab_core::leaderboard::{
     AggregatedMetrics, CrossSymbolLeaderboard, CrossSymbolRankMetric, Leaderboard,
 };
 use trendlab_launcher::ipc::JobType;
+
+// Clustering imports for diverse strategy selection (Phase 4)
+// These will be used when real Polars backtest engine is integrated
+#[allow(unused_imports)]
+use trendlab_core::{
+    select_diverse_from_sweep, select_diverse_robust, select_diverse_top_n,
+    DiverseSelectionConfig, DiverseSelectionResult, EXTENDED_CLUSTER_FEATURES,
+    ROBUSTNESS_CLUSTER_FEATURES,
+};
 
 use crate::error::GuiError;
 use crate::events::EventEnvelope;
@@ -118,6 +147,14 @@ pub struct AggregatedMetricsResponse {
     pub profitable_count: usize,
     pub total_symbols: usize,
     pub avg_trades: f64,
+    // Tail Risk Metrics (Phase 2)
+    pub avg_cvar_95: Option<f64>,
+    pub worst_cvar_95: Option<f64>,
+    pub avg_skewness: Option<f64>,
+    pub worst_skewness: Option<f64>,
+    pub avg_kurtosis: Option<f64>,
+    pub max_kurtosis: Option<f64>,
+    pub downside_ratio: Option<f64>,
 }
 
 /// Cross-symbol leaderboard entry for frontend
@@ -248,6 +285,14 @@ fn convert_aggregated_metrics(m: &AggregatedMetrics) -> AggregatedMetricsRespons
         profitable_count: m.profitable_count,
         total_symbols: m.total_symbols,
         avg_trades: m.avg_trades,
+        // Tail Risk Metrics (Phase 2)
+        avg_cvar_95: m.avg_cvar_95,
+        worst_cvar_95: m.worst_cvar_95,
+        avg_skewness: m.avg_skewness,
+        worst_skewness: m.worst_skewness,
+        avg_kurtosis: m.avg_kurtosis,
+        max_kurtosis: m.max_kurtosis,
+        downside_ratio: m.downside_ratio,
     }
 }
 
@@ -637,6 +682,19 @@ async fn run_yolo_loop(
                 }
             }
         }
+
+        // TODO: Apply diverse selection clustering when real backtests are integrated
+        // This would replace the simulated loop above with:
+        //
+        // 1. Run real parameter sweep using Polars backtest engine
+        // 2. Convert results to DataFrame: sweep_to_dataframe(&sweep_result)
+        // 3. Apply diverse selection to get strategies from different parameter regions:
+        //    let diverse_df = select_diverse_top_n(&sweep_df, 20)?;
+        // 4. Or for robustness-focused selection:
+        //    let diverse_df = select_diverse_robust(&sweep_df, 20)?;
+        // 5. Update leaderboards with diverse set instead of just top-N by Sharpe
+        //
+        // This prevents the leaderboard from being dominated by very similar configs.
 
         // Update leaderboard stats
         per_symbol_leaderboard.add_configs_tested(configs_tested_this_round);

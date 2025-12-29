@@ -26,7 +26,7 @@ The project optimizes for:
 
 ## Quick Links
 
-[Quick Start](#quick-start) | [Zero to Backtest](#zero-to-first-backtest-5-minutes) | [TUI Guide](#tui-features) | [Desktop GUI](#desktop-gui) | [YOLO Mode](#yolo-mode) | [Statistical Rigor](#statistical-rigor) | [Strategies](#strategies) | [CLI Commands](#cli-commands) | [Contributing](#contributing)
+[Quick Start](#quick-start) | [Zero to Backtest](#zero-to-first-backtest-5-minutes) | [TUI Guide](#tui-features) | [Desktop GUI](#desktop-gui) | [YOLO Mode](#yolo-mode) | [Statistical Rigor](#statistical-rigor) | [Risk Profiles](#risk-profiles) | [Strategies](#strategies) | [CLI Commands](#cli-commands) | [Contributing](#contributing)
 
 ## Ethos (what we care about)
 
@@ -165,6 +165,15 @@ See [Desktop GUI](#desktop-gui) and [docs/roadmap-tauri-gui.md](docs/roadmap-tau
 - **Confidence Grades**: Visual badges (High/Medium/Low) in leaderboards
 
 See [Statistical Rigor](#statistical-rigor) for details.
+
+**Milestone 8 ("Risk Profiles & Weighted Ranking")** ✅ Complete:
+
+- **Consecutive Streak Metrics**: Track max consecutive wins/losses and average losing streak
+- **Risk Profiles**: Four presets (Balanced, Conservative, Aggressive, TrendOptions)
+- **Weighted Ranking**: 10-metric composite scores with customizable weights
+- **TUI Integration**: Press `p` in Results panel to cycle through profiles
+
+See [Risk Profiles](#risk-profiles) for details.
 
 ## Quick start
 
@@ -373,6 +382,7 @@ Complete reference of all keyboard shortcuts in the TUI:
 | `v` | Cycle results view mode (Single/Multi-Ticker/Best-Per-Ticker) |
 | `s` | Sort by next metric |
 | `r` | Reverse sort order |
+| `p` | Cycle risk profile (Balanced → Conservative → Aggressive → TrendOptions) |
 
 #### Chart Panel (`5`)
 
@@ -689,6 +699,62 @@ Control for multiple comparisons when testing many configurations:
 ### Permutation Testing
 
 Test if strategy performance differs from random with `permutation_test()`.
+
+## Risk Profiles
+
+TrendLab supports configurable risk profiles that control how strategies are ranked in the leaderboard. Each profile assigns different weights to performance metrics based on trading objectives.
+
+### Available Profiles
+
+| Profile | Focus | Best For |
+|---------|-------|----------|
+| **Balanced** | Equal weighting across metrics | General exploration |
+| **Conservative** | Emphasizes drawdown control, consistency | Risk-averse traders |
+| **Aggressive** | Prioritizes returns over risk metrics | High-risk tolerance |
+| **TrendOptions** | Optimized for options overlay strategies | Options traders |
+
+### TrendOptions Profile Weights
+
+Designed for options traders who need consistent signals and controlled premium budgets:
+
+| Metric | Weight | Rationale |
+|--------|--------|-----------|
+| Hit Rate | 25% | False signals waste premium |
+| OOS Sharpe | 20% | Anti-overfit is critical |
+| Avg Sharpe | 15% | Overall performance |
+| Max Consecutive Losses | 10% | Premium budgeting |
+| Max Drawdown | 10% | Risk control |
+| Min Sharpe | 5% | Consistency across symbols |
+| CVaR 95% | 5% | Tail risk awareness |
+| Avg Duration | 5% | Expiry selection |
+| WF Grade | 5% | Robustness validation |
+| Regime Concentration | 0% | Less relevant for options |
+
+### Using Risk Profiles
+
+**TUI:** Press `p` in the Results panel to cycle through profiles. The current profile is shown in the status bar.
+
+**Code:**
+```rust
+use trendlab_core::leaderboard::{RiskProfile, RankingWeights};
+
+// Use a preset
+let weights = RankingWeights::trend_options();
+
+// Or customize
+let custom = RankingWeights {
+    hit_rate: 0.30,
+    oos_sharpe: 0.25,
+    avg_sharpe: 0.15,
+    max_consecutive_losses: 0.10,
+    max_drawdown: 0.10,
+    min_sharpe: 0.05,
+    cvar_95: 0.05,
+    avg_duration: 0.0,
+    wf_grade: 0.0,
+    regime_concentration: 0.0,
+};
+```
 
 ## Backtest Architecture
 
@@ -1055,6 +1121,9 @@ Full performance metrics computed for every backtest:
 | Win Rate | Winning trades / total trades |
 | Profit Factor | Gross profit / gross loss |
 | Turnover | Annual trading volume as multiple of capital |
+| Max Consecutive Wins | Longest winning streak |
+| Max Consecutive Losses | Longest losing streak |
+| Avg Losing Streak | Average length of losing streaks |
 
 ## Statistical Analysis
 
@@ -1429,16 +1498,18 @@ TrendLab
 │
 ├─ Using TrendLab
 │  ├── TUI Features ............. Interactive terminal UI
-│  ├── Desktop GUI .............. Tauri + React (coming soon)
+│  ├── Desktop GUI .............. Tauri + React desktop app
 │  ├── CLI Commands ............. Data, sweep, report, artifact
-│  ├── Strategies ............... Donchian, MA Cross, TSMOM, SAR, ORB, Ensemble
-│  └── Strategy Roadmap ......... Keltner, ADX, Darvas, etc.
+│  ├── Strategies ............... 20 trend-following strategies
+│  ├── Risk Profiles ............ Balanced, Conservative, Aggressive, TrendOptions
+│  └── YOLO Mode ................ Auto-optimization with leaderboard
 │
 ├─ Architecture
 │  ├── Workspace Crates ......... core, cli, bdd, tui, gui
 │  ├── Backtest Architecture .... Polars vs sequential backends
-│  ├── Indicators ............... SMA, EMA, ATR, Donchian
-│  └── Metrics .................. Sharpe, CAGR, drawdown, etc.
+│  ├── Indicators ............... SMA, EMA, ATR, Donchian, RSI, MACD
+│  ├── Metrics .................. Sharpe, CAGR, drawdown, streaks
+│  └── Statistical Rigor ........ Bootstrap, WF validation, FDR control
 │
 ├─ Configuration
 │  ├── Universe ................. 150+ tickers by sector

@@ -128,11 +128,51 @@ Assumptions and contracts are documented in `docs/`:
 
 ---
 
+## Documentation Sync Requirements
+
+**IMPORTANT**: When adding new features, update BOTH documentation sources:
+
+1. **README.md** — User-facing documentation for GitHub/web
+   - Feature descriptions and usage examples
+   - Keyboard shortcuts tables
+   - Milestone status updates
+   - Project Map section
+
+2. **TUI Help Panel** (`crates/trendlab-tui/src/help.rs`) — In-app help for TUI users
+   - Keyboard shortcuts by panel
+   - Context-sensitive help content
+   - Quick reference format (scannable, compact)
+
+The Help panel is Tab 6 in the TUI, accessible via `?` or `6`. It provides:
+
+- Global navigation shortcuts
+- Panel-specific shortcuts (Data, Strategy, Sweep, Results, Chart)
+- Feature explanations (Risk Profiles, YOLO Mode, Statistical Analysis)
+- Vim-style navigation (j/k, gg, G, Ctrl+d/u)
+
+When implementing a new feature with keyboard shortcuts or user-facing behavior:
+
+1. Add the shortcut/feature to README.md
+2. Add corresponding entry to the Help panel content
+3. Ensure both sources use consistent terminology
+
+---
+
 ## Roadmaps
 
 Active development roadmaps:
 - `docs/roadmap-v2-strategies.md` — V2 strategy implementation plan (Polars-native backtest engine)
 - `docs/roadmap-tauri-gui.md` — Tauri GUI implementation plan (React + TradingView charts)
+
+---
+
+## Finding Current Plans
+
+When starting a session or trying to understand where the project is at, check for recent plans in:
+
+- **User plans folder**: `C:\Users\Dan\.claude\plans\` — Contains recent implementation plans and progress notes
+- Look for the most recently modified `.md` files to understand current work in progress
+- Plans include task breakdowns, decisions made, and next steps
 
 ---
 
@@ -210,11 +250,11 @@ The GUI mirrors TUI keyboard navigation for muscle-memory consistency.
 ### Global Navigation
 | Key | Action |
 |-----|--------|
-| `1-5` | Direct panel access (Data, Strategy, Sweep, Results, Chart) |
+| `1-6` | Direct panel access (Data, Strategy, Sweep, Results, Chart, Help) |
+| `?` | Open Help panel (same as `6`) |
 | `Tab` | Next panel |
 | `Shift+Tab` | Previous panel |
 | `Esc` | Cancel current operation / close modal |
-| `?` | Show keyboard shortcuts help |
 
 ### Vim-Style List Navigation
 | Key | Action |

@@ -1,6 +1,6 @@
 //! Performance metrics calculations.
 
-use crate::backtest::BacktestResult;
+use crate::backtest::{BacktestResult, Trade};
 use serde::{Deserialize, Serialize};
 
 /// Performance metrics for a backtest run.
@@ -35,6 +35,15 @@ pub struct Metrics {
 
     /// Annual turnover (as multiple of capital)
     pub turnover: f64,
+
+    /// Maximum consecutive losing trades
+    pub max_consecutive_losses: u32,
+
+    /// Maximum consecutive winning trades
+    pub max_consecutive_wins: u32,
+
+    /// Average length of losing streaks
+    pub avg_losing_streak: f64,
 }
 
 impl Default for Metrics {
@@ -50,6 +59,9 @@ impl Default for Metrics {
             profit_factor: 0.0,
             num_trades: 0,
             turnover: 0.0,
+            max_consecutive_losses: 0,
+            max_consecutive_wins: 0,
+            avg_losing_streak: 0.0,
         }
     }
 }
@@ -141,6 +153,10 @@ pub fn compute_metrics(result: &BacktestResult, initial_cash: f64) -> Metrics {
         0.0
     };
 
+    // Consecutive streak metrics
+    let (max_consecutive_losses, max_consecutive_wins, avg_losing_streak) =
+        calculate_streaks(&result.trades);
+
     Metrics {
         total_return,
         cagr,
@@ -152,6 +168,9 @@ pub fn compute_metrics(result: &BacktestResult, initial_cash: f64) -> Metrics {
         profit_factor,
         num_trades,
         turnover,
+        max_consecutive_losses,
+        max_consecutive_wins,
+        avg_losing_streak,
     }
 }
 
@@ -237,9 +256,85 @@ pub fn calculate_max_drawdown(equity_curve: &[f64]) -> f64 {
     max_dd
 }
 
+/// Calculate consecutive win/loss streaks from trades.
+///
+/// Returns: (max_consecutive_losses, max_consecutive_wins, avg_losing_streak)
+pub fn calculate_streaks(trades: &[Trade]) -> (u32, u32, f64) {
+    if trades.is_empty() {
+        return (0, 0, 0.0);
+    }
+
+    let mut max_losses = 0u32;
+    let mut max_wins = 0u32;
+    let mut current_losses = 0u32;
+    let mut current_wins = 0u32;
+
+    // Track all losing streaks for average calculation
+    let mut losing_streaks: Vec<u32> = Vec::new();
+
+    for trade in trades {
+        if trade.net_pnl > 0.0 {
+            // Winner
+            current_wins += 1;
+            if current_losses > 0 {
+                losing_streaks.push(current_losses);
+                max_losses = max_losses.max(current_losses);
+                current_losses = 0;
+            }
+        } else {
+            // Loser (including breakeven as loss for conservative counting)
+            current_losses += 1;
+            if current_wins > 0 {
+                max_wins = max_wins.max(current_wins);
+                current_wins = 0;
+            }
+        }
+    }
+
+    // Handle final streak
+    if current_losses > 0 {
+        losing_streaks.push(current_losses);
+        max_losses = max_losses.max(current_losses);
+    }
+    if current_wins > 0 {
+        max_wins = max_wins.max(current_wins);
+    }
+
+    // Calculate average losing streak
+    let avg_losing_streak = if losing_streaks.is_empty() {
+        0.0
+    } else {
+        losing_streaks.iter().sum::<u32>() as f64 / losing_streaks.len() as f64
+    };
+
+    (max_losses, max_wins, avg_losing_streak)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backtest::{Fill, Side, TradeDirection};
+    use chrono::Utc;
+
+    /// Helper to create a trade with just net_pnl (for streak testing)
+    fn make_trade(net_pnl: f64) -> Trade {
+        let fill = Fill {
+            ts: Utc::now(),
+            side: Side::Buy,
+            qty: 1.0,
+            price: 100.0,
+            fees: 0.0,
+            raw_price: 100.0,
+            atr_at_fill: None,
+        };
+        Trade {
+            entry: fill.clone(),
+            exit: fill,
+            gross_pnl: net_pnl,
+            net_pnl,
+            direction: TradeDirection::Long,
+        }
+    }
 
     #[test]
     fn test_cagr() {
@@ -254,5 +349,90 @@ mod tests {
         let dd = calculate_max_drawdown(&equity);
         // Peak was 120, trough was 90 -> 25% drawdown
         assert!((dd - 0.25).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_streaks_empty() {
+        let trades: Vec<Trade> = vec![];
+        let (max_losses, max_wins, avg_losing) = calculate_streaks(&trades);
+        assert_eq!(max_losses, 0);
+        assert_eq!(max_wins, 0);
+        assert!((avg_losing - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_streaks_all_winners() {
+        let trades = vec![
+            make_trade(100.0),
+            make_trade(50.0),
+            make_trade(200.0),
+        ];
+        let (max_losses, max_wins, avg_losing) = calculate_streaks(&trades);
+        assert_eq!(max_losses, 0);
+        assert_eq!(max_wins, 3);
+        assert!((avg_losing - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_streaks_all_losers() {
+        let trades = vec![
+            make_trade(-100.0),
+            make_trade(-50.0),
+            make_trade(-200.0),
+        ];
+        let (max_losses, max_wins, avg_losing) = calculate_streaks(&trades);
+        assert_eq!(max_losses, 3);
+        assert_eq!(max_wins, 0);
+        assert!((avg_losing - 3.0).abs() < 0.001); // One streak of 3
+    }
+
+    #[test]
+    fn test_streaks_alternating() {
+        // W, L, W, L, W, L
+        let trades = vec![
+            make_trade(100.0),
+            make_trade(-50.0),
+            make_trade(100.0),
+            make_trade(-50.0),
+            make_trade(100.0),
+            make_trade(-50.0),
+        ];
+        let (max_losses, max_wins, avg_losing) = calculate_streaks(&trades);
+        assert_eq!(max_losses, 1);
+        assert_eq!(max_wins, 1);
+        assert!((avg_losing - 1.0).abs() < 0.001); // Three streaks of 1
+    }
+
+    #[test]
+    fn test_streaks_mixed() {
+        // W, W, L, L, L, W, L, L
+        let trades = vec![
+            make_trade(100.0),  // W
+            make_trade(50.0),   // W (2 win streak)
+            make_trade(-100.0), // L
+            make_trade(-50.0),  // L
+            make_trade(-200.0), // L (3 loss streak)
+            make_trade(150.0),  // W
+            make_trade(-75.0),  // L
+            make_trade(-25.0),  // L (2 loss streak)
+        ];
+        let (max_losses, max_wins, avg_losing) = calculate_streaks(&trades);
+        assert_eq!(max_losses, 3);
+        assert_eq!(max_wins, 2);
+        // Two losing streaks: 3 and 2, average = 2.5
+        assert!((avg_losing - 2.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_streaks_breakeven_as_loss() {
+        // Breakeven (0.0) counts as loss for conservative counting
+        let trades = vec![
+            make_trade(100.0),  // W
+            make_trade(0.0),    // L (breakeven)
+            make_trade(-50.0),  // L
+        ];
+        let (max_losses, max_wins, _avg_losing) = calculate_streaks(&trades);
+        assert_eq!(max_losses, 2); // Breakeven + loss = 2 streak
+        assert_eq!(max_wins, 1);
     }
 }

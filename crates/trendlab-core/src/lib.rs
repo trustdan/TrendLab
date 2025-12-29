@@ -18,6 +18,7 @@ pub mod bar;
 pub mod clustering;
 pub mod data;
 pub mod error;
+pub mod indicator_cache;
 pub mod indicators;
 pub mod indicators_polars;
 pub mod leaderboard;
@@ -44,8 +45,9 @@ pub use backtest::{
 };
 pub use backtest_polars::{
     run_backtest_polars, run_donchian_backtest_polars, run_donchian_sweep_polars,
-    run_strategy_sweep_polars, run_strategy_sweep_polars_parallel, DonchianBacktestConfig,
-    PolarsBacktestConfig, PolarsBacktestResult,
+    run_strategy_sweep_polars, run_strategy_sweep_polars_cached, run_strategy_sweep_polars_lazy,
+    run_strategy_sweep_polars_optimized, run_strategy_sweep_polars_parallel,
+    DonchianBacktestConfig, PolarsBacktestConfig, PolarsBacktestResult,
 };
 // Re-export IntoLazy trait for DataFrame.lazy() calls
 pub use analysis::{
@@ -59,7 +61,10 @@ pub use analysis_polars::{
 pub use bar::Bar;
 pub use clustering::{
     add_cluster_column, cluster_representatives, cluster_strategies, cluster_summary,
-    elbow_analysis, ClusteringError, ClusteringResult, KMeansConfig, DEFAULT_CLUSTER_FEATURES,
+    elbow_analysis, select_diverse_by_robust_score, select_diverse_by_sharpe,
+    select_diverse_strategies, ClusteringError, ClusteringResult, DiverseSelectionConfig,
+    DiverseSelectionResult, KMeansConfig, DEFAULT_CLUSTER_FEATURES, EXTENDED_CLUSTER_FEATURES,
+    ROBUSTNESS_CLUSTER_FEATURES,
 };
 pub use data::{
     bars_to_dataframe, build_yahoo_chart_url, build_yahoo_url, dataframe_to_bars, parquet_path,
@@ -69,6 +74,10 @@ pub use data::{
     FetchRequest, FetchResult, ProviderError, QualityIssue,
 };
 pub use error::TrendLabError;
+pub use indicator_cache::{
+    collect_indicator_requirements, extract_indicator_requirements, CacheStats, IndicatorCache,
+    IndicatorKey, LazyIndicatorCache,
+};
 pub use indicators::{
     aroon, aroon_down, aroon_up, atr, atr_wilder, bollinger_bands, cci, darvas_boxes, dmi,
     donchian_channel, ema_close, heikin_ashi, high_proximity, ichimoku, keltner_channel, macd,
@@ -91,10 +100,12 @@ pub use indicators_polars::{
     true_range_expr, williams_r_expr, IndicatorSet, IndicatorSpec,
 };
 pub use leaderboard::{
+    combine_equity_curves_realistic, combine_equity_curves_simple,
     compute_confidence_from_equity, compute_cross_sector_confidence_from_metrics,
     compute_cross_symbol_confidence_from_metrics, generate_session_id, AggregatedConfigResult,
-    AggregatedMetrics, CrossSymbolLeaderboard, CrossSymbolRankMetric, Leaderboard,
-    LeaderboardEntry, LeaderboardScope,
+    AggregatedMetrics, CombinedEquityAggregation, CombinedEquityConfig, CombinedEquityResult,
+    CombinedEquityWeighting, CrossSymbolLeaderboard, CrossSymbolRankMetric, Leaderboard,
+    LeaderboardEntry, LeaderboardScope, RankingWeights, RiskProfile, RobustScoreConfig,
 };
 pub use metrics::{compute_metrics, Metrics};
 pub use polars::prelude::IntoLazy;
@@ -106,10 +117,11 @@ pub use sizing::{
     turtle_sizer, FixedSizer, PositionSizer, SizeResult, SizingConfig, VolatilitySizer,
 };
 pub use statistics::{
-    benjamini_hochberg, bonferroni, bootstrap_ci, bootstrap_sharpe, holm_bonferroni,
-    one_sided_mean_pvalue, permutation_test, sample_statistics, BootstrapConfig, BootstrapResult,
-    ConfidenceGrade, MultipleComparisonMethod, MultipleComparisonResult, PermutationResult,
-    SampleStatistics, StatisticsError, StrategyStatistics,
+    benjamini_hochberg, block_bootstrap_ci, block_bootstrap_sharpe, bonferroni, bootstrap_ci,
+    bootstrap_sharpe, holm_bonferroni, one_sided_mean_pvalue, permutation_test, sample_statistics,
+    BlockBootstrapConfig, BootstrapConfig, BootstrapMethod, BootstrapResult, ConfidenceGrade,
+    MultipleComparisonMethod, MultipleComparisonResult, PermutationResult, SampleStatistics,
+    StatisticsError, StrategyStatistics,
 };
 pub use strategy::{
     AroonCrossStrategy, BollingerSqueezeStrategy, CCIStrategy, DarvasBoxStrategy, DmiAdxStrategy,
@@ -138,7 +150,8 @@ pub use sweep::{
 pub use sweep_polars::{
     analyze_sweep, compare_strategies, enrich_with_sector, multi_sweep_to_dataframe,
     multi_sweep_with_sectors, parameter_heatmap, parameter_sensitivity, read_sweep_parquet,
-    sweep_to_dataframe, top_configs_by_sharpe, write_sweep_parquet, SweepAnalysis, SweepQuery,
+    select_diverse_from_sweep, select_diverse_robust, select_diverse_top_n, sweep_to_dataframe,
+    top_configs_by_sharpe, write_sweep_parquet, SweepAnalysis, SweepQuery,
 };
 pub use universe::{Sector, Universe, UniverseError};
 pub use validation::{

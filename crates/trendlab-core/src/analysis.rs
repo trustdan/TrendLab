@@ -179,11 +179,246 @@ impl Default for RegimeMetrics {
 }
 
 /// Volatility regime classification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum VolRegime {
     High,
     Neutral,
     Low,
+}
+
+// =============================================================================
+// TREND REGIME ANALYSIS
+// =============================================================================
+
+/// Trend regime classification based on MA slope or ADX thresholds.
+///
+/// Used to understand whether a strategy performs consistently across
+/// different market trend conditions or is concentrated in specific regimes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+pub enum TrendRegime {
+    /// Strong uptrend: MA slope > high threshold (e.g., > +2% per period)
+    StrongUp,
+    /// Weak uptrend: 0 < MA slope <= high threshold
+    WeakUp,
+    /// Neutral/sideways: MA slope near zero
+    Neutral,
+    /// Weak downtrend: low threshold <= MA slope < 0
+    WeakDown,
+    /// Strong downtrend: MA slope < low threshold (e.g., < -2% per period)
+    StrongDown,
+}
+
+impl TrendRegime {
+    /// Returns all regime variants for iteration.
+    pub fn all() -> &'static [TrendRegime] {
+        &[
+            TrendRegime::StrongUp,
+            TrendRegime::WeakUp,
+            TrendRegime::Neutral,
+            TrendRegime::WeakDown,
+            TrendRegime::StrongDown,
+        ]
+    }
+
+    /// Display name for UI.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            TrendRegime::StrongUp => "Strong Up",
+            TrendRegime::WeakUp => "Weak Up",
+            TrendRegime::Neutral => "Neutral",
+            TrendRegime::WeakDown => "Weak Down",
+            TrendRegime::StrongDown => "Strong Down",
+        }
+    }
+}
+
+/// Trend regime analysis results.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrendRegimeAnalysis {
+    /// Performance metrics per trend regime.
+    pub by_regime: std::collections::HashMap<TrendRegime, RegimeMetrics>,
+    /// MA period used for trend classification.
+    pub ma_period: usize,
+    /// Slope threshold for strong trend classification (as % per period).
+    pub strong_threshold: f64,
+    /// Slope threshold for weak trend classification (as % per period).
+    pub weak_threshold: f64,
+}
+
+impl Default for TrendRegimeAnalysis {
+    fn default() -> Self {
+        Self {
+            by_regime: std::collections::HashMap::new(),
+            ma_period: 50,
+            strong_threshold: 0.02,  // 2% per period
+            weak_threshold: 0.005,   // 0.5% per period
+        }
+    }
+}
+
+// =============================================================================
+// DRAWDOWN REGIME ANALYSIS
+// =============================================================================
+
+/// Drawdown regime classification based on current drawdown from peak.
+///
+/// Used to understand whether a strategy performs consistently across
+/// different drawdown states or is concentrated in specific regimes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+pub enum DrawdownRegime {
+    /// Normal: drawdown < 5% from peak
+    Normal,
+    /// Shallow drawdown: 5% <= drawdown < 10%
+    Shallow,
+    /// Deep drawdown: 10% <= drawdown < 20%
+    Deep,
+    /// Recovery: drawdown >= 20% (crisis/recovery mode)
+    Recovery,
+}
+
+impl DrawdownRegime {
+    /// Returns all regime variants for iteration.
+    pub fn all() -> &'static [DrawdownRegime] {
+        &[
+            DrawdownRegime::Normal,
+            DrawdownRegime::Shallow,
+            DrawdownRegime::Deep,
+            DrawdownRegime::Recovery,
+        ]
+    }
+
+    /// Display name for UI.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            DrawdownRegime::Normal => "Normal (<5%)",
+            DrawdownRegime::Shallow => "Shallow (5-10%)",
+            DrawdownRegime::Deep => "Deep (10-20%)",
+            DrawdownRegime::Recovery => "Recovery (>20%)",
+        }
+    }
+
+    /// Classify a drawdown percentage into a regime.
+    pub fn from_drawdown_pct(dd_pct: f64) -> Self {
+        let dd_abs = dd_pct.abs();
+        if dd_abs < 0.05 {
+            DrawdownRegime::Normal
+        } else if dd_abs < 0.10 {
+            DrawdownRegime::Shallow
+        } else if dd_abs < 0.20 {
+            DrawdownRegime::Deep
+        } else {
+            DrawdownRegime::Recovery
+        }
+    }
+}
+
+/// Drawdown regime analysis results.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DrawdownRegimeAnalysis {
+    /// Performance metrics per drawdown regime.
+    pub by_regime: std::collections::HashMap<DrawdownRegime, RegimeMetrics>,
+    /// Thresholds used for classification (as fractions, e.g., 0.05 = 5%).
+    pub thresholds: DrawdownThresholds,
+}
+
+/// Drawdown thresholds for regime classification.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DrawdownThresholds {
+    /// Threshold for shallow drawdown (default 5%).
+    pub shallow: f64,
+    /// Threshold for deep drawdown (default 10%).
+    pub deep: f64,
+    /// Threshold for recovery/crisis (default 20%).
+    pub recovery: f64,
+}
+
+impl Default for DrawdownThresholds {
+    fn default() -> Self {
+        Self {
+            shallow: 0.05,
+            deep: 0.10,
+            recovery: 0.20,
+        }
+    }
+}
+
+// =============================================================================
+// REGIME CONCENTRATION SCORING
+// =============================================================================
+
+/// Regime concentration analysis for a strategy.
+///
+/// Measures how concentrated a strategy's returns are in specific regimes.
+/// Strategies that only work in one regime are penalized for lack of robustness.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeConcentrationScore {
+    /// Concentration score for volatility regimes (0-1, lower is better).
+    /// 0 = perfectly balanced, 1 = all returns from one regime.
+    pub vol_concentration: f64,
+
+    /// Concentration score for trend regimes (0-1, lower is better).
+    pub trend_concentration: f64,
+
+    /// Concentration score for drawdown regimes (0-1, lower is better).
+    pub drawdown_concentration: f64,
+
+    /// Combined concentration score (weighted average).
+    pub combined_score: f64,
+
+    /// Which volatility regime contributes most returns (if concentrated).
+    pub dominant_vol_regime: Option<VolRegime>,
+
+    /// Which trend regime contributes most returns (if concentrated).
+    pub dominant_trend_regime: Option<TrendRegime>,
+
+    /// Which drawdown regime contributes most returns (if concentrated).
+    pub dominant_drawdown_regime: Option<DrawdownRegime>,
+
+    /// Percentage of total return from dominant vol regime.
+    pub vol_regime_pct: f64,
+
+    /// Percentage of total return from dominant trend regime.
+    pub trend_regime_pct: f64,
+
+    /// Percentage of total return from dominant drawdown regime.
+    pub drawdown_regime_pct: f64,
+}
+
+impl Default for RegimeConcentrationScore {
+    fn default() -> Self {
+        Self {
+            vol_concentration: 0.0,
+            trend_concentration: 0.0,
+            drawdown_concentration: 0.0,
+            combined_score: 0.0,
+            dominant_vol_regime: None,
+            dominant_trend_regime: None,
+            dominant_drawdown_regime: None,
+            vol_regime_pct: 0.0,
+            trend_regime_pct: 0.0,
+            drawdown_regime_pct: 0.0,
+        }
+    }
+}
+
+impl RegimeConcentrationScore {
+    /// Returns true if the strategy is highly concentrated (penalty-worthy).
+    /// Default threshold: combined score > 0.7 (70%+ of returns from one regime).
+    pub fn is_concentrated(&self) -> bool {
+        self.combined_score > 0.7
+    }
+
+    /// Returns a penalty factor (0-1) based on concentration.
+    /// 0 = no penalty, 1 = full penalty.
+    /// Scales linearly from threshold (0.5) to maximum (1.0).
+    pub fn penalty_factor(&self) -> f64 {
+        let threshold = 0.5;
+        if self.combined_score <= threshold {
+            0.0
+        } else {
+            ((self.combined_score - threshold) / (1.0 - threshold)).min(1.0)
+        }
+    }
 }
 
 // =============================================================================

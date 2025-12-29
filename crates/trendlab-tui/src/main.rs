@@ -181,6 +181,11 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
         return handle_search_key(app, code, channels);
     }
 
+    // Handle Help panel search mode
+    if app.active_panel == app::Panel::Help && app.help.search_mode {
+        return handle_help_search_key(app, code);
+    }
+
     match code {
         KeyCode::Char('q') => KeyResult::Quit,
 
@@ -233,6 +238,10 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
         }
         KeyCode::Char('5') => {
             app.select_panel(4);
+            KeyResult::Continue
+        }
+        KeyCode::Char('6') | KeyCode::Char('?') => {
+            app.select_panel(5);
             KeyResult::Continue
         }
 
@@ -338,6 +347,18 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
             KeyResult::Continue
         }
 
+        KeyCode::Char('p') => {
+            // 'p' for cycle risk profile (Balanced -> Conservative -> Aggressive -> TrendOptions)
+            if app.active_panel == Panel::Results {
+                app.yolo.risk_profile = app.yolo.risk_profile.next();
+                app.status_message = format!(
+                    "Risk profile: {} (affects composite score ranking)",
+                    app.yolo.risk_profile.display_name()
+                );
+            }
+            KeyResult::Continue
+        }
+
         KeyCode::Char('R') => {
             // Reset to canonical defaults (lookbacks, grids, fetch range)
             app.reset_ui_defaults();
@@ -380,13 +401,51 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
         }
 
         KeyCode::Char('n') => {
-            // 'n' to deselect all in current context
-            if app.active_panel == app::Panel::Strategy
+            // 'n' to deselect all in current context, or next search match in Help
+            if app.active_panel == app::Panel::Help && !app.help.search_query.is_empty() {
+                app.help_next_match();
+            } else if app.active_panel == app::Panel::Strategy
                 && app.strategy.focus == app::StrategyFocus::Selection
             {
                 app.handle_strategy_select_none();
             } else {
                 app.handle_select_none();
+            }
+            KeyResult::Continue
+        }
+
+        KeyCode::Char('N') => {
+            // 'N' for previous search match in Help panel
+            if app.active_panel == app::Panel::Help && !app.help.search_query.is_empty() {
+                app.help_prev_match();
+            }
+            KeyResult::Continue
+        }
+
+        KeyCode::Char('/') => {
+            // '/' to enter search mode in Help panel
+            if app.active_panel == app::Panel::Help {
+                app.help.search_mode = true;
+                app.help.search_query.clear();
+                app.help.search_matches.clear();
+                app.help.search_index = 0;
+            }
+            KeyResult::Continue
+        }
+
+        KeyCode::Char('g') => {
+            // 'g' for gg (jump to top) in Help panel - need to track double press
+            if app.active_panel == app::Panel::Help {
+                // Simple implementation: single 'g' jumps to top
+                app.help.scroll_offset = 0;
+            }
+            KeyResult::Continue
+        }
+
+        KeyCode::Char('G') => {
+            // 'G' to jump to bottom in Help panel
+            if app.active_panel == app::Panel::Help {
+                app.help_jump_to_bottom();
             }
             KeyResult::Continue
         }
@@ -1194,6 +1253,9 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                         profit_factor: 0.0, // Not aggregated
                         num_trades: 0,
                         turnover: 0.0,
+                        max_consecutive_losses: 0,
+                        max_consecutive_wins: 0,
+                        avg_losing_streak: 0.0,
                     },
                 });
             }
@@ -1289,6 +1351,9 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                         profit_factor: 0.0,
                         num_trades: 0,
                         turnover: 0.0,
+                        max_consecutive_losses: 0,
+                        max_consecutive_wins: 0,
+                        avg_losing_streak: 0.0,
                     },
                 });
             }

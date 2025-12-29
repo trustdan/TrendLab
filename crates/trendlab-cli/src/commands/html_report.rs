@@ -582,6 +582,9 @@ mod tests {
                     profit_factor: 1.8,
                     num_trades: 25,
                     turnover: 0.5,
+                    max_consecutive_losses: 0,
+                    max_consecutive_wins: 0,
+                    avg_losing_streak: 0.0,
                 },
             },
             SweepConfigResult {
@@ -606,6 +609,9 @@ mod tests {
                     profit_factor: 1.2,
                     num_trades: 15,
                     turnover: 0.3,
+                    max_consecutive_losses: 0,
+                    max_consecutive_wins: 0,
+                    avg_losing_streak: 0.0,
                 },
             },
         ]

@@ -16,8 +16,8 @@ use ratatui::layout::Rect;
 use trendlab_core::{
     generate_session_id, BacktestConfig, Bar, CostModel, CrossSymbolLeaderboard, FillModel,
     Leaderboard, LeaderboardScope, Metrics, MultiStrategyGrid, MultiStrategySweepResult,
-    MultiSweepResult, PyramidConfig, Sector, StrategyTypeId, SweepConfigResult, SweepDepth,
-    SweepGrid, Universe,
+    MultiSweepResult, PyramidConfig, RiskProfile, Sector, StrategyTypeId, SweepConfigResult,
+    SweepDepth, SweepGrid, Universe,
 };
 
 use crate::worker::{WorkerChannels, WorkerCommand};
@@ -407,6 +407,7 @@ pub enum Panel {
     Sweep,
     Results,
     Chart,
+    Help,
 }
 
 impl Panel {
@@ -417,6 +418,7 @@ impl Panel {
             Panel::Sweep,
             Panel::Results,
             Panel::Chart,
+            Panel::Help,
         ]
     }
 
@@ -427,6 +429,7 @@ impl Panel {
             Panel::Sweep => "Sweep",
             Panel::Results => "Results",
             Panel::Chart => "Chart",
+            Panel::Help => "Help",
         }
     }
 
@@ -437,6 +440,102 @@ impl Panel {
             Panel::Sweep => '3',
             Panel::Results => '4',
             Panel::Chart => '5',
+            Panel::Help => '6',
+        }
+    }
+}
+
+/// Help panel section identifiers
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HelpSection {
+    #[default]
+    Global,
+    Data,
+    Strategy,
+    Sweep,
+    Results,
+    Chart,
+    Features,
+}
+
+impl HelpSection {
+    pub fn all() -> &'static [HelpSection] {
+        &[
+            HelpSection::Global,
+            HelpSection::Data,
+            HelpSection::Strategy,
+            HelpSection::Sweep,
+            HelpSection::Results,
+            HelpSection::Chart,
+            HelpSection::Features,
+        ]
+    }
+
+    pub fn title(&self) -> &'static str {
+        match self {
+            HelpSection::Global => "Global",
+            HelpSection::Data => "Data",
+            HelpSection::Strategy => "Strategy",
+            HelpSection::Sweep => "Sweep",
+            HelpSection::Results => "Results",
+            HelpSection::Chart => "Chart",
+            HelpSection::Features => "Features",
+        }
+    }
+
+    /// Map a Panel to its corresponding HelpSection
+    pub fn from_panel(panel: Panel) -> Self {
+        match panel {
+            Panel::Data => HelpSection::Data,
+            Panel::Strategy => HelpSection::Strategy,
+            Panel::Sweep => HelpSection::Sweep,
+            Panel::Results => HelpSection::Results,
+            Panel::Chart => HelpSection::Chart,
+            Panel::Help => HelpSection::Global,
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        let all = Self::all();
+        let idx = all.iter().position(|s| s == self).unwrap_or(0);
+        all[(idx + 1) % all.len()]
+    }
+
+    pub fn prev(&self) -> Self {
+        let all = Self::all();
+        let idx = all.iter().position(|s| s == self).unwrap_or(0);
+        if idx == 0 {
+            all[all.len() - 1]
+        } else {
+            all[idx - 1]
+        }
+    }
+}
+
+/// Help panel state
+#[derive(Debug, Clone)]
+pub struct HelpState {
+    pub active_section: HelpSection,
+    pub scroll_offset: usize,
+    pub max_scroll: usize,
+    pub previous_panel: Panel,
+    pub search_mode: bool,
+    pub search_query: String,
+    pub search_matches: Vec<usize>,
+    pub search_index: usize,
+}
+
+impl Default for HelpState {
+    fn default() -> Self {
+        Self {
+            active_section: HelpSection::Global,
+            scroll_offset: 0,
+            max_scroll: 0,
+            previous_panel: Panel::Data,
+            search_mode: false,
+            search_query: String::new(),
+            search_matches: Vec::new(),
+            search_index: 0,
         }
     }
 }
@@ -1183,6 +1282,9 @@ pub struct YoloState {
     /// Unique session ID for tracking which session discovered entries
     pub session_id: String,
 
+    /// Risk profile for weighted ranking (cycle with 'p')
+    pub risk_profile: RiskProfile,
+
     /// Randomization percentage (e.g., 0.15 = ±15%)
     pub randomization_pct: f64,
     /// Total configs tested this session
@@ -1269,6 +1371,8 @@ impl Default for YoloState {
             view_scope: LeaderboardScope::Session,
             // Generate unique session ID
             session_id: generate_session_id(),
+            // Default risk profile for weighted ranking
+            risk_profile: RiskProfile::default(),
             // Default exploration strength for YOLO mode. Kept moderate so it explores meaningfully
             // without completely thrashing parameter space each iteration.
             randomization_pct: 0.30,
@@ -1744,6 +1848,7 @@ pub struct App {
     pub sweep: SweepState,
     pub results: ResultsState,
     pub chart: ChartState,
+    pub help: HelpState,
     pub status_message: String,
     pub operation: OperationState,
     pub startup: StartupState,
@@ -2037,7 +2142,8 @@ impl App {
                 zoom_level: 1.0,
                 ..Default::default()
             },
-            status_message: "Welcome to TrendLab TUI. Press Tab to switch panels, q to quit."
+            help: HelpState::default(),
+            status_message: "Welcome to TrendLab TUI. Press Tab to switch panels, ? for help."
                 .to_string(),
             operation: OperationState::Idle,
             startup: StartupState::default(),
@@ -2142,7 +2248,14 @@ impl App {
     pub fn select_panel(&mut self, index: usize) {
         let panels = Panel::all();
         if index < panels.len() {
-            self.active_panel = panels[index];
+            let target_panel = panels[index];
+            // Context-sensitive Help: remember where we came from and set section
+            if target_panel == Panel::Help && self.active_panel != Panel::Help {
+                self.help.previous_panel = self.active_panel;
+                self.help.active_section = HelpSection::from_panel(self.active_panel);
+                self.help.scroll_offset = 0;
+            }
+            self.active_panel = target_panel;
         }
     }
 

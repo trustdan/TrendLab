@@ -6,9 +6,10 @@
 //! - Trade-level statistics (MAE, MFE, holding period)
 
 use crate::analysis::{
-    AnalysisConfig, EdgeRatioStats, ExcursionStats, HoldingBucket, HoldingPeriodStats,
-    RegimeAnalysis, RegimeMetrics, ReturnDistribution, StatisticalAnalysis, TradeAnalysis,
-    TradeExcursion, VolAtEntryStats, VolRegime,
+    AnalysisConfig, DrawdownRegime, DrawdownRegimeAnalysis, DrawdownThresholds, EdgeRatioStats,
+    ExcursionStats, HoldingBucket, HoldingPeriodStats, RegimeAnalysis, RegimeConcentrationScore,
+    RegimeMetrics, ReturnDistribution, StatisticalAnalysis, TradeAnalysis, TradeExcursion,
+    TrendRegime, TrendRegimeAnalysis, VolAtEntryStats, VolRegime,
 };
 use crate::backtest::{BacktestResult, EquityPoint, Trade};
 use crate::bar::Bar;
@@ -358,6 +359,417 @@ fn compute_regime_metrics(
         total_return,
         sharpe,
     }
+}
+
+// =============================================================================
+// TREND REGIME ANALYSIS
+// =============================================================================
+
+/// Configuration for trend regime classification.
+#[derive(Debug, Clone)]
+pub struct TrendRegimeConfig {
+    /// MA period for slope calculation.
+    pub ma_period: usize,
+    /// Strong trend threshold (slope as % per period, e.g., 0.02 = 2%).
+    pub strong_threshold: f64,
+    /// Weak trend threshold (slope as % per period, e.g., 0.005 = 0.5%).
+    pub weak_threshold: f64,
+}
+
+impl Default for TrendRegimeConfig {
+    fn default() -> Self {
+        Self {
+            ma_period: 50,
+            strong_threshold: 0.02,
+            weak_threshold: 0.005,
+        }
+    }
+}
+
+/// Compute trend regime analysis based on MA slope.
+///
+/// Classifies each bar into a trend regime based on the slope of the moving average:
+/// - StrongUp: slope > strong_threshold
+/// - WeakUp: weak_threshold < slope <= strong_threshold
+/// - Neutral: -weak_threshold <= slope <= weak_threshold
+/// - WeakDown: -strong_threshold <= slope < -weak_threshold
+/// - StrongDown: slope < -strong_threshold
+pub fn compute_trend_regime_analysis(
+    bars: &[Bar],
+    equity: &[EquityPoint],
+    trades: &[Trade],
+    config: &TrendRegimeConfig,
+) -> Result<TrendRegimeAnalysis, PolarsError> {
+    if bars.len() < config.ma_period + 1 {
+        return Ok(TrendRegimeAnalysis::default());
+    }
+
+    // Build bars DataFrame with MA and slope
+    let timestamps: Vec<i64> = bars.iter().map(|b| b.ts.timestamp()).collect();
+    let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
+
+    let df = DataFrame::new(vec![
+        Column::new("ts".into(), timestamps),
+        Column::new("close".into(), closes),
+    ])?;
+
+    // Compute MA and slope
+    let with_trend = df
+        .lazy()
+        .with_column(
+            col("close")
+                .rolling_mean(RollingOptionsFixedWindow {
+                    window_size: config.ma_period,
+                    min_periods: config.ma_period,
+                    weights: None,
+                    center: false,
+                    fn_params: None,
+                })
+                .alias("ma"),
+        )
+        .with_column(
+            // Slope as % change in MA over last period
+            ((col("ma") - col("ma").shift(lit(1))) / col("ma").shift(lit(1))).alias("ma_slope"),
+        )
+        .collect()?;
+
+    // Classify each bar into trend regime
+    let slope_col = with_trend.column("ma_slope")?.f64()?;
+    let ts_col = with_trend.column("ts")?.i64()?;
+
+    let mut regimes: Vec<TrendRegime> = Vec::with_capacity(bars.len());
+    for i in 0..bars.len() {
+        let regime = match slope_col.get(i) {
+            Some(s) if s > config.strong_threshold => TrendRegime::StrongUp,
+            Some(s) if s > config.weak_threshold => TrendRegime::WeakUp,
+            Some(s) if s < -config.strong_threshold => TrendRegime::StrongDown,
+            Some(s) if s < -config.weak_threshold => TrendRegime::WeakDown,
+            Some(_) => TrendRegime::Neutral,
+            None => TrendRegime::Neutral, // Default for warmup period
+        };
+        regimes.push(regime);
+    }
+
+    // Build timestamp -> regime lookup
+    let ts_to_regime: std::collections::HashMap<i64, TrendRegime> = ts_col
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, ts)| ts.map(|t| (t, regimes[i])))
+        .collect();
+
+    // Count days per regime
+    let mut regime_days: std::collections::HashMap<TrendRegime, usize> =
+        std::collections::HashMap::new();
+    for regime in &regimes {
+        *regime_days.entry(*regime).or_insert(0) += 1;
+    }
+    let total_days = regimes.len();
+
+    // Classify trades by entry regime
+    let mut regime_trades: std::collections::HashMap<TrendRegime, Vec<&Trade>> =
+        std::collections::HashMap::new();
+    for trade in trades {
+        let entry_ts = trade.entry.ts.timestamp();
+        let regime = ts_to_regime.get(&entry_ts).copied().unwrap_or(TrendRegime::Neutral);
+        regime_trades.entry(regime).or_default().push(trade);
+    }
+
+    // Compute equity returns per regime
+    let equity_returns = compute_equity_returns(equity);
+    let regime_returns = split_returns_by_trend_regime(&equity_returns, &ts_to_regime);
+
+    // Build results
+    let mut by_regime = std::collections::HashMap::new();
+    for regime in TrendRegime::all() {
+        let trades = regime_trades.get(regime).map(|v| v.as_slice()).unwrap_or(&[]);
+        let n_days = *regime_days.get(regime).unwrap_or(&0);
+        let returns = regime_returns.get(regime).map(|v| v.as_slice()).unwrap_or(&[]);
+
+        by_regime.insert(
+            *regime,
+            compute_regime_metrics(trades, n_days, total_days, returns),
+        );
+    }
+
+    Ok(TrendRegimeAnalysis {
+        by_regime,
+        ma_period: config.ma_period,
+        strong_threshold: config.strong_threshold,
+        weak_threshold: config.weak_threshold,
+    })
+}
+
+/// Split returns by trend regime.
+fn split_returns_by_trend_regime(
+    returns: &[(i64, f64)],
+    ts_to_regime: &std::collections::HashMap<i64, TrendRegime>,
+) -> std::collections::HashMap<TrendRegime, Vec<f64>> {
+    let mut by_regime: std::collections::HashMap<TrendRegime, Vec<f64>> =
+        std::collections::HashMap::new();
+
+    for (ts, ret) in returns {
+        let regime = ts_to_regime.get(ts).copied().unwrap_or(TrendRegime::Neutral);
+        by_regime.entry(regime).or_default().push(*ret);
+    }
+
+    by_regime
+}
+
+// =============================================================================
+// DRAWDOWN REGIME ANALYSIS
+// =============================================================================
+
+/// Compute drawdown regime analysis based on current drawdown from peak.
+///
+/// Classifies each bar into a drawdown regime based on how far the strategy
+/// equity is from its high-water mark:
+/// - Normal: drawdown < 5%
+/// - Shallow: 5% <= drawdown < 10%
+/// - Deep: 10% <= drawdown < 20%
+/// - Recovery: drawdown >= 20%
+pub fn compute_drawdown_regime_analysis(
+    equity: &[EquityPoint],
+    trades: &[Trade],
+    thresholds: &DrawdownThresholds,
+) -> Result<DrawdownRegimeAnalysis, PolarsError> {
+    if equity.len() < 2 {
+        return Ok(DrawdownRegimeAnalysis::default());
+    }
+
+    // Compute running drawdown for each equity point
+    let mut peak = equity[0].equity;
+    let mut regimes: Vec<DrawdownRegime> = Vec::with_capacity(equity.len());
+    let mut ts_to_regime: std::collections::HashMap<i64, DrawdownRegime> =
+        std::collections::HashMap::new();
+
+    for ep in equity {
+        peak = peak.max(ep.equity);
+        let dd_pct = if peak > 0.0 {
+            (peak - ep.equity) / peak
+        } else {
+            0.0
+        };
+
+        let regime = classify_drawdown_regime(dd_pct, thresholds);
+        regimes.push(regime);
+        ts_to_regime.insert(ep.ts.timestamp(), regime);
+    }
+
+    // Count days per regime
+    let mut regime_days: std::collections::HashMap<DrawdownRegime, usize> =
+        std::collections::HashMap::new();
+    for regime in &regimes {
+        *regime_days.entry(*regime).or_insert(0) += 1;
+    }
+    let total_days = regimes.len();
+
+    // Classify trades by entry regime
+    let mut regime_trades: std::collections::HashMap<DrawdownRegime, Vec<&Trade>> =
+        std::collections::HashMap::new();
+    for trade in trades {
+        let entry_ts = trade.entry.ts.timestamp();
+        let regime = ts_to_regime
+            .get(&entry_ts)
+            .copied()
+            .unwrap_or(DrawdownRegime::Normal);
+        regime_trades.entry(regime).or_default().push(trade);
+    }
+
+    // Compute equity returns per regime
+    let equity_returns = compute_equity_returns(equity);
+    let regime_returns = split_returns_by_drawdown_regime(&equity_returns, &ts_to_regime);
+
+    // Build results
+    let mut by_regime = std::collections::HashMap::new();
+    for regime in DrawdownRegime::all() {
+        let trades = regime_trades.get(regime).map(|v| v.as_slice()).unwrap_or(&[]);
+        let n_days = *regime_days.get(regime).unwrap_or(&0);
+        let returns = regime_returns.get(regime).map(|v| v.as_slice()).unwrap_or(&[]);
+
+        by_regime.insert(
+            *regime,
+            compute_regime_metrics(trades, n_days, total_days, returns),
+        );
+    }
+
+    Ok(DrawdownRegimeAnalysis {
+        by_regime,
+        thresholds: thresholds.clone(),
+    })
+}
+
+/// Classify drawdown percentage into regime.
+fn classify_drawdown_regime(dd_pct: f64, thresholds: &DrawdownThresholds) -> DrawdownRegime {
+    if dd_pct < thresholds.shallow {
+        DrawdownRegime::Normal
+    } else if dd_pct < thresholds.deep {
+        DrawdownRegime::Shallow
+    } else if dd_pct < thresholds.recovery {
+        DrawdownRegime::Deep
+    } else {
+        DrawdownRegime::Recovery
+    }
+}
+
+/// Split returns by drawdown regime.
+fn split_returns_by_drawdown_regime(
+    returns: &[(i64, f64)],
+    ts_to_regime: &std::collections::HashMap<i64, DrawdownRegime>,
+) -> std::collections::HashMap<DrawdownRegime, Vec<f64>> {
+    let mut by_regime: std::collections::HashMap<DrawdownRegime, Vec<f64>> =
+        std::collections::HashMap::new();
+
+    for (ts, ret) in returns {
+        let regime = ts_to_regime
+            .get(ts)
+            .copied()
+            .unwrap_or(DrawdownRegime::Normal);
+        by_regime.entry(regime).or_default().push(*ret);
+    }
+
+    by_regime
+}
+
+// =============================================================================
+// REGIME CONCENTRATION SCORING
+// =============================================================================
+
+/// Compute regime concentration score for a strategy.
+///
+/// Measures how concentrated returns are in specific regimes.
+/// A perfectly balanced strategy would have equal returns across all regimes.
+/// A concentrated strategy has most returns from a single regime.
+///
+/// The concentration score uses a Herfindahl-Hirschman-like index:
+/// - Compute % of total return from each regime
+/// - Square the percentages and sum
+/// - Normalize to [0, 1] range
+///
+/// Returns a score where 0 = perfectly balanced, 1 = all returns from one regime.
+pub fn compute_regime_concentration_score(
+    vol_analysis: &RegimeAnalysis,
+    trend_analysis: Option<&TrendRegimeAnalysis>,
+    drawdown_analysis: Option<&DrawdownRegimeAnalysis>,
+) -> RegimeConcentrationScore {
+    // Compute volatility regime concentration
+    let vol_returns = [
+        vol_analysis.high_vol.total_return,
+        vol_analysis.neutral_vol.total_return,
+        vol_analysis.low_vol.total_return,
+    ];
+    let (vol_concentration, dominant_vol_idx, vol_pct) = compute_hhi_concentration(&vol_returns);
+    let dominant_vol_regime = match dominant_vol_idx {
+        0 => Some(VolRegime::High),
+        1 => Some(VolRegime::Neutral),
+        2 => Some(VolRegime::Low),
+        _ => None,
+    };
+
+    // Compute trend regime concentration (if available)
+    let (trend_concentration, dominant_trend_regime, trend_pct) =
+        if let Some(trend) = trend_analysis {
+            let returns: Vec<f64> = TrendRegime::all()
+                .iter()
+                .map(|r| trend.by_regime.get(r).map(|m| m.total_return).unwrap_or(0.0))
+                .collect();
+            let (conc, idx, pct) = compute_hhi_concentration(&returns);
+            let regime = TrendRegime::all().get(idx).copied();
+            (conc, regime, pct)
+        } else {
+            (0.0, None, 0.0)
+        };
+
+    // Compute drawdown regime concentration (if available)
+    let (drawdown_concentration, dominant_drawdown_regime, drawdown_pct) =
+        if let Some(dd) = drawdown_analysis {
+            let returns: Vec<f64> = DrawdownRegime::all()
+                .iter()
+                .map(|r| dd.by_regime.get(r).map(|m| m.total_return).unwrap_or(0.0))
+                .collect();
+            let (conc, idx, pct) = compute_hhi_concentration(&returns);
+            let regime = DrawdownRegime::all().get(idx).copied();
+            (conc, regime, pct)
+        } else {
+            (0.0, None, 0.0)
+        };
+
+    // Compute combined score (weighted average)
+    // Weight: vol = 0.4, trend = 0.4, drawdown = 0.2
+    let has_trend = trend_analysis.is_some();
+    let has_drawdown = drawdown_analysis.is_some();
+
+    let combined_score = match (has_trend, has_drawdown) {
+        (true, true) => {
+            0.4 * vol_concentration + 0.4 * trend_concentration + 0.2 * drawdown_concentration
+        }
+        (true, false) => 0.5 * vol_concentration + 0.5 * trend_concentration,
+        (false, true) => 0.7 * vol_concentration + 0.3 * drawdown_concentration,
+        (false, false) => vol_concentration,
+    };
+
+    RegimeConcentrationScore {
+        vol_concentration,
+        trend_concentration,
+        drawdown_concentration,
+        combined_score,
+        dominant_vol_regime,
+        dominant_trend_regime,
+        dominant_drawdown_regime,
+        vol_regime_pct: vol_pct,
+        trend_regime_pct: trend_pct,
+        drawdown_regime_pct: drawdown_pct,
+    }
+}
+
+/// Compute Herfindahl-Hirschman-like concentration index.
+///
+/// Returns: (concentration score 0-1, index of dominant regime, % from dominant regime)
+fn compute_hhi_concentration(returns: &[f64]) -> (f64, usize, f64) {
+    if returns.is_empty() {
+        return (0.0, 0, 0.0);
+    }
+
+    // Handle case where total return is zero or negative
+    let total_positive: f64 = returns.iter().filter(|&&r| r > 0.0).sum();
+    let total_absolute: f64 = returns.iter().map(|r| r.abs()).sum();
+
+    if total_absolute < 1e-10 {
+        return (0.0, 0, 0.0);
+    }
+
+    // Compute share of each regime (using absolute values to handle negative returns)
+    let shares: Vec<f64> = returns.iter().map(|r| r.abs() / total_absolute).collect();
+
+    // HHI = sum of squared shares
+    // For n equally-sized shares, HHI = 1/n
+    // For one dominant share, HHI = 1.0
+    let hhi: f64 = shares.iter().map(|s| s * s).sum();
+
+    // Normalize to [0, 1]: subtract 1/n (minimum HHI) and divide by (1 - 1/n)
+    let n = returns.len() as f64;
+    let min_hhi = 1.0 / n;
+    let normalized = if n > 1.0 {
+        (hhi - min_hhi) / (1.0 - min_hhi)
+    } else {
+        hhi
+    };
+
+    // Find dominant regime
+    let (dominant_idx, dominant_share) = shares
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, &s)| (i, s))
+        .unwrap_or((0, 0.0));
+
+    // Compute % of positive returns from dominant regime
+    let dominant_pct = if total_positive > 0.0 && returns[dominant_idx] > 0.0 {
+        returns[dominant_idx] / total_positive
+    } else {
+        dominant_share
+    };
+
+    (normalized.clamp(0.0, 1.0), dominant_idx, dominant_pct)
 }
 
 // =============================================================================
@@ -848,5 +1260,289 @@ mod tests {
         let y = vec![10.0, 8.0, 6.0, 4.0, 2.0];
         let corr = pearson_correlation(&x, &y);
         assert!((corr - (-1.0)).abs() < 0.001);
+    }
+
+    // =========================================================================
+    // DRAWDOWN REGIME TESTS
+    // =========================================================================
+
+    #[test]
+    fn test_drawdown_regime_classification_normal() {
+        // 0-5% drawdown should be Normal
+        assert_eq!(
+            DrawdownRegime::from_drawdown_pct(0.0),
+            DrawdownRegime::Normal
+        );
+        assert_eq!(
+            DrawdownRegime::from_drawdown_pct(0.03),
+            DrawdownRegime::Normal
+        );
+        assert_eq!(
+            DrawdownRegime::from_drawdown_pct(0.049),
+            DrawdownRegime::Normal
+        );
+    }
+
+    #[test]
+    fn test_drawdown_regime_classification_shallow() {
+        // 5-10% drawdown should be Shallow
+        assert_eq!(
+            DrawdownRegime::from_drawdown_pct(0.05),
+            DrawdownRegime::Shallow
+        );
+        assert_eq!(
+            DrawdownRegime::from_drawdown_pct(0.07),
+            DrawdownRegime::Shallow
+        );
+        assert_eq!(
+            DrawdownRegime::from_drawdown_pct(0.099),
+            DrawdownRegime::Shallow
+        );
+    }
+
+    #[test]
+    fn test_drawdown_regime_classification_deep() {
+        // 10-20% drawdown should be Deep
+        assert_eq!(
+            DrawdownRegime::from_drawdown_pct(0.10),
+            DrawdownRegime::Deep
+        );
+        assert_eq!(
+            DrawdownRegime::from_drawdown_pct(0.15),
+            DrawdownRegime::Deep
+        );
+        assert_eq!(
+            DrawdownRegime::from_drawdown_pct(0.199),
+            DrawdownRegime::Deep
+        );
+    }
+
+    #[test]
+    fn test_drawdown_regime_classification_recovery() {
+        // >20% drawdown should be Recovery
+        assert_eq!(
+            DrawdownRegime::from_drawdown_pct(0.20),
+            DrawdownRegime::Recovery
+        );
+        assert_eq!(
+            DrawdownRegime::from_drawdown_pct(0.35),
+            DrawdownRegime::Recovery
+        );
+        assert_eq!(
+            DrawdownRegime::from_drawdown_pct(0.50),
+            DrawdownRegime::Recovery
+        );
+    }
+
+    #[test]
+    fn test_drawdown_regime_handles_negative() {
+        // Negative values (shouldn't happen but handle gracefully)
+        assert_eq!(
+            DrawdownRegime::from_drawdown_pct(-0.05),
+            DrawdownRegime::Shallow // Uses abs()
+        );
+    }
+
+    // =========================================================================
+    // HHI CONCENTRATION TESTS
+    // =========================================================================
+
+    #[test]
+    fn test_hhi_concentration_equal_returns() {
+        // Equal returns across 3 regimes should give low concentration
+        let returns = [10.0, 10.0, 10.0];
+        let (conc, _, _) = compute_hhi_concentration(&returns);
+        assert!(conc < 0.1, "Equal returns should have ~0 concentration: {}", conc);
+    }
+
+    #[test]
+    fn test_hhi_concentration_one_dominant() {
+        // All returns from one regime should give concentration = 1
+        let returns = [100.0, 0.0, 0.0];
+        let (conc, dominant_idx, pct) = compute_hhi_concentration(&returns);
+        assert!(conc > 0.99, "Single dominant should have ~1 concentration: {}", conc);
+        assert_eq!(dominant_idx, 0);
+        assert!((pct - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_hhi_concentration_two_equal() {
+        // Two equal regimes, one zero
+        let returns = [50.0, 50.0, 0.0];
+        let (conc, _, _) = compute_hhi_concentration(&returns);
+        // HHI = 0.5^2 + 0.5^2 + 0 = 0.5, normalized = (0.5 - 0.333) / 0.667 = 0.25
+        assert!(conc > 0.2 && conc < 0.4, "Two equal should have ~0.25 concentration: {}", conc);
+    }
+
+    #[test]
+    fn test_hhi_concentration_handles_negative_returns() {
+        // Mix of positive and negative returns
+        let returns = [30.0, -10.0, 20.0];
+        let (conc, dominant_idx, _) = compute_hhi_concentration(&returns);
+        // Should use absolute values for share calculation
+        assert!(conc < 0.5, "Mixed returns should have moderate concentration");
+        assert_eq!(dominant_idx, 0); // 30 is largest absolute
+    }
+
+    #[test]
+    fn test_hhi_concentration_all_zero() {
+        let returns = [0.0, 0.0, 0.0];
+        let (conc, _, _) = compute_hhi_concentration(&returns);
+        assert!((conc - 0.0).abs() < 0.01, "All zero should have 0 concentration");
+    }
+
+    #[test]
+    fn test_hhi_concentration_empty() {
+        let returns: [f64; 0] = [];
+        let (conc, idx, pct) = compute_hhi_concentration(&returns);
+        assert!((conc - 0.0).abs() < 0.01);
+        assert_eq!(idx, 0);
+        assert!((pct - 0.0).abs() < 0.01);
+    }
+
+    // =========================================================================
+    // REGIME CONCENTRATION SCORE TESTS
+    // =========================================================================
+
+    #[test]
+    fn test_regime_concentration_score_balanced() {
+        // Create a balanced regime analysis
+        let vol_analysis = RegimeAnalysis {
+            high_vol: RegimeMetrics { total_return: 0.10, ..Default::default() },
+            neutral_vol: RegimeMetrics { total_return: 0.10, ..Default::default() },
+            low_vol: RegimeMetrics { total_return: 0.10, ..Default::default() },
+            ..Default::default()
+        };
+
+        let score = compute_regime_concentration_score(&vol_analysis, None, None);
+        assert!(score.vol_concentration < 0.1, "Balanced should have low concentration");
+        assert!(!score.is_concentrated());
+        assert!((score.penalty_factor() - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_regime_concentration_score_concentrated() {
+        // Create a concentrated regime analysis (all returns from high vol)
+        let vol_analysis = RegimeAnalysis {
+            high_vol: RegimeMetrics { total_return: 0.50, ..Default::default() },
+            neutral_vol: RegimeMetrics { total_return: 0.0, ..Default::default() },
+            low_vol: RegimeMetrics { total_return: 0.0, ..Default::default() },
+            ..Default::default()
+        };
+
+        let score = compute_regime_concentration_score(&vol_analysis, None, None);
+        assert!(score.vol_concentration > 0.9, "Concentrated should have high score");
+        assert!(score.is_concentrated());
+        assert!(score.penalty_factor() > 0.5);
+        assert_eq!(score.dominant_vol_regime, Some(VolRegime::High));
+    }
+
+    #[test]
+    fn test_regime_concentration_score_with_trend() {
+        let vol_analysis = RegimeAnalysis {
+            high_vol: RegimeMetrics { total_return: 0.10, ..Default::default() },
+            neutral_vol: RegimeMetrics { total_return: 0.10, ..Default::default() },
+            low_vol: RegimeMetrics { total_return: 0.10, ..Default::default() },
+            ..Default::default()
+        };
+
+        let mut by_regime = std::collections::HashMap::new();
+        by_regime.insert(TrendRegime::StrongUp, RegimeMetrics { total_return: 0.50, ..Default::default() });
+        by_regime.insert(TrendRegime::WeakUp, RegimeMetrics { total_return: 0.0, ..Default::default() });
+        by_regime.insert(TrendRegime::Neutral, RegimeMetrics { total_return: 0.0, ..Default::default() });
+        by_regime.insert(TrendRegime::WeakDown, RegimeMetrics { total_return: 0.0, ..Default::default() });
+        by_regime.insert(TrendRegime::StrongDown, RegimeMetrics { total_return: 0.0, ..Default::default() });
+
+        let trend_analysis = TrendRegimeAnalysis {
+            by_regime,
+            ..Default::default()
+        };
+
+        let score = compute_regime_concentration_score(&vol_analysis, Some(&trend_analysis), None);
+
+        // Vol is balanced (0), trend is concentrated (1), combined = 0.5*0 + 0.5*1 = 0.5
+        assert!(score.trend_concentration > 0.9);
+        assert!(score.combined_score > 0.4 && score.combined_score < 0.6);
+        assert_eq!(score.dominant_trend_regime, Some(TrendRegime::StrongUp));
+    }
+
+    // =========================================================================
+    // PENALTY FACTOR TESTS
+    // =========================================================================
+
+    #[test]
+    fn test_penalty_factor_below_threshold() {
+        let score = RegimeConcentrationScore {
+            combined_score: 0.3,
+            ..Default::default()
+        };
+        assert!((score.penalty_factor() - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_penalty_factor_at_threshold() {
+        let score = RegimeConcentrationScore {
+            combined_score: 0.5,
+            ..Default::default()
+        };
+        assert!((score.penalty_factor() - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_penalty_factor_above_threshold() {
+        let score = RegimeConcentrationScore {
+            combined_score: 0.75,
+            ..Default::default()
+        };
+        // (0.75 - 0.5) / 0.5 = 0.5
+        assert!((score.penalty_factor() - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_penalty_factor_maximum() {
+        let score = RegimeConcentrationScore {
+            combined_score: 1.0,
+            ..Default::default()
+        };
+        assert!((score.penalty_factor() - 1.0).abs() < 0.01);
+    }
+
+    // =========================================================================
+    // TREND REGIME ALL() TESTS
+    // =========================================================================
+
+    #[test]
+    fn test_trend_regime_all_variants() {
+        let all = TrendRegime::all();
+        assert_eq!(all.len(), 5);
+        assert!(all.contains(&TrendRegime::StrongUp));
+        assert!(all.contains(&TrendRegime::WeakUp));
+        assert!(all.contains(&TrendRegime::Neutral));
+        assert!(all.contains(&TrendRegime::WeakDown));
+        assert!(all.contains(&TrendRegime::StrongDown));
+    }
+
+    #[test]
+    fn test_drawdown_regime_all_variants() {
+        let all = DrawdownRegime::all();
+        assert_eq!(all.len(), 4);
+        assert!(all.contains(&DrawdownRegime::Normal));
+        assert!(all.contains(&DrawdownRegime::Shallow));
+        assert!(all.contains(&DrawdownRegime::Deep));
+        assert!(all.contains(&DrawdownRegime::Recovery));
+    }
+
+    #[test]
+    fn test_trend_regime_display_names() {
+        assert_eq!(TrendRegime::StrongUp.display_name(), "Strong Up");
+        assert_eq!(TrendRegime::WeakDown.display_name(), "Weak Down");
+        assert_eq!(TrendRegime::Neutral.display_name(), "Neutral");
+    }
+
+    #[test]
+    fn test_drawdown_regime_display_names() {
+        assert_eq!(DrawdownRegime::Normal.display_name(), "Normal (<5%)");
+        assert_eq!(DrawdownRegime::Deep.display_name(), "Deep (10-20%)");
+        assert_eq!(DrawdownRegime::Recovery.display_name(), "Recovery (>20%)");
     }
 }

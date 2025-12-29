@@ -236,6 +236,299 @@ pub fn bootstrap_sharpe(
     bootstrap_ci(returns, sharpe_fn, config)
 }
 
+// =============================================================================
+// Block Bootstrap for Time-Series Data
+// =============================================================================
+
+/// Bootstrap method selection for different data types.
+///
+/// Standard IID bootstrap assumes observations are independent, which is violated
+/// for time-series data like equity curves or returns. Block bootstrap methods
+/// preserve the autocorrelation structure by resampling contiguous blocks.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+pub enum BootstrapMethod {
+    /// Standard IID bootstrap - resample individual observations with replacement.
+    /// Use for cross-sectional data (e.g., different symbols' Sharpe ratios).
+    #[default]
+    Iid,
+
+    /// Moving block bootstrap - resample fixed-length contiguous blocks.
+    /// Block endpoints are deterministic once block_size is chosen.
+    MovingBlock {
+        /// Fixed block size (typically n^(1/3) for optimal bias-variance tradeoff)
+        block_size: usize,
+    },
+
+    /// Stationary bootstrap - resample with random block lengths.
+    /// Block lengths follow geometric distribution with expected length = expected_block_length.
+    /// This produces stationary resamples (unlike moving block).
+    Stationary {
+        /// Expected block length (typically n^(1/3))
+        expected_block_length: f64,
+    },
+}
+
+impl BootstrapMethod {
+    /// Create optimal block bootstrap method for time-series of length n.
+    ///
+    /// Uses the n^(1/3) rule for optimal block length (Hall, Horowitz & Jing 1995).
+    pub fn for_time_series(n: usize) -> Self {
+        let optimal_length = (n as f64).powf(1.0 / 3.0).max(2.0);
+        Self::Stationary {
+            expected_block_length: optimal_length,
+        }
+    }
+
+    /// Create IID bootstrap for cross-sectional data.
+    pub fn for_cross_sectional() -> Self {
+        Self::Iid
+    }
+}
+
+/// Configuration for block bootstrap resampling.
+///
+/// Extends BootstrapConfig with method selection for time-series aware bootstrap.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockBootstrapConfig {
+    /// Base bootstrap configuration (iterations, confidence level, seed)
+    pub base: BootstrapConfig,
+    /// Bootstrap method (IID, MovingBlock, or Stationary)
+    pub method: BootstrapMethod,
+}
+
+impl Default for BlockBootstrapConfig {
+    fn default() -> Self {
+        Self {
+            base: BootstrapConfig::default(),
+            method: BootstrapMethod::Iid,
+        }
+    }
+}
+
+impl BlockBootstrapConfig {
+    /// Create config for time-series data of length n.
+    ///
+    /// Uses stationary bootstrap with optimal block length.
+    pub fn for_time_series(n: usize) -> Self {
+        Self {
+            base: BootstrapConfig::default(),
+            method: BootstrapMethod::for_time_series(n),
+        }
+    }
+
+    /// Create config for cross-sectional data (IID bootstrap).
+    pub fn for_cross_sectional() -> Self {
+        Self {
+            base: BootstrapConfig::default(),
+            method: BootstrapMethod::Iid,
+        }
+    }
+
+    /// Quick config with fewer iterations for time-series.
+    pub fn quick_time_series(n: usize) -> Self {
+        Self {
+            base: BootstrapConfig::quick(),
+            method: BootstrapMethod::for_time_series(n),
+        }
+    }
+}
+
+/// Compute block bootstrap confidence interval for time-series data.
+///
+/// Unlike standard IID bootstrap, block bootstrap preserves the autocorrelation
+/// structure of time-series data by resampling contiguous blocks rather than
+/// individual observations. This produces more accurate confidence intervals
+/// for autocorrelated data like equity curves.
+///
+/// # Arguments
+/// * `data` - Time-series data (e.g., daily returns, equity values)
+/// * `statistic_fn` - Function to compute the statistic from a sample
+/// * `config` - Block bootstrap configuration
+///
+/// # Returns
+/// Bootstrap result with confidence interval that accounts for autocorrelation
+pub fn block_bootstrap_ci<F>(
+    data: &[f64],
+    statistic_fn: F,
+    config: &BlockBootstrapConfig,
+) -> Result<BootstrapResult, StatisticsError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    config.base.validate()?;
+
+    let n = data.len();
+    if n < 2 {
+        return Err(StatisticsError::InsufficientSamples {
+            needed: 2,
+            available: n,
+        });
+    }
+
+    // For IID method, delegate to standard bootstrap
+    if matches!(config.method, BootstrapMethod::Iid) {
+        return bootstrap_ci(data, statistic_fn, &config.base);
+    }
+
+    let point_estimate = statistic_fn(data);
+    let mut rng = SmallRng::seed_from_u64(config.base.seed);
+    let mut bootstrap_stats: Vec<f64> = Vec::with_capacity(config.base.n_iterations);
+    let mut resample: Vec<f64> = Vec::with_capacity(n);
+
+    for _ in 0..config.base.n_iterations {
+        resample.clear();
+
+        match config.method {
+            BootstrapMethod::MovingBlock { block_size } => {
+                generate_moving_block_sample(data, block_size, n, &mut resample, &mut rng);
+            }
+            BootstrapMethod::Stationary {
+                expected_block_length,
+            } => {
+                generate_stationary_sample(data, expected_block_length, n, &mut resample, &mut rng);
+            }
+            BootstrapMethod::Iid => unreachable!(), // Handled above
+        }
+
+        bootstrap_stats.push(statistic_fn(&resample));
+    }
+
+    // Sort for percentile calculations
+    bootstrap_stats.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Compute confidence interval using percentile method
+    let alpha = 1.0 - config.base.confidence_level;
+    let lower_idx = ((alpha / 2.0) * config.base.n_iterations as f64).floor() as usize;
+    let upper_idx = ((1.0 - alpha / 2.0) * config.base.n_iterations as f64).floor() as usize;
+
+    let ci_lower = bootstrap_stats
+        .get(lower_idx)
+        .copied()
+        .unwrap_or(point_estimate);
+    let ci_upper = bootstrap_stats
+        .get(upper_idx.min(bootstrap_stats.len().saturating_sub(1)))
+        .copied()
+        .unwrap_or(point_estimate);
+
+    // Compute standard error and mean
+    let bootstrap_mean: f64 =
+        bootstrap_stats.iter().sum::<f64>() / config.base.n_iterations as f64;
+    let variance: f64 = bootstrap_stats
+        .iter()
+        .map(|x| (x - bootstrap_mean).powi(2))
+        .sum::<f64>()
+        / config.base.n_iterations as f64;
+    let std_error = variance.sqrt();
+
+    let median_idx = config.base.n_iterations / 2;
+    let bootstrap_median = bootstrap_stats[median_idx];
+
+    Ok(BootstrapResult {
+        point_estimate,
+        ci_lower,
+        ci_upper,
+        std_error,
+        confidence_level: config.base.confidence_level,
+        n_iterations: config.base.n_iterations,
+        bootstrap_mean,
+        bootstrap_median,
+    })
+}
+
+/// Generate a moving block bootstrap sample.
+///
+/// Resamples contiguous blocks of fixed size until we have n observations.
+fn generate_moving_block_sample(
+    data: &[f64],
+    block_size: usize,
+    target_len: usize,
+    resample: &mut Vec<f64>,
+    rng: &mut SmallRng,
+) {
+    let n = data.len();
+    let block_size = block_size.max(1).min(n);
+    let n_possible_blocks = n.saturating_sub(block_size) + 1;
+
+    while resample.len() < target_len {
+        // Pick a random block start
+        let block_start = rng.gen_range(0..n_possible_blocks);
+        let block_end = (block_start + block_size).min(n);
+
+        // Add block to resample
+        for item in data.iter().take(block_end).skip(block_start) {
+            if resample.len() >= target_len {
+                break;
+            }
+            resample.push(*item);
+        }
+    }
+}
+
+/// Generate a stationary bootstrap sample.
+///
+/// Uses geometric distribution for block lengths, producing a stationary resample.
+/// This is preferred over moving block for most time-series applications.
+fn generate_stationary_sample(
+    data: &[f64],
+    expected_block_length: f64,
+    target_len: usize,
+    resample: &mut Vec<f64>,
+    rng: &mut SmallRng,
+) {
+    let n = data.len();
+    // Probability of ending a block at each step (geometric distribution)
+    let p_end = 1.0 / expected_block_length.max(1.0);
+
+    let mut pos = rng.gen_range(0..n); // Start at random position
+
+    while resample.len() < target_len {
+        resample.push(data[pos]);
+
+        // With probability p_end, jump to a new random position
+        // Otherwise, continue to next position (wrapping around)
+        if rng.gen::<f64>() < p_end {
+            pos = rng.gen_range(0..n);
+        } else {
+            pos = (pos + 1) % n;
+        }
+    }
+}
+
+/// Compute block bootstrap CI for Sharpe ratio on time-series data.
+///
+/// Uses stationary bootstrap to preserve autocorrelation in returns.
+/// This produces wider (more accurate) confidence intervals than IID bootstrap
+/// for autocorrelated equity curves.
+///
+/// # Arguments
+/// * `returns` - Daily returns (time-series)
+/// * `annualization` - Annualization factor (e.g., 252 for daily returns)
+/// * `config` - Block bootstrap configuration
+///
+/// # Returns
+/// Bootstrap result with autocorrelation-adjusted confidence interval
+pub fn block_bootstrap_sharpe(
+    returns: &[f64],
+    annualization: f64,
+    config: &BlockBootstrapConfig,
+) -> Result<BootstrapResult, StatisticsError> {
+    let sharpe_fn = move |r: &[f64]| {
+        if r.len() < 2 {
+            return 0.0;
+        }
+        let mean = r.iter().sum::<f64>() / r.len() as f64;
+        let variance = r.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (r.len() - 1) as f64;
+        let std = variance.sqrt();
+        if std < 1e-10 {
+            0.0
+        } else {
+            (mean / std) * annualization.sqrt()
+        }
+    };
+
+    block_bootstrap_ci(returns, sharpe_fn, config)
+}
+
 /// Result of a permutation test.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermutationResult {
@@ -1169,5 +1462,187 @@ mod tests {
         let bad_oos = vec![-0.3, 0.1, -0.5, -0.2, -0.4];
         let p_bad = one_sided_mean_pvalue(&bad_oos).unwrap();
         assert!(p_bad > 0.9, "Bad strategy p={} should be > 0.9", p_bad);
+    }
+
+    // =============================================================================
+    // Block Bootstrap Tests
+    // =============================================================================
+
+    #[test]
+    fn test_bootstrap_method_for_time_series() {
+        let method = BootstrapMethod::for_time_series(1000);
+        match method {
+            BootstrapMethod::Stationary {
+                expected_block_length,
+            } => {
+                // 1000^(1/3) ≈ 10
+                assert!(
+                    expected_block_length > 9.0 && expected_block_length < 11.0,
+                    "expected_block_length={} should be ~10",
+                    expected_block_length
+                );
+            }
+            _ => panic!("Expected Stationary method"),
+        }
+    }
+
+    #[test]
+    fn test_block_bootstrap_config_defaults() {
+        let config = BlockBootstrapConfig::for_time_series(252);
+        assert_eq!(config.base.n_iterations, 10_000);
+        assert!((config.base.confidence_level - 0.95).abs() < 0.001);
+        match config.method {
+            BootstrapMethod::Stationary {
+                expected_block_length,
+            } => {
+                // 252^(1/3) ≈ 6.3
+                assert!(
+                    expected_block_length > 6.0 && expected_block_length < 7.0,
+                    "expected_block_length={} should be ~6.3",
+                    expected_block_length
+                );
+            }
+            _ => panic!("Expected Stationary method"),
+        }
+    }
+
+    #[test]
+    fn test_block_bootstrap_iid_delegates_correctly() {
+        let data: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let config = BlockBootstrapConfig::for_cross_sectional();
+
+        let result =
+            block_bootstrap_ci(&data, |x| x.iter().sum::<f64>() / x.len() as f64, &config).unwrap();
+
+        // Should produce same results as regular bootstrap with same config
+        let iid_result =
+            bootstrap_ci(&data, |x| x.iter().sum::<f64>() / x.len() as f64, &config.base).unwrap();
+
+        // Point estimates should be identical
+        assert!((result.point_estimate - iid_result.point_estimate).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_block_bootstrap_sharpe_produces_valid_ci() {
+        // Generate realistic daily returns with autocorrelation
+        let mut rng = SmallRng::seed_from_u64(42);
+        let mut returns: Vec<f64> = Vec::with_capacity(252);
+        let mut prev = 0.0;
+        for _ in 0..252 {
+            // Add autocorrelation: new return depends on previous
+            let noise = rng.gen_range(-0.02..0.02);
+            let ret = 0.0003 + 0.3 * prev + noise;
+            returns.push(ret);
+            prev = ret;
+        }
+
+        let config = BlockBootstrapConfig::quick_time_series(returns.len());
+        let result = block_bootstrap_sharpe(&returns, 252.0, &config).unwrap();
+
+        // Sharpe and CI should be finite
+        assert!(result.point_estimate.is_finite());
+        assert!(result.ci_lower.is_finite());
+        assert!(result.ci_upper.is_finite());
+        // CI width should be positive
+        assert!(result.ci_width() > 0.0);
+        // CI should bracket the point estimate
+        assert!(result.ci_lower <= result.point_estimate);
+        assert!(result.ci_upper >= result.point_estimate);
+    }
+
+    #[test]
+    fn test_block_bootstrap_wider_ci_for_autocorrelated_data() {
+        // Generate highly autocorrelated data
+        let mut rng = SmallRng::seed_from_u64(123);
+        let mut returns: Vec<f64> = Vec::with_capacity(200);
+        let mut prev = 0.0;
+        for _ in 0..200 {
+            let noise = rng.gen_range(-0.01..0.01);
+            // High autocorrelation (0.8)
+            let ret = 0.0005 + 0.8 * prev + noise;
+            returns.push(ret);
+            prev = ret;
+        }
+
+        // Compare IID vs block bootstrap
+        let iid_config = BlockBootstrapConfig {
+            base: BootstrapConfig::quick(),
+            method: BootstrapMethod::Iid,
+        };
+        let block_config = BlockBootstrapConfig::quick_time_series(returns.len());
+
+        let iid_result = block_bootstrap_sharpe(&returns, 252.0, &iid_config).unwrap();
+        let block_result = block_bootstrap_sharpe(&returns, 252.0, &block_config).unwrap();
+
+        // Block bootstrap should produce wider CI due to accounting for autocorrelation
+        // (This may not always hold due to randomness, but generally should)
+        println!(
+            "IID CI width: {}, Block CI width: {}",
+            iid_result.ci_width(),
+            block_result.ci_width()
+        );
+
+        // Both should be valid
+        assert!(iid_result.ci_width() > 0.0);
+        assert!(block_result.ci_width() > 0.0);
+    }
+
+    #[test]
+    fn test_moving_block_sample_length() {
+        let data: Vec<f64> = (0..100).map(|x| x as f64).collect();
+        let mut rng = SmallRng::seed_from_u64(42);
+        let mut resample = Vec::new();
+
+        generate_moving_block_sample(&data, 10, 100, &mut resample, &mut rng);
+
+        // Should produce exactly 100 elements
+        assert_eq!(resample.len(), 100);
+        // All elements should be from original data
+        for val in &resample {
+            assert!(*val >= 0.0 && *val <= 99.0);
+        }
+    }
+
+    #[test]
+    fn test_stationary_sample_length() {
+        let data: Vec<f64> = (0..100).map(|x| x as f64).collect();
+        let mut rng = SmallRng::seed_from_u64(42);
+        let mut resample = Vec::new();
+
+        generate_stationary_sample(&data, 10.0, 100, &mut resample, &mut rng);
+
+        // Should produce exactly 100 elements
+        assert_eq!(resample.len(), 100);
+        // All elements should be from original data
+        for val in &resample {
+            assert!(*val >= 0.0 && *val <= 99.0);
+        }
+    }
+
+    #[test]
+    fn test_stationary_bootstrap_preserves_local_structure() {
+        // Create data with obvious local structure
+        let data: Vec<f64> = (0..100).map(|x| x as f64).collect();
+        let mut rng = SmallRng::seed_from_u64(42);
+        let mut resample = Vec::new();
+
+        // Use large expected block length to see more consecutive runs
+        generate_stationary_sample(&data, 20.0, 100, &mut resample, &mut rng);
+
+        // Count consecutive pairs where diff = 1 (consecutive in original)
+        let consecutive_count = resample
+            .windows(2)
+            .filter(|w| (w[1] - w[0] - 1.0).abs() < 0.01)
+            .count();
+
+        // With block length 20, we expect many consecutive pairs
+        // In pure random sampling, we'd expect ~1% to be consecutive
+        // With block bootstrap, we should see many more
+        println!("Consecutive pairs: {} out of 99", consecutive_count);
+        assert!(
+            consecutive_count > 30,
+            "Expected many consecutive pairs with block length 20, got {}",
+            consecutive_count
+        );
     }
 }

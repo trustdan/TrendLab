@@ -606,6 +606,9 @@ impl AggregatedPortfolioResult {
             profit_factor: 0.0,
             num_trades: 0,
             turnover: 0.0,
+            max_consecutive_losses: 0,
+            max_consecutive_wins: 0,
+            avg_losing_streak: 0.0,
         };
 
         Some(Self {
