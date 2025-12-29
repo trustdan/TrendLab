@@ -2797,12 +2797,10 @@ async fn when_compute_cost_sensitivity(
         .unwrap_or_else(|| trendlab_core::ConfigId::new(20, 10));
 
     let base_config = trendlab_core::BacktestConfig::default();
-    world.cost_sensitivity = Some(trendlab_core::compute_cost_sensitivity(
-        &world.bars,
-        &config_id,
-        base_config,
-        &cost_levels,
-    ));
+    world.cost_sensitivity = Some(
+        trendlab_core::compute_cost_sensitivity(&world.bars, &config_id, base_config, &cost_levels)
+            .expect("compute_cost_sensitivity should succeed in BDD tests"),
+    );
 }
 
 #[then(regex = r"^the sweep should execute (\d+) configurations$")]

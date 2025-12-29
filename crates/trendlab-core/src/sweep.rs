@@ -7,6 +7,7 @@
 //! - Ranking and stability analysis
 
 use crate::backtest::{run_backtest, BacktestConfig, BacktestResult, CostModel};
+use crate::TrendLabError;
 use crate::bar::Bar;
 use crate::indicators::MACDEntryMode;
 use crate::indicators::MAType;
@@ -322,21 +323,30 @@ pub fn run_sweep(bars: &[Bar], grid: &SweepGrid, backtest_config: BacktestConfig
 
     let config_results: Vec<SweepConfigResult> = combinations
         .par_iter()
-        .map(|&(entry, exit)| {
+        .filter_map(|&(entry, exit)| {
             let config_id = ConfigId::new(entry, exit);
             let mut strategy = DonchianBreakoutStrategy::new(entry, exit);
 
             tracing::trace!(entry = entry, exit = exit, "Evaluating config");
 
-            let backtest_result =
-                run_backtest(bars, &mut strategy, backtest_config).expect("Backtest failed");
-
-            let metrics = compute_metrics(&backtest_result, backtest_config.initial_cash);
-
-            SweepConfigResult {
-                config_id,
-                backtest_result,
-                metrics,
+            match run_backtest(bars, &mut strategy, backtest_config) {
+                Ok(backtest_result) => {
+                    let metrics = compute_metrics(&backtest_result, backtest_config.initial_cash);
+                    Some(SweepConfigResult {
+                        config_id,
+                        backtest_result,
+                        metrics,
+                    })
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        entry = entry,
+                        exit = exit,
+                        error = %e,
+                        "Backtest failed for config, skipping"
+                    );
+                    None
+                }
             }
         })
         .collect();
@@ -430,12 +440,14 @@ pub fn compute_neighbor_sensitivity(
 }
 
 /// Compute cost sensitivity for a configuration.
+///
+/// Returns an error if any backtest fails.
 pub fn compute_cost_sensitivity(
     bars: &[Bar],
     config_id: &ConfigId,
     base_config: BacktestConfig,
     cost_levels_bps: &[f64],
-) -> CostSensitivity {
+) -> Result<CostSensitivity, TrendLabError> {
     let mut returns_at_cost = Vec::new();
     let mut breakeven_cost_bps = None;
 
@@ -448,7 +460,7 @@ pub fn compute_cost_sensitivity(
 
         let mut strategy =
             DonchianBreakoutStrategy::new(config_id.entry_lookback, config_id.exit_lookback);
-        let result = run_backtest(bars, &mut strategy, config).expect("Backtest failed");
+        let result = run_backtest(bars, &mut strategy, config)?;
         let metrics = compute_metrics(&result, config.initial_cash);
 
         returns_at_cost.push(metrics.total_return);
@@ -459,12 +471,12 @@ pub fn compute_cost_sensitivity(
         }
     }
 
-    CostSensitivity {
+    Ok(CostSensitivity {
         config_id: config_id.clone(),
         cost_levels: cost_levels_bps.to_vec(),
         returns_at_cost,
         breakeven_cost_bps,
-    }
+    })
 }
 
 /// Result for a multi-symbol sweep containing per-symbol results and aggregated portfolio.

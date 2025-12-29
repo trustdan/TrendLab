@@ -44,7 +44,7 @@ use trendlab_core::{
 
 use polars::prelude::*;
 
-use crate::error::GuiError;
+use crate::error::{GuiError, RwLockExt};
 use crate::events::EventEnvelope;
 use crate::jobs::{CancellationToken, JobStatus};
 use crate::state::AppState;
@@ -521,7 +521,7 @@ fn run_symbol_sweep_sync(
 /// Get current YOLO state
 #[tauri::command]
 pub fn get_yolo_state(state: State<'_, AppState>) -> YoloStateResponse {
-    let yolo = state.yolo.read().unwrap();
+    let yolo = state.yolo.read_or_recover();
     YoloStateResponse {
         enabled: yolo.enabled,
         phase: yolo.phase,
@@ -536,7 +536,7 @@ pub fn get_yolo_state(state: State<'_, AppState>) -> YoloStateResponse {
 /// Get leaderboards
 #[tauri::command]
 pub fn get_leaderboard(state: State<'_, AppState>) -> LeaderboardsResponse {
-    let yolo = state.yolo.read().unwrap();
+    let yolo = state.yolo.read_or_recover();
     LeaderboardsResponse {
         per_symbol: yolo
             .per_symbol_leaderboard
@@ -563,7 +563,7 @@ pub async fn start_yolo_mode(
 
     // Check if already running
     {
-        let yolo = state.yolo.read().unwrap();
+        let yolo = state.yolo.read_or_recover();
         if yolo.enabled {
             tracing::warn!("YOLO mode already running, rejecting start request");
             return Err(GuiError::InvalidState(
@@ -600,7 +600,7 @@ pub async fn start_yolo_mode(
 
     // Mark YOLO as running
     {
-        let mut yolo = state.yolo.write().unwrap();
+        let mut yolo = state.yolo.write_or_recover();
         yolo.enabled = true;
         yolo.phase = YoloPhase::Sweeping;
         yolo.iteration = 0;
@@ -677,7 +677,7 @@ pub async fn start_yolo_mode(
 pub fn stop_yolo_mode(state: State<'_, AppState>, job_id: String) -> Result<(), GuiError> {
     // Verify job ID matches
     {
-        let yolo = state.yolo.read().unwrap();
+        let yolo = state.yolo.read_or_recover();
         if yolo.current_job_id.as_ref() != Some(&job_id) {
             return Err(GuiError::InvalidState(format!(
                 "Job ID mismatch: expected {:?}",
@@ -744,7 +744,7 @@ async fn run_yolo_loop(
 
             // Update state
             {
-                let mut yolo = state.yolo.write().unwrap();
+                let mut yolo = state.yolo.write_or_recover();
                 yolo.enabled = false;
                 yolo.phase = YoloPhase::Stopped;
                 yolo.current_job_id = None;
@@ -805,7 +805,7 @@ async fn run_yolo_loop(
 
         // Update state
         {
-            let mut yolo = state.yolo.write().unwrap();
+            let mut yolo = state.yolo.write_or_recover();
             yolo.iteration = iteration;
             yolo.completed_configs = 0;
             yolo.total_configs = configs_per_iteration as u64;
@@ -909,7 +909,7 @@ async fn run_yolo_loop(
 
                 // Update state
                 {
-                    let mut yolo = state.yolo.write().unwrap();
+                    let mut yolo = state.yolo.write_or_recover();
                     yolo.completed_configs = configs_tested_this_round as u64;
                 }
 
@@ -1035,7 +1035,7 @@ async fn run_yolo_loop(
 
         // Update state with leaderboards
         {
-            let mut yolo = state.yolo.write().unwrap();
+            let mut yolo = state.yolo.write_or_recover();
             yolo.total_configs_tested += configs_tested_this_round as u64;
             yolo.per_symbol_leaderboard = Some(per_symbol_leaderboard.clone());
             yolo.cross_symbol_leaderboard = Some(cross_symbol_leaderboard.clone());

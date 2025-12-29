@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ErrorEnvelope {
@@ -61,5 +62,55 @@ impl serde::Serialize for GuiError {
         S: serde::Serializer,
     {
         self.envelope().serialize(serializer)
+    }
+}
+
+/// Extension trait for RwLock to safely acquire locks with proper error handling.
+///
+/// If a lock is poisoned (another thread panicked while holding it), this will
+/// recover the value and log a warning rather than propagating the panic.
+pub trait RwLockExt<T> {
+    /// Acquire a read lock, recovering from poison if necessary.
+    fn read_or_recover(&self) -> RwLockReadGuard<'_, T>;
+
+    /// Acquire a write lock, recovering from poison if necessary.
+    fn write_or_recover(&self) -> RwLockWriteGuard<'_, T>;
+
+    /// Try to acquire a read lock, returning an error on poison.
+    fn try_read_strict(&self) -> Result<RwLockReadGuard<'_, T>, GuiError>;
+
+    /// Try to acquire a write lock, returning an error on poison.
+    fn try_write_strict(&self) -> Result<RwLockWriteGuard<'_, T>, GuiError>;
+}
+
+impl<T> RwLockExt<T> for RwLock<T> {
+    fn read_or_recover(&self) -> RwLockReadGuard<'_, T> {
+        match self.read() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::warn!("RwLock was poisoned, recovering read guard");
+                poisoned.into_inner()
+            }
+        }
+    }
+
+    fn write_or_recover(&self) -> RwLockWriteGuard<'_, T> {
+        match self.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::warn!("RwLock was poisoned, recovering write guard");
+                poisoned.into_inner()
+            }
+        }
+    }
+
+    fn try_read_strict(&self) -> Result<RwLockReadGuard<'_, T>, GuiError> {
+        self.read()
+            .map_err(|_| GuiError::Internal("Lock poisoned (read)".to_string()))
+    }
+
+    fn try_write_strict(&self) -> Result<RwLockWriteGuard<'_, T>, GuiError> {
+        self.write()
+            .map_err(|_| GuiError::Internal("Lock poisoned (write)".to_string()))
     }
 }

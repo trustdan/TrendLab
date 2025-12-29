@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use tauri::Emitter;
 
 use crate::{
-    error::GuiError,
+    error::{GuiError, RwLockExt},
     events::EventEnvelope,
     jobs::JobStatus,
     state::{AppState, UniverseInfo},
@@ -170,7 +170,7 @@ pub async fn fetch_data(
 
     // Clone state for updating cached symbols
     let cached_symbols_update = {
-        let cs = state.cached_symbols.read().unwrap();
+        let cs = state.cached_symbols.read_or_recover();
         std::sync::Arc::new(std::sync::RwLock::new(cs.clone()))
     };
 
@@ -222,7 +222,7 @@ pub async fn fetch_data(
                 Ok(bars_count) => {
                     fetched += 1;
                     // Mark as cached
-                    let mut cs = cached_symbols_update.write().unwrap();
+                    let mut cs = cached_symbols_update.write_or_recover();
                     cs.insert(symbol.clone());
                     drop(cs);
 

@@ -135,6 +135,8 @@ pub enum WorkerCommand {
         existing_per_symbol_leaderboard: Option<Leaderboard>,
         /// Optional: existing cross-symbol leaderboard to continue from
         existing_cross_symbol_leaderboard: Option<CrossSymbolLeaderboard>,
+        /// Session identifier for tracking results from this YOLO run
+        session_id: Option<String>,
     },
 }
 
@@ -293,6 +295,8 @@ pub enum WorkerUpdate {
         phase: String,
         completed_configs: usize,
         total_configs: usize,
+        /// Summary of jittered parameter values for the current iteration
+        jitter_summary: String,
     },
     YoloStopped {
         /// Cross-symbol leaderboard (primary)
@@ -478,6 +482,7 @@ fn worker_loop(
                 randomization_pct,
                 existing_per_symbol_leaderboard,
                 existing_cross_symbol_leaderboard,
+                session_id,
             } => {
                 handle_yolo_mode(
                     &symbols,
@@ -489,6 +494,7 @@ fn worker_loop(
                     randomization_pct,
                     existing_per_symbol_leaderboard,
                     existing_cross_symbol_leaderboard,
+                    session_id,
                     &update_tx,
                     &cancel_flag,
                 );
@@ -1813,6 +1819,7 @@ fn handle_yolo_mode(
     randomization_pct: f64,
     existing_per_symbol_leaderboard: Option<Leaderboard>,
     existing_cross_symbol_leaderboard: Option<CrossSymbolLeaderboard>,
+    session_id: Option<String>,
     update_tx: &Sender<WorkerUpdate>,
     cancel_flag: &Arc<AtomicBool>,
 ) {
@@ -1942,11 +1949,16 @@ fn handle_yolo_mode(
         } else {
             format!("sweeping (±{:.0}%)", iter_pct * 100.0)
         };
+
+        // Generate jitter summary showing what parameters were jittered
+        let jitter_summary = summarize_jittered_grid(base_grid, &jittered_grid);
+
         let _ = update_tx.send(WorkerUpdate::YoloProgress {
             iteration,
             phase,
             completed_configs: 0,
             total_configs: jittered_grid.total_configs() * loaded_symbols.len(),
+            jitter_summary,
         });
 
         let mut configs_tested_this_round = 0usize;
@@ -2104,7 +2116,7 @@ fn handle_yolo_mode(
                     dates: combined_dates,
                     discovered_at: Utc::now(),
                     iteration,
-                    session_id: None, // TODO: Pass session_id from YoloState in Phase 1
+                    session_id: session_id.clone(),
                     confidence_grade,
                     // Walk-forward fields (computed from equity-based WF)
                     walk_forward_grade: wf_grade,
@@ -2160,13 +2172,13 @@ fn handle_yolo_mode(
                 strategy_type: best.strategy_type,
                 config: best.config_id.clone(),
                 symbol: best.symbol.clone(),
-                sector: None, // TODO: Look up sector from universe in Phase 2
+                sector: best.symbol.as_ref().and_then(|s| symbol_sector_ids.get(s).cloned()),
                 metrics: best.metrics.clone(),
                 equity_curve: best.equity_curve.clone(),
                 dates: vec![], // Could extract from backtest result if needed
                 discovered_at: Utc::now(),
                 iteration,
-                session_id: None, // TODO: Pass session_id from YoloState in Phase 1
+                session_id: session_id.clone(),
                 confidence_grade,
                 // Walk-forward fields (per-symbol, not used in primary YOLO flow)
                 walk_forward_grade: None,
@@ -2787,6 +2799,189 @@ fn jitter_multi_strategy_grid(
     }
 }
 
+/// Generate a human-readable summary of what parameters changed between base and jittered grids.
+/// Shows the first enabled strategy's parameters to illustrate the jitter effect.
+fn summarize_jittered_grid(base: &MultiStrategyGrid, jittered: &MultiStrategyGrid) -> String {
+    // Find the first enabled strategy to summarize
+    for (base_strat, jit_strat) in base.strategies.iter().zip(jittered.strategies.iter()) {
+        if !base_strat.enabled {
+            continue;
+        }
+        return summarize_strategy_params(&base_strat.params, &jit_strat.params);
+    }
+    String::new()
+}
+
+/// Summarize the difference between base and jittered strategy parameters.
+fn summarize_strategy_params(base: &StrategyParams, jittered: &StrategyParams) -> String {
+    use StrategyParams::*;
+
+    match (base, jittered) {
+        (
+            FiftyTwoWeekHigh {
+                periods: base_p,
+                entry_pcts: base_e,
+                exit_pcts: base_x,
+            },
+            FiftyTwoWeekHigh {
+                periods: jit_p,
+                entry_pcts: jit_e,
+                exit_pcts: jit_x,
+            },
+        ) => {
+            let p = format_change_usize(base_p.first(), jit_p.first());
+            let e = format_change_pct(base_e.first(), jit_e.first());
+            let x = format_change_pct(base_x.first(), jit_x.first());
+            format!("period:{} entry:{} exit:{}", p, e, x)
+        }
+        (
+            Supertrend {
+                atr_periods: base_a,
+                multipliers: base_m,
+            },
+            Supertrend {
+                atr_periods: jit_a,
+                multipliers: jit_m,
+            },
+        ) => {
+            let a = format_change_usize(base_a.first(), jit_a.first());
+            let m = format_change_f64(base_m.first(), jit_m.first(), 1);
+            format!("atr:{} mult:{}", a, m)
+        }
+        (
+            MACrossover {
+                fast_periods: base_f,
+                slow_periods: base_s,
+                ..
+            },
+            MACrossover {
+                fast_periods: jit_f,
+                slow_periods: jit_s,
+                ..
+            },
+        ) => {
+            let f = format_change_usize(base_f.first(), jit_f.first());
+            let s = format_change_usize(base_s.first(), jit_s.first());
+            format!("fast:{} slow:{}", f, s)
+        }
+        (
+            Donchian {
+                entry_lookbacks: base_e,
+                exit_lookbacks: base_x,
+            },
+            Donchian {
+                entry_lookbacks: jit_e,
+                exit_lookbacks: jit_x,
+            },
+        ) => {
+            let e = format_change_usize(base_e.first(), jit_e.first());
+            let x = format_change_usize(base_x.first(), jit_x.first());
+            format!("entry:{} exit:{}", e, x)
+        }
+        (Tsmom { lookbacks: base_l }, Tsmom { lookbacks: jit_l }) => {
+            let l = format_change_usize(base_l.first(), jit_l.first());
+            format!("lookback:{}", l)
+        }
+        (
+            ParabolicSar {
+                af_starts: base_s,
+                af_steps: base_st,
+                af_maxs: base_m,
+            },
+            ParabolicSar {
+                af_starts: jit_s,
+                af_steps: jit_st,
+                af_maxs: jit_m,
+            },
+        ) => {
+            let s = format_change_f64(base_s.first(), jit_s.first(), 3);
+            let st = format_change_f64(base_st.first(), jit_st.first(), 3);
+            let m = format_change_f64(base_m.first(), jit_m.first(), 2);
+            format!("start:{} step:{} max:{}", s, st, m)
+        }
+        (
+            LarryWilliams {
+                range_multipliers: base_r,
+                atr_stop_mults: base_a,
+            },
+            LarryWilliams {
+                range_multipliers: jit_r,
+                atr_stop_mults: jit_a,
+            },
+        ) => {
+            let r = format_change_f64(base_r.first(), jit_r.first(), 2);
+            let a = format_change_f64(base_a.first(), jit_a.first(), 2);
+            format!("range:{} atr:{}", r, a)
+        }
+        (
+            STARC {
+                sma_periods: base_s,
+                atr_periods: base_a,
+                multipliers: base_m,
+            },
+            STARC {
+                sma_periods: jit_s,
+                atr_periods: jit_a,
+                multipliers: jit_m,
+            },
+        ) => {
+            let s = format_change_usize(base_s.first(), jit_s.first());
+            let a = format_change_usize(base_a.first(), jit_a.first());
+            let m = format_change_f64(base_m.first(), jit_m.first(), 1);
+            format!("sma:{} atr:{} mult:{}", s, a, m)
+        }
+        (Aroon { periods: base_p }, Aroon { periods: jit_p }) => {
+            let p = format_change_usize(base_p.first(), jit_p.first());
+            format!("period:{}", p)
+        }
+        _ => String::from("(params)"),
+    }
+}
+
+fn format_change_usize(base: Option<&usize>, jit: Option<&usize>) -> String {
+    match (base, jit) {
+        (Some(b), Some(j)) => {
+            if b == j {
+                format!("{}", j)
+            } else {
+                format!("{}→{}", b, j)
+            }
+        }
+        (None, Some(j)) => format!("{}", j),
+        _ => String::from("?"),
+    }
+}
+
+fn format_change_f64(base: Option<&f64>, jit: Option<&f64>, decimals: usize) -> String {
+    match (base, jit) {
+        (Some(b), Some(j)) => {
+            if (b - j).abs() < 0.0001 {
+                format!("{:.prec$}", j, prec = decimals)
+            } else {
+                format!("{:.prec$}→{:.prec$}", b, j, prec = decimals)
+            }
+        }
+        (None, Some(j)) => format!("{:.prec$}", j, prec = decimals),
+        _ => String::from("?"),
+    }
+}
+
+fn format_change_pct(base: Option<&f64>, jit: Option<&f64>) -> String {
+    match (base, jit) {
+        (Some(b), Some(j)) => {
+            let b_pct = (b * 100.0).round() as i32;
+            let j_pct = (j * 100.0).round() as i32;
+            if b_pct == j_pct {
+                format!("{}%", j_pct)
+            } else {
+                format!("{}%→{}%", b_pct, j_pct)
+            }
+        }
+        (None, Some(j)) => format!("{:.0}%", j * 100.0),
+        _ => String::from("?"),
+    }
+}
+
 /// Jitter the parameters of a single strategy.
 fn jitter_strategy_params(params: &StrategyParams, pct: f64, rng: &mut impl Rng) -> StrategyParams {
     match params {
@@ -2836,7 +3031,8 @@ fn jitter_strategy_params(params: &StrategyParams, pct: f64, rng: &mut impl Rng)
         } => StrategyParams::BollingerSqueeze {
             periods: jitter_usize_vec(periods, pct, 1, 5, 100, rng),
             std_mults: jitter_f64_vec(std_mults, pct, 0.1, 1.0, 4.0, rng),
-            squeeze_thresholds: jitter_f64_vec(squeeze_thresholds, pct, 0.01, 0.01, 0.5, rng),
+            // Use bounded jitter since typical values (0.02-0.05) are near the min (0.01)
+            squeeze_thresholds: jitter_f64_bounded(squeeze_thresholds, pct, 0.01, 0.01, 0.5, rng),
         },
 
         StrategyParams::Keltner {
@@ -2873,8 +3069,10 @@ fn jitter_strategy_params(params: &StrategyParams, pct: f64, rng: &mut impl Rng)
             exit_pcts,
         } => StrategyParams::FiftyTwoWeekHigh {
             periods: jitter_usize_vec(periods, pct, 5, 50, 500, rng),
-            entry_pcts: jitter_f64_vec(entry_pcts, pct, 0.01, 0.80, 1.0, rng),
-            exit_pcts: jitter_f64_vec(exit_pcts, pct, 0.01, 0.50, 0.95, rng),
+            // Widened bounds: entry can go from 70% to 100% (was 80-100%)
+            entry_pcts: jitter_f64_bounded(entry_pcts, pct, 0.01, 0.70, 1.0, rng),
+            // Widened bounds: exit can go from 40% to 95% (was 50-95%)
+            exit_pcts: jitter_f64_bounded(exit_pcts, pct, 0.01, 0.40, 0.95, rng),
         },
 
         StrategyParams::DarvasBox {
@@ -2900,9 +3098,10 @@ fn jitter_strategy_params(params: &StrategyParams, pct: f64, rng: &mut impl Rng)
             af_steps,
             af_maxs,
         } => StrategyParams::ParabolicSar {
-            af_starts: jitter_f64_vec(af_starts, pct, 0.005, 0.01, 0.1, rng),
-            af_steps: jitter_f64_vec(af_steps, pct, 0.005, 0.01, 0.1, rng),
-            af_maxs: jitter_f64_vec(af_maxs, pct, 0.01, 0.1, 0.5, rng),
+            // Use bounded jitter since typical values (0.02) are near the min (0.01)
+            af_starts: jitter_f64_bounded(af_starts, pct, 0.005, 0.01, 0.1, rng),
+            af_steps: jitter_f64_bounded(af_steps, pct, 0.005, 0.01, 0.1, rng),
+            af_maxs: jitter_f64_bounded(af_maxs, pct, 0.01, 0.1, 0.5, rng),
         },
 
         StrategyParams::OpeningRangeBreakout {
@@ -2985,6 +3184,57 @@ fn jitter_f64_vec(
 fn jitter_f64(value: f64, pct: f64, step: f64, min: f64, max: f64, rng: &mut impl Rng) -> f64 {
     let delta = rng.gen_range(-pct..=pct);
     let candidate = value * (1.0 + delta);
+    let candidate = (candidate / step).round() * step;
+    candidate.clamp(min, max)
+}
+
+/// Jitter a vector of f64 values with improved bounds handling.
+/// When a value is near a bound, uses absolute jitter to ensure meaningful variation.
+fn jitter_f64_bounded(
+    values: &[f64],
+    pct: f64,
+    step: f64,
+    min: f64,
+    max: f64,
+    rng: &mut impl Rng,
+) -> Vec<f64> {
+    values
+        .iter()
+        .map(|&v| jitter_f64_edge_aware(v, pct, step, min, max, rng))
+        .collect()
+}
+
+/// Jitter a single f64 value with edge-case awareness.
+/// When the value is within 15% of the bound range from min or max,
+/// use absolute jitter across the allowed range instead of relative jitter.
+fn jitter_f64_edge_aware(
+    value: f64,
+    pct: f64,
+    step: f64,
+    min: f64,
+    max: f64,
+    rng: &mut impl Rng,
+) -> f64 {
+    let range = max - min;
+    let threshold = range * 0.15; // 15% of range = edge zone
+
+    // Check if value is near a bound
+    let near_min = value - min < threshold;
+    let near_max = max - value < threshold;
+
+    let candidate = if near_min || near_max {
+        // Use absolute jitter across the full range when near bounds
+        // This ensures values at the floor can go down AND up meaningfully
+        let jitter_range = range * pct;
+        let new_val = value + rng.gen_range(-jitter_range..=jitter_range);
+        new_val
+    } else {
+        // Standard relative jitter for values in the middle
+        let delta = rng.gen_range(-pct..=pct);
+        value * (1.0 + delta)
+    };
+
+    // Apply step rounding and clamping
     let candidate = (candidate / step).round() * step;
     candidate.clamp(min, max)
 }

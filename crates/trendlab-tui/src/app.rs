@@ -556,6 +556,20 @@ pub enum OperationState {
     },
 }
 
+/// Type of status message for appropriate color styling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MessageType {
+    /// Informational message (cyan/default)
+    #[default]
+    Info,
+    /// Success message (green)
+    Success,
+    /// Warning message (yellow)
+    Warning,
+    /// Error message (red)
+    Error,
+}
+
 /// Search suggestion from Yahoo.
 #[derive(Debug, Clone)]
 pub struct SearchSuggestion {
@@ -1883,6 +1897,7 @@ pub struct App {
     pub chart: ChartState,
     pub help: HelpState,
     pub status_message: String,
+    pub status_message_type: MessageType,
     pub operation: OperationState,
     pub startup: StartupState,
     pub auto: AutoRunState,
@@ -1895,6 +1910,32 @@ pub struct App {
 }
 
 impl App {
+    /// Set a status message with the given type.
+    pub fn set_status(&mut self, message: impl Into<String>, msg_type: MessageType) {
+        self.status_message = message.into();
+        self.status_message_type = msg_type;
+    }
+
+    /// Set an info status message (cyan).
+    pub fn set_status_info(&mut self, message: impl Into<String>) {
+        self.set_status(message, MessageType::Info);
+    }
+
+    /// Set a success status message (green).
+    pub fn set_status_success(&mut self, message: impl Into<String>) {
+        self.set_status(message, MessageType::Success);
+    }
+
+    /// Set a warning status message (yellow).
+    pub fn set_status_warning(&mut self, message: impl Into<String>) {
+        self.set_status(message, MessageType::Warning);
+    }
+
+    /// Set an error status message (red).
+    pub fn set_status_error(&mut self, message: impl Into<String>) {
+        self.set_status(message, MessageType::Error);
+    }
+
     pub fn new() -> Self {
         // Scan for existing symbols on startup
         let symbols = scan_parquet_directory();
@@ -2178,6 +2219,7 @@ impl App {
             help: HelpState::default(),
             status_message: "Welcome to TrendLab TUI. Press Tab to switch panels, ? for help."
                 .to_string(),
+            status_message_type: MessageType::Info,
             operation: OperationState::Idle,
             startup: StartupState::default(),
             auto: AutoRunState::default(),
@@ -3777,6 +3819,7 @@ impl App {
             randomization_pct: self.yolo.randomization_pct,
             existing_per_symbol_leaderboard,
             existing_cross_symbol_leaderboard,
+            session_id: Some(self.yolo.session_id.clone()),
         };
 
         if channels.command_tx.send(cmd).is_ok() {

@@ -10,7 +10,8 @@ use trendlab_core::{
 };
 use trendlab_launcher::ipc::JobType;
 
-use crate::error::GuiError;
+use crate::commands::results::{ResultMetrics, ResultRow};
+use crate::error::{GuiError, RwLockExt};
 use crate::events::EventEnvelope;
 use crate::jobs::JobStatus;
 use crate::state::AppState;
@@ -204,7 +205,7 @@ pub struct SweepCompletePayload {
 pub fn get_selection_summary(state: State<'_, AppState>) -> SelectionSummary {
     let symbols = state.get_selected_tickers();
     let strategies = state.get_selected_strategies();
-    let sweep_state = state.sweep.read().unwrap();
+    let sweep_state = state.sweep.read_or_recover();
 
     let symbol_count = symbols.len();
     let strategy_count = strategies.len();
@@ -213,7 +214,7 @@ pub fn get_selection_summary(state: State<'_, AppState>) -> SelectionSummary {
     let base_configs = symbol_count * strategy_count * sweep_state.depth.config_multiplier();
 
     // Check if selected symbols have cached data
-    let cached = state.cached_symbols.read().unwrap();
+    let cached = state.cached_symbols.read_or_recover();
     let has_cached_data = symbols.iter().all(|s| cached.contains(s));
 
     SelectionSummary {
@@ -264,49 +265,49 @@ pub fn get_depth_options(state: State<'_, AppState>) -> Vec<DepthOption> {
 /// Get current sweep depth
 #[tauri::command]
 pub fn get_sweep_depth(state: State<'_, AppState>) -> SweepDepth {
-    let sweep_state = state.sweep.read().unwrap();
+    let sweep_state = state.sweep.read_or_recover();
     sweep_state.depth
 }
 
 /// Set sweep depth
 #[tauri::command]
 pub fn set_sweep_depth(state: State<'_, AppState>, depth: SweepDepth) {
-    let mut sweep_state = state.sweep.write().unwrap();
+    let mut sweep_state = state.sweep.write_or_recover();
     sweep_state.depth = depth;
 }
 
 /// Get cost model
 #[tauri::command]
 pub fn get_cost_model(state: State<'_, AppState>) -> CostModel {
-    let sweep_state = state.sweep.read().unwrap();
+    let sweep_state = state.sweep.read_or_recover();
     sweep_state.cost_model.clone()
 }
 
 /// Set cost model
 #[tauri::command]
 pub fn set_cost_model(state: State<'_, AppState>, cost_model: CostModel) {
-    let mut sweep_state = state.sweep.write().unwrap();
+    let mut sweep_state = state.sweep.write_or_recover();
     sweep_state.cost_model = cost_model;
 }
 
 /// Get date range
 #[tauri::command]
 pub fn get_date_range(state: State<'_, AppState>) -> DateRange {
-    let sweep_state = state.sweep.read().unwrap();
+    let sweep_state = state.sweep.read_or_recover();
     sweep_state.date_range.clone()
 }
 
 /// Set date range
 #[tauri::command]
 pub fn set_date_range(state: State<'_, AppState>, date_range: DateRange) {
-    let mut sweep_state = state.sweep.write().unwrap();
+    let mut sweep_state = state.sweep.write_or_recover();
     sweep_state.date_range = date_range;
 }
 
 /// Get sweep state (is running, job id)
 #[tauri::command]
 pub fn get_sweep_state(state: State<'_, AppState>) -> SweepState {
-    let sweep_state = state.sweep.read().unwrap();
+    let sweep_state = state.sweep.read_or_recover();
     sweep_state.clone()
 }
 
@@ -318,7 +319,7 @@ pub async fn start_sweep(
 ) -> Result<StartSweepResponse, GuiError> {
     // Check if already running
     {
-        let sweep_state = state.sweep.read().unwrap();
+        let sweep_state = state.sweep.read_or_recover();
         if sweep_state.is_running {
             return Err(GuiError::InvalidState(
                 "A sweep is already running".to_string(),
@@ -345,7 +346,7 @@ pub async fn start_sweep(
 
     // Get sweep config
     let (depth, _cost_model, _date_range) = {
-        let sweep_state = state.sweep.read().unwrap();
+        let sweep_state = state.sweep.read_or_recover();
         (
             sweep_state.depth,
             sweep_state.cost_model.clone(),
@@ -364,7 +365,7 @@ pub async fn start_sweep(
 
     // Mark sweep as running
     {
-        let mut sweep_state = state.sweep.write().unwrap();
+        let mut sweep_state = state.sweep.write_or_recover();
         sweep_state.is_running = true;
         sweep_state.current_job_id = Some(job_id.clone());
     }
@@ -407,7 +408,7 @@ pub async fn start_sweep(
 
     // Clone cost model for the task
     let cost_model_clone = {
-        let sweep_state = state.sweep.read().unwrap();
+        let sweep_state = state.sweep.read_or_recover();
         sweep_state.cost_model.clone()
     };
     let core_depth = depth.as_core();
@@ -419,6 +420,7 @@ pub async fn start_sweep(
         let mut completed = 0usize;
         let mut failed = 0usize;
         let mut actual_total = 0usize;
+        let mut all_results: Vec<ResultRow> = Vec::new();
 
         // Configure Polars backtest
         let polars_config = PolarsBacktestConfig::new(100_000.0, 100.0).with_cost_model(
@@ -547,6 +549,35 @@ pub async fn start_sweep(
                             strategy,
                             result.config_results.len()
                         );
+
+                        // Convert SweepConfigResult to ResultRow and collect
+                        for config_result in &result.config_results {
+                            let row = ResultRow {
+                                id: format!("{}-{}-{}", symbol, strategy, config_result.config_id.id()),
+                                symbol: symbol.clone(),
+                                strategy: strategy.clone(),
+                                config_id: config_result.config_id.id(),
+                                metrics: ResultMetrics {
+                                    total_return: config_result.metrics.total_return,
+                                    cagr: config_result.metrics.cagr,
+                                    sharpe: config_result.metrics.sharpe,
+                                    sortino: config_result.metrics.sortino,
+                                    max_drawdown: config_result.metrics.max_drawdown,
+                                    calmar: config_result.metrics.calmar,
+                                    win_rate: config_result.metrics.win_rate,
+                                    profit_factor: config_result.metrics.profit_factor,
+                                    num_trades: config_result.metrics.num_trades,
+                                    turnover: config_result.metrics.turnover,
+                                },
+                                equity_curve: config_result
+                                    .backtest_result
+                                    .equity
+                                    .iter()
+                                    .map(|e| e.equity)
+                                    .collect(),
+                            };
+                            all_results.push(row);
+                        }
                     }
                     Ok(Err(e)) => {
                         tracing::warn!("Sweep failed for {} × {}: {}", symbol, strategy, e);
@@ -560,9 +591,15 @@ pub async fn start_sweep(
             }
         }
 
+        // Store all results in state for the Results panel to access
+        if !all_results.is_empty() {
+            state_handle.set_results(job_id_clone.clone(), all_results);
+            tracing::info!("Stored {} sweep results for job {}", completed, job_id_clone);
+        }
+
         // Mark complete
         {
-            let mut sweep_state = state_handle.sweep.write().unwrap();
+            let mut sweep_state = state_handle.sweep.write_or_recover();
             sweep_state.is_running = false;
             sweep_state.current_job_id = None;
         }
@@ -608,7 +645,7 @@ pub async fn start_sweep(
 #[tauri::command]
 pub fn cancel_sweep(state: State<'_, AppState>) -> Result<(), GuiError> {
     let job_id = {
-        let sweep_state = state.sweep.read().unwrap();
+        let sweep_state = state.sweep.read_or_recover();
         sweep_state.current_job_id.clone()
     };
 

@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, Panel, YoloConfigField};
+use crate::app::{App, MessageType, Panel, YoloConfigField};
 use crate::panels;
 
 /// Tokyo Night color palette
@@ -152,9 +152,15 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         }
     };
 
+    let status_color = match app.status_message_type {
+        MessageType::Info => colors::CYAN,
+        MessageType::Success => colors::GREEN,
+        MessageType::Warning => colors::YELLOW,
+        MessageType::Error => colors::RED,
+    };
     let mut spans = vec![Span::styled(
         &app.status_message,
-        Style::default().fg(colors::GREEN),
+        Style::default().fg(status_color),
     )];
     if app.random_defaults.enabled {
         spans.push(Span::styled(

@@ -743,9 +743,22 @@ fn draw_leaderboard_table(
 
             // Row 5: Sector breakdown (if available)
             if !entry.per_symbol_sectors.is_empty() {
-                let sector_stats =
+                let (best_sectors, worst_sectors) =
                     compute_sector_stats(&entry.per_symbol_metrics, &entry.per_symbol_sectors);
-                let sector_line = format!("\u{2514}\u{2500} Sectors: {}", sector_stats);
+                // Show top 3 best sectors in inline view
+                let best_str = best_sectors
+                    .iter()
+                    .take(3)
+                    .map(|(s, r)| format!("{}({:.0}%)", s, r))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let worst_str = worst_sectors
+                    .iter()
+                    .take(3)
+                    .map(|(s, r)| format!("{}({:.0}%)", s, r))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let sector_line = format!("\u{2514}\u{2500} Sectors Best: {} | Worst: {}", best_str, worst_str);
                 rows.push(detail_row(sector_line, detail_style));
             } else {
                 // Closing line without sectors
@@ -890,12 +903,29 @@ fn draw_leaderboard_details(f: &mut Frame, app: &App, area: Rect, is_active: boo
 
             // Sector breakdown (if present)
             if !entry.per_symbol_sectors.is_empty() {
-                let sector_stats =
+                let (best_sectors, worst_sectors) =
                     compute_sector_stats(&entry.per_symbol_metrics, &entry.per_symbol_sectors);
+
+                // Best sectors line
+                let best_str = best_sectors
+                    .iter()
+                    .map(|(s, r)| format!("{}({:.0}%)", s, r))
+                    .collect::<Vec<_>>()
+                    .join("  ");
                 out.push(Line::from(vec![
-                    Span::styled("Sectors:", Style::default().fg(colors::FG_DARK)),
-                    Span::styled(" ", Style::default()),
-                    Span::styled(sector_stats, Style::default().fg(colors::FG)),
+                    Span::styled("Best:   ", Style::default().fg(colors::FG_DARK)),
+                    Span::styled(best_str, Style::default().fg(colors::GREEN)),
+                ]));
+
+                // Worst sectors line
+                let worst_str = worst_sectors
+                    .iter()
+                    .map(|(s, r)| format!("{}({:.0}%)", s, r))
+                    .collect::<Vec<_>>()
+                    .join("  ");
+                out.push(Line::from(vec![
+                    Span::styled("Worst:  ", Style::default().fg(colors::FG_DARK)),
+                    Span::styled(worst_str, Style::default().fg(colors::RED)),
                 ]));
             } else {
                 out.push(Line::from(vec![
@@ -934,10 +964,11 @@ fn draw_leaderboard_details(f: &mut Frame, app: &App, area: Rect, is_active: boo
 }
 
 /// Compute sector hit rate statistics from per-symbol metrics.
+/// Returns (best_sectors, worst_sectors) as vectors of (sector_name, hit_rate_pct).
 fn compute_sector_stats(
     per_symbol_metrics: &std::collections::HashMap<String, trendlab_core::Metrics>,
     per_symbol_sectors: &std::collections::HashMap<String, String>,
-) -> String {
+) -> (Vec<(String, f64)>, Vec<(String, f64)>) {
     use std::collections::HashMap;
 
     // Group symbols by sector and compute hit rate per sector
@@ -953,23 +984,34 @@ fn compute_sector_stats(
         }
     }
 
-    // Sort sectors by hit rate descending
+    // Sort sectors by hit rate descending, with secondary sort by name for determinism
     let mut sector_list: Vec<_> = sector_stats
         .iter()
         .map(|(sector, (profitable, total))| {
             let hit_rate = *profitable as f64 / *total as f64 * 100.0;
-            (*sector, hit_rate)
+            (sector.to_string(), hit_rate)
         })
         .collect();
-    sector_list.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    // Primary: hit rate descending, Secondary: sector name ascending (for stable ordering)
+    sector_list.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
 
-    // Format top 4 sectors
-    sector_list
-        .iter()
-        .take(4)
-        .map(|(sector, rate)| format!("{} {:.0}%", sector, rate))
-        .collect::<Vec<_>>()
-        .join("  ")
+    // Best sectors: top 5 by hit rate
+    let best: Vec<(String, f64)> = sector_list.iter().take(5).cloned().collect();
+
+    // Worst sectors: bottom 5 by hit rate (reverse order, sorted ascending)
+    let mut worst: Vec<(String, f64)> = sector_list.iter().rev().take(5).cloned().collect();
+    // Sort worst by hit rate ascending for display
+    worst.sort_by(|a, b| {
+        a.1.partial_cmp(&b.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
+
+    (best, worst)
 }
 
 /// Draw empty leaderboard state

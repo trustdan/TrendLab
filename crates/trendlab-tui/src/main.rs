@@ -31,33 +31,12 @@ use app::{App, Panel};
 use worker::{spawn_worker, WorkerChannels, WorkerCommand, WorkerUpdate};
 
 fn main() -> Result<()> {
-    // Debug: Show what environment variables we're reading
-    eprintln!(
-        "[trendlab-tui] TRENDLAB_LOG_ENABLED={:?}",
-        std::env::var("TRENDLAB_LOG_ENABLED").ok()
-    );
-    eprintln!(
-        "[trendlab-tui] TRENDLAB_LOG_FILTER={:?}",
-        std::env::var("TRENDLAB_LOG_FILTER").ok()
-    );
-
     // Initialize logging from environment (set by launcher)
     // TUI logs to file only to avoid interfering with the terminal UI
     let log_config = LogConfig::from_env();
-    eprintln!(
-        "[trendlab-tui] LogConfig: enabled={}, filter={}, log_dir={}",
-        log_config.enabled,
-        log_config.filter,
-        log_config.log_dir.display()
-    );
 
     let _log_guard = if log_config.enabled {
-        eprintln!("[trendlab-tui] Initializing TUI logging...");
         let guard = trendlab_logging::init_tui_logging(&log_config);
-        eprintln!(
-            "[trendlab-tui] Logging initialized, guard={:?}",
-            guard.is_some()
-        );
         tracing::info!(
             filter = %log_config.filter,
             log_dir = %log_config.log_dir.display(),
@@ -65,7 +44,6 @@ fn main() -> Result<()> {
         );
         guard
     } else {
-        eprintln!("[trendlab-tui] Logging disabled");
         None
     };
 
@@ -847,7 +825,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
         WorkerUpdate::SearchError { query, error } => {
             if app.data.search_input == query {
                 app.data.search_loading = false;
-                app.status_message = format!("Search error: {}", error);
+                app.set_status_error(format!("Search error: {}", error));
             }
         }
 
@@ -888,11 +866,11 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
         }
 
         WorkerUpdate::FetchError { symbol, error } => {
-            app.status_message = format!("Error fetching {}: {}", symbol, error);
+            app.set_status_error(format!("Error fetching {}: {}", symbol, error));
         }
 
         WorkerUpdate::FetchAllComplete { symbols_fetched } => {
-            app.status_message = format!("Fetch complete: {} symbols", symbols_fetched);
+            app.set_status_success(format!("Fetch complete: {} symbols", symbols_fetched));
             app.operation = app::OperationState::Idle;
 
             // Full-auto: if we were fetching missing symbols, start the appropriate sweep.
@@ -929,7 +907,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
 
         WorkerUpdate::CacheLoadError { symbol, error } => {
             // For full-auto we treat missing cache as expected; we will fetch later.
-            app.status_message = format!("Cache miss {}: {}", symbol, error);
+            app.set_status_warning(format!("Cache miss {}: {}", symbol, error));
             if app.auto.enabled && app.auto.stage == app::AutoStage::LoadingCache {
                 app.auto.pending_missing.push(symbol);
             }
@@ -939,10 +917,10 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             symbols_loaded,
             symbols_missing,
         } => {
-            app.status_message = format!(
+            app.set_status_success(format!(
                 "Cache load complete: {} loaded, {} missing",
                 symbols_loaded, symbols_missing
-            );
+            ));
 
             if app.auto.enabled && app.auto.stage == app::AutoStage::LoadingCache {
                 // Fetch missing tickers (if any), then start the appropriate sweep.
@@ -1003,7 +981,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
 
         WorkerUpdate::SweepComplete { result } => {
             let count = result.config_results.len();
-            app.status_message = format!("Sweep complete: {} configs", count);
+            app.set_status_success(format!("Sweep complete: {} configs", count));
             app.sweep.is_running = false;
             app.sweep.progress = 1.0;
             app.operation = app::OperationState::Idle;
@@ -1014,7 +992,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
         }
 
         WorkerUpdate::SweepCancelled { completed } => {
-            app.status_message = format!("Sweep cancelled after {} configs", completed);
+            app.set_status_warning(format!("Sweep cancelled after {} configs", completed));
             app.sweep.is_running = false;
             app.operation = app::OperationState::Idle;
         }
@@ -1343,15 +1321,22 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             phase,
             completed_configs,
             total_configs,
+            jitter_summary,
         } => {
             let pct = if total_configs > 0 {
                 (completed_configs as f64 / total_configs as f64 * 100.0) as usize
             } else {
                 0
             };
+            // Include jitter summary if not empty to show what's being tested
+            let summary_part = if jitter_summary.is_empty() {
+                String::new()
+            } else {
+                format!(" | {}", jitter_summary)
+            };
             app.status_message = format!(
-                "YOLO iter {} [{}]: {}% ({}/{}) | ESC to stop",
-                iteration, phase, pct, completed_configs, total_configs
+                "YOLO iter {} [{}]: {}% ({}/{}){}  ESC to stop",
+                iteration, phase, pct, completed_configs, total_configs, summary_part
             );
         }
 

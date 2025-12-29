@@ -106,9 +106,16 @@ pub fn compute_metrics(result: &BacktestResult, initial_cash: f64) -> Metrics {
     };
 
     // Daily returns for Sharpe calculation
+    // Guard against division by zero if equity ever hits zero
     let daily_returns: Vec<f64> = equity_curve
         .windows(2)
-        .map(|w| (w[1] - w[0]) / w[0])
+        .map(|w| {
+            if w[0].abs() > 1e-10 {
+                (w[1] - w[0]) / w[0]
+            } else {
+                0.0
+            }
+        })
         .collect();
 
     let sharpe = calculate_sharpe(&daily_returns);
@@ -247,7 +254,12 @@ pub fn calculate_max_drawdown(equity_curve: &[f64]) -> f64 {
         if equity > peak {
             peak = equity;
         }
-        let dd = (peak - equity) / peak;
+        // Guard against division by zero if peak is somehow zero
+        let dd = if peak.abs() > 1e-10 {
+            (peak - equity) / peak
+        } else {
+            0.0
+        };
         if dd > max_dd {
             max_dd = dd;
         }
