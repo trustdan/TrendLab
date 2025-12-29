@@ -1279,6 +1279,524 @@ impl StrategyConfigId {
             } => ConfigId::new(*tenkan_period, *kijun_period),
         }
     }
+
+    /// Generate Pine Script v6 for this strategy configuration.
+    ///
+    /// Returns a complete, ready-to-use TradingView Pine Script.
+    pub fn to_pine_script(&self, avg_sharpe: Option<f64>, hit_rate: Option<f64>, symbol_count: Option<usize>) -> String {
+        let strategy_name = self.strategy_type().name();
+        let config_display = self.display();
+
+        // Performance comment
+        let perf_comment = match (avg_sharpe, hit_rate, symbol_count) {
+            (Some(sharpe), Some(hit), Some(count)) => {
+                format!("// PERFORMANCE: Avg Sharpe {:.3}, Hit Rate {:.1}%, {} symbols\n", sharpe, hit * 100.0, count)
+            }
+            _ => String::new(),
+        };
+
+        match self {
+            Self::Supertrend { atr_period, multiplier } => {
+                format!(r#"//@version=6
+strategy("{0} ({1})", overlay=true, margin_long=100, margin_short=100,
+         default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+         commission_type=strategy.commission.percent, commission_value=0.1,
+         slippage=1)
+
+// ============================================================================
+// STRATEGY: Supertrend
+// CONFIG: atr_period={2}, multiplier={3:.1}
+// SOURCE: TrendLab YOLO sweep session
+{4}// ============================================================================
+
+// === INPUTS ===
+int atrPeriodInput = input.int({2}, "ATR Period", minval=1, tooltip="ATR lookback period")
+float multiplierInput = input.float({3:.1}, "Multiplier", minval=0.1, step=0.1, tooltip="ATR multiplier for bands")
+
+// === INDICATORS ===
+[supertrendLine, supertrendDir] = ta.supertrend(multiplierInput, atrPeriodInput)
+
+// === SIGNALS ===
+// Supertrend direction: -1 = bullish (price above), 1 = bearish (price below)
+bool entryCondition = supertrendDir == -1 and supertrendDir[1] == 1  // Flip to bullish
+bool exitCondition = supertrendDir == 1 and supertrendDir[1] == -1   // Flip to bearish
+
+// === STRATEGY EXECUTION ===
+// Enter on bullish flip, exit on bearish flip
+if supertrendDir == -1 and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+
+if supertrendDir == 1 and strategy.position_size > 0
+    strategy.close("Long")
+
+// === PLOTTING ===
+plot(supertrendLine, "Supertrend", color=supertrendDir == -1 ? color.green : color.red, linewidth=2)
+
+// Background color when in position
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
+
+// Entry/Exit markers
+plotshape(supertrendDir == -1 and supertrendDir[1] == 1, "Entry", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(supertrendDir == 1 and supertrendDir[1] == -1, "Exit", shape.triangledown, location.abovebar, color.red, size=size.small)
+"#, strategy_name, config_display, atr_period, multiplier, perf_comment)
+            }
+
+            Self::FiftyTwoWeekHigh { period, entry_pct, exit_pct } => {
+                let entry_pct_display = entry_pct * 100.0;
+                let exit_pct_display = exit_pct * 100.0;
+                format!(r#"//@version=6
+strategy("{0} ({1})", overlay=true, margin_long=100, margin_short=100,
+         default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+         commission_type=strategy.commission.percent, commission_value=0.1,
+         slippage=1)
+
+// ============================================================================
+// STRATEGY: 52-Week High Breakout
+// CONFIG: period={2}, entry_pct={3:.0}%, exit_pct={4:.0}%
+// SOURCE: TrendLab YOLO sweep session
+{5}// ============================================================================
+
+// === INPUTS ===
+int periodInput = input.int({2}, "Period (lookback days)", minval=1, tooltip="Lookback period for computing rolling high")
+float entryPctInput = input.float({6:.2}, "Entry % of high", minval=0.01, maxval=1.0, step=0.01, tooltip="Enter when close >= this % of period high")
+float exitPctInput = input.float({7:.2}, "Exit % of high", minval=0.01, maxval=1.0, step=0.01, tooltip="Exit when close < this % of period high")
+
+// === INDICATORS ===
+float periodHigh = ta.highest(high, periodInput)
+float entryThreshold = periodHigh * entryPctInput
+float exitThreshold = periodHigh * exitPctInput
+
+// === SIGNALS ===
+bool entryCondition = close >= entryThreshold
+bool exitCondition = close < exitThreshold
+
+// === STRATEGY EXECUTION ===
+// Long-only: enter when price is strong (near highs), exit when weakness shows
+if entryCondition and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+
+if exitCondition and strategy.position_size > 0
+    strategy.close("Long")
+
+// === PLOTTING ===
+plot(periodHigh, "Period High", color=color.blue, linewidth=1)
+plot(entryThreshold, "Entry Threshold ({3:.0}%)", color=color.green, linewidth=1, style=plot.style_stepline)
+plot(exitThreshold, "Exit Threshold ({4:.0}%)", color=color.red, linewidth=1, style=plot.style_stepline)
+
+// Background color when in position
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
+
+// Entry/Exit markers
+plotshape(entryCondition and strategy.position_size[1] == 0, "Entry", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(exitCondition and strategy.position_size[1] > 0, "Exit", shape.triangledown, location.abovebar, color.red, size=size.small)
+"#, strategy_name, config_display, period, entry_pct_display, exit_pct_display, perf_comment, entry_pct, exit_pct)
+            }
+
+            Self::ParabolicSar { af_start, af_step, af_max } => {
+                format!(r#"//@version=6
+strategy("{0} ({1})", overlay=true, margin_long=100, margin_short=100,
+         default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+         commission_type=strategy.commission.percent, commission_value=0.1,
+         slippage=1)
+
+// ============================================================================
+// STRATEGY: Parabolic SAR
+// CONFIG: af_start={2:.2}, af_step={3:.2}, af_max={4:.2}
+// SOURCE: TrendLab YOLO sweep session
+{5}// ============================================================================
+
+// === INPUTS ===
+float afStartInput = input.float({2:.2}, "AF Start", minval=0.01, step=0.01, tooltip="Initial acceleration factor")
+float afStepInput = input.float({3:.2}, "AF Step", minval=0.01, step=0.01, tooltip="AF increment")
+float afMaxInput = input.float({4:.2}, "AF Max", minval=0.1, step=0.01, tooltip="Maximum acceleration factor")
+
+// === INDICATORS ===
+float sarValue = ta.sar(afStartInput, afStepInput, afMaxInput)
+
+// === SIGNALS ===
+bool isBullish = close > sarValue
+bool entryCondition = isBullish and not isBullish[1]  // SAR flips below price
+bool exitCondition = not isBullish and isBullish[1]    // SAR flips above price
+
+// === STRATEGY EXECUTION ===
+if isBullish and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+
+if not isBullish and strategy.position_size > 0
+    strategy.close("Long")
+
+// === PLOTTING ===
+plot(sarValue, "SAR", style=plot.style_circles, color=isBullish ? color.green : color.red, linewidth=1)
+
+// Background color when in position
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
+
+// Entry/Exit markers
+plotshape(entryCondition, "Entry", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(exitCondition, "Exit", shape.triangledown, location.abovebar, color.red, size=size.small)
+"#, strategy_name, config_display, af_start, af_step, af_max, perf_comment)
+            }
+
+            Self::LarryWilliams { range_multiplier, atr_stop_mult } => {
+                format!(r#"//@version=6
+strategy("{0} ({1})", overlay=true, margin_long=100, margin_short=100,
+         default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+         commission_type=strategy.commission.percent, commission_value=0.1,
+         slippage=1)
+
+// ============================================================================
+// STRATEGY: Larry Williams Volatility Breakout
+// CONFIG: range_multiplier={2:.2}, atr_stop_mult={3:.1}
+// SOURCE: TrendLab YOLO sweep session
+{4}// ============================================================================
+
+// === INPUTS ===
+float rangeMultInput = input.float({2:.2}, "Range Multiplier", minval=0.1, step=0.1, tooltip="Multiplier for previous day range")
+float atrStopMultInput = input.float({3:.1}, "ATR Stop Multiplier", minval=0.5, step=0.1, tooltip="ATR multiplier for stop loss")
+int atrPeriod = input.int(14, "ATR Period", minval=1)
+
+// === INDICATORS ===
+float prevRange = high[1] - low[1]
+float entryLevel = open + prevRange * rangeMultInput
+float atrValue = ta.atr(atrPeriod)
+float stopLevel = close - atrValue * atrStopMultInput
+
+// === SIGNALS ===
+bool entryCondition = high >= entryLevel and close > open
+bool exitCondition = close < stopLevel
+
+// === STRATEGY EXECUTION ===
+if entryCondition and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+
+if exitCondition and strategy.position_size > 0
+    strategy.close("Long")
+
+// === PLOTTING ===
+plot(entryLevel, "Entry Level", color=color.green, linewidth=1, style=plot.style_stepline)
+plot(strategy.position_size > 0 ? stopLevel : na, "Stop Level", color=color.red, linewidth=1, style=plot.style_stepline)
+
+// Background color when in position
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
+
+// Entry/Exit markers
+plotshape(entryCondition and strategy.position_size[1] == 0, "Entry", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(exitCondition and strategy.position_size[1] > 0, "Exit", shape.triangledown, location.abovebar, color.red, size=size.small)
+"#, strategy_name, config_display, range_multiplier, atr_stop_mult, perf_comment)
+            }
+
+            Self::STARC { sma_period, atr_period, multiplier } => {
+                format!(r#"//@version=6
+strategy("{0} ({1})", overlay=true, margin_long=100, margin_short=100,
+         default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+         commission_type=strategy.commission.percent, commission_value=0.1,
+         slippage=1)
+
+// ============================================================================
+// STRATEGY: STARC Bands
+// CONFIG: sma_period={2}, atr_period={3}, multiplier={4:.1}
+// SOURCE: TrendLab YOLO sweep session
+{5}// ============================================================================
+
+// === INPUTS ===
+int smaPeriodInput = input.int({2}, "SMA Period", minval=1, tooltip="Period for center SMA")
+int atrPeriodInput = input.int({3}, "ATR Period", minval=1, tooltip="Period for ATR calculation")
+float multiplierInput = input.float({4:.1}, "Multiplier", minval=0.1, step=0.1, tooltip="ATR multiplier for bands")
+
+// === INDICATORS ===
+float smaValue = ta.sma(close, smaPeriodInput)
+float atrValue = ta.atr(atrPeriodInput)
+float upperBand = smaValue + atrValue * multiplierInput
+float lowerBand = smaValue - atrValue * multiplierInput
+
+// === SIGNALS ===
+bool entryCondition = close > upperBand
+bool exitCondition = close < smaValue
+
+// === STRATEGY EXECUTION ===
+if entryCondition and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+
+if exitCondition and strategy.position_size > 0
+    strategy.close("Long")
+
+// === PLOTTING ===
+plot(smaValue, "SMA", color=color.blue, linewidth=1)
+plot(upperBand, "Upper Band", color=color.green, linewidth=1)
+plot(lowerBand, "Lower Band", color=color.red, linewidth=1)
+
+// Background color when in position
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
+
+// Entry/Exit markers
+plotshape(entryCondition and strategy.position_size[1] == 0, "Entry", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(exitCondition and strategy.position_size[1] > 0, "Exit", shape.triangledown, location.abovebar, color.red, size=size.small)
+"#, strategy_name, config_display, sma_period, atr_period, multiplier, perf_comment)
+            }
+
+            Self::Tsmom { lookback } => {
+                format!(r#"//@version=6
+strategy("{0} ({1})", overlay=false, margin_long=100, margin_short=100,
+         default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+         commission_type=strategy.commission.percent, commission_value=0.1,
+         slippage=1)
+
+// ============================================================================
+// STRATEGY: Time-Series Momentum (TSMOM)
+// CONFIG: lookback={2}
+// SOURCE: TrendLab YOLO sweep session
+{3}// ============================================================================
+
+// === INPUTS ===
+int lookbackInput = input.int({2}, "Lookback Period", minval=1, tooltip="Period for momentum calculation")
+
+// === INDICATORS ===
+float momentum = (close - close[lookbackInput]) / close[lookbackInput] * 100
+
+// === SIGNALS ===
+bool entryCondition = momentum > 0 and momentum[1] <= 0
+bool exitCondition = momentum < 0
+
+// === STRATEGY EXECUTION ===
+if momentum > 0 and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+
+if momentum < 0 and strategy.position_size > 0
+    strategy.close("Long")
+
+// === PLOTTING ===
+plot(momentum, "Momentum %", color=momentum > 0 ? color.green : color.red, linewidth=2)
+hline(0, "Zero Line", color=color.gray)
+
+// Background color when in position
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
+"#, strategy_name, config_display, lookback, perf_comment)
+            }
+
+            Self::MACrossover { fast, slow, ma_type } => {
+                let ma_func = match ma_type {
+                    MAType::SMA => "ta.sma",
+                    MAType::EMA => "ta.ema",
+                };
+                format!(r#"//@version=6
+strategy("{0} ({1})", overlay=true, margin_long=100, margin_short=100,
+         default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+         commission_type=strategy.commission.percent, commission_value=0.1,
+         slippage=1)
+
+// ============================================================================
+// STRATEGY: Moving Average Crossover
+// CONFIG: fast={2}, slow={3}, type={4:?}
+// SOURCE: TrendLab YOLO sweep session
+{5}// ============================================================================
+
+// === INPUTS ===
+int fastPeriodInput = input.int({2}, "Fast Period", minval=1, tooltip="Fast MA period")
+int slowPeriodInput = input.int({3}, "Slow Period", minval=1, tooltip="Slow MA period")
+
+// === INDICATORS ===
+float fastMA = {6}(close, fastPeriodInput)
+float slowMA = {6}(close, slowPeriodInput)
+
+// === SIGNALS ===
+bool goldenCross = ta.crossover(fastMA, slowMA)
+bool deathCross = ta.crossunder(fastMA, slowMA)
+
+// === STRATEGY EXECUTION ===
+if goldenCross and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+
+if deathCross and strategy.position_size > 0
+    strategy.close("Long")
+
+// === PLOTTING ===
+plot(fastMA, "Fast MA", color=color.green, linewidth=1)
+plot(slowMA, "Slow MA", color=color.red, linewidth=2)
+
+// Background color when in position
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
+
+// Entry/Exit markers
+plotshape(goldenCross, "Golden Cross", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(deathCross, "Death Cross", shape.triangledown, location.abovebar, color.red, size=size.small)
+"#, strategy_name, config_display, fast, slow, ma_type, perf_comment, ma_func)
+            }
+
+            Self::Donchian { entry_lookback, exit_lookback } => {
+                format!(r#"//@version=6
+strategy("{0} ({1})", overlay=true, margin_long=100, margin_short=100,
+         default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+         commission_type=strategy.commission.percent, commission_value=0.1,
+         slippage=1)
+
+// ============================================================================
+// STRATEGY: Donchian Channel Breakout
+// CONFIG: entry_lookback={2}, exit_lookback={3}
+// SOURCE: TrendLab YOLO sweep session
+{4}// ============================================================================
+
+// === INPUTS ===
+int entryLookbackInput = input.int({2}, "Entry Lookback", minval=1, tooltip="Lookback for entry channel")
+int exitLookbackInput = input.int({3}, "Exit Lookback", minval=1, tooltip="Lookback for exit channel")
+
+// === INDICATORS ===
+float entryHigh = ta.highest(high, entryLookbackInput)
+float entryLow = ta.lowest(low, entryLookbackInput)
+float exitLow = ta.lowest(low, exitLookbackInput)
+
+// === SIGNALS ===
+bool entryCondition = high >= entryHigh[1]
+bool exitCondition = low <= exitLow[1]
+
+// === STRATEGY EXECUTION ===
+if entryCondition and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+
+if exitCondition and strategy.position_size > 0
+    strategy.close("Long")
+
+// === PLOTTING ===
+plot(entryHigh, "Entry High", color=color.green, linewidth=1)
+plot(entryLow, "Entry Low", color=color.blue, linewidth=1)
+plot(exitLow, "Exit Low", color=color.red, linewidth=1, style=plot.style_stepline)
+
+// Background color when in position
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
+
+// Entry/Exit markers
+plotshape(entryCondition and strategy.position_size[1] == 0, "Entry", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(exitCondition and strategy.position_size[1] > 0, "Exit", shape.triangledown, location.abovebar, color.red, size=size.small)
+"#, strategy_name, config_display, entry_lookback, exit_lookback, perf_comment)
+            }
+
+            Self::Aroon { period } => {
+                format!(r#"//@version=6
+strategy("{0} ({1})", overlay=false, margin_long=100, margin_short=100,
+         default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+         commission_type=strategy.commission.percent, commission_value=0.1,
+         slippage=1)
+
+// ============================================================================
+// STRATEGY: Aroon Indicator
+// CONFIG: period={2}
+// SOURCE: TrendLab YOLO sweep session
+{3}// ============================================================================
+
+// === INPUTS ===
+int periodInput = input.int({2}, "Period", minval=1, tooltip="Aroon lookback period")
+
+// === INDICATORS ===
+float aroonUp = ta.aroon(periodInput, 1)
+float aroonDown = ta.aroon(periodInput, -1)
+
+// === SIGNALS ===
+bool bullishCross = ta.crossover(aroonUp, aroonDown)
+bool bearishCross = ta.crossunder(aroonUp, aroonDown)
+
+// === STRATEGY EXECUTION ===
+if bullishCross and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+
+if bearishCross and strategy.position_size > 0
+    strategy.close("Long")
+
+// === PLOTTING ===
+plot(aroonUp, "Aroon Up", color=color.green, linewidth=1)
+plot(aroonDown, "Aroon Down", color=color.red, linewidth=1)
+hline(50, "Mid Line", color=color.gray)
+
+// Background color when in position
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
+"#, strategy_name, config_display, period, perf_comment)
+            }
+
+            // Turtle systems use fixed parameters
+            Self::TurtleS1 => {
+                format!(r#"//@version=6
+strategy("Turtle System S1 (20/10)", overlay=true, margin_long=100, margin_short=100,
+         default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+         commission_type=strategy.commission.percent, commission_value=0.1,
+         slippage=1)
+
+// ============================================================================
+// STRATEGY: Turtle Trading System S1
+// CONFIG: Fixed 20-day entry, 10-day exit (original Turtle rules)
+// SOURCE: TrendLab YOLO sweep session
+{perf_comment}// ============================================================================
+
+// === INDICATORS ===
+float entryHigh = ta.highest(high, 20)
+float exitLow = ta.lowest(low, 10)
+
+// === SIGNALS ===
+bool entryCondition = high >= entryHigh[1]
+bool exitCondition = low <= exitLow[1]
+
+// === STRATEGY EXECUTION ===
+if entryCondition and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+
+if exitCondition and strategy.position_size > 0
+    strategy.close("Long")
+
+// === PLOTTING ===
+plot(entryHigh, "20-Day High", color=color.green, linewidth=1)
+plot(exitLow, "10-Day Low", color=color.red, linewidth=1)
+
+// Background color when in position
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
+"#, perf_comment=perf_comment)
+            }
+
+            Self::TurtleS2 => {
+                format!(r#"//@version=6
+strategy("Turtle System S2 (55/20)", overlay=true, margin_long=100, margin_short=100,
+         default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+         commission_type=strategy.commission.percent, commission_value=0.1,
+         slippage=1)
+
+// ============================================================================
+// STRATEGY: Turtle Trading System S2
+// CONFIG: Fixed 55-day entry, 20-day exit (original Turtle rules)
+// SOURCE: TrendLab YOLO sweep session
+{perf_comment}// ============================================================================
+
+// === INDICATORS ===
+float entryHigh = ta.highest(high, 55)
+float exitLow = ta.lowest(low, 20)
+
+// === SIGNALS ===
+bool entryCondition = high >= entryHigh[1]
+bool exitCondition = low <= exitLow[1]
+
+// === STRATEGY EXECUTION ===
+if entryCondition and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+
+if exitCondition and strategy.position_size > 0
+    strategy.close("Long")
+
+// === PLOTTING ===
+plot(entryHigh, "55-Day High", color=color.green, linewidth=1)
+plot(exitLow, "20-Day Low", color=color.red, linewidth=1)
+
+// Background color when in position
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
+"#, perf_comment=perf_comment)
+            }
+
+            // Default fallback for strategies not yet implemented
+            _ => {
+                format!(r#"//@version=6
+// ============================================================================
+// STRATEGY: {} ({})
+// NOTE: Pine Script generation not yet implemented for this strategy type.
+//       Use /pine:generate to create a custom script.
+// ============================================================================
+"#, strategy_name, config_display)
+            }
+        }
+    }
 }
 
 /// Parameter ranges for a strategy type.

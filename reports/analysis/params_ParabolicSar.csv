@@ -1,0 +1,6 @@
+param,all_median,all_min,all_max,top25_median,top25_min,top25_max,corr_with_sharpe
+period,,,,,,,0.0
+entry_pct,,,,,,,0.0
+exit_pct,,,,,,,0.0
+atr_period,,,,,,,0.0
+multiplier,,,,,,,0.0

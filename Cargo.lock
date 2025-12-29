@@ -6566,6 +6566,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "trendlab-engine"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "polars",
+ "rand 0.8.5",
+ "rand_chacha 0.3.1",
+ "rayon",
+ "reqwest 0.12.28",
+ "tokio",
+ "tracing",
+ "trendlab-core",
+ "urlencoding",
+]
+
+[[package]]
 name = "trendlab-gui"
 version = "0.1.0"
 dependencies = [
@@ -6582,6 +6598,7 @@ dependencies = [
  "tokio",
  "tracing",
  "trendlab-core",
+ "trendlab-engine",
  "trendlab-launcher",
  "trendlab-logging",
 ]
@@ -6635,6 +6652,7 @@ dependencies = [
  "tokio",
  "tracing",
  "trendlab-core",
+ "trendlab-engine",
  "trendlab-logging",
  "urlencoding",
 ]

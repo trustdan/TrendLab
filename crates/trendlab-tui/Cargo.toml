@@ -8,6 +8,7 @@ description = "Interactive TUI for TrendLab backtesting"
 
 [dependencies]
 trendlab-core.workspace = true
+trendlab-engine.workspace = true
 trendlab-logging.workspace = true
 tracing.workspace = true
 ratatui.workspace = true

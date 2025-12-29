@@ -14,7 +14,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, Panel, StrategyCategory, StrategyFocus, StrategyType};
+use trendlab_engine::app::{App, Panel, StrategyCategory, StrategyFocus, StrategyType};
 use crate::ui::{colors, panel_block};
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {

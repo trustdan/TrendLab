@@ -203,90 +203,224 @@ impl Universe {
             name: "US Equities".to_string(),
             description: "Default curated list of US equities by sector".to_string(),
             sectors: vec![
+                // Individual Stocks by Sector
                 Sector::new(
                     "basic_materials",
                     "Basic Materials",
-                    vec!["LIN", "SCCO", "NEM", "CF"]
-                        .into_iter()
-                        .map(String::from)
-                        .collect(),
+                    vec![
+                        "LIN", "SCCO", "NEM", "CF", "FCX", "APD", "SHW", "DOW", "NUE", "ECL",
+                        "DD", "PPG", "ALB", "CTVA",
+                    ]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
                 ),
                 Sector::new(
                     "comms_services",
                     "Communication Services",
-                    vec!["GOOG", "META", "RDDT", "NFLX"]
-                        .into_iter()
-                        .map(String::from)
-                        .collect(),
+                    vec![
+                        "GOOG", "META", "RDDT", "NFLX", "DIS", "T", "VZ", "CMCSA", "TMUS",
+                        "SPOT", "ROKU", "CHTR", "EA", "TTWO",
+                    ]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
                 ),
                 Sector::new(
                     "consumer_cyclical",
                     "Consumer Cyclical",
-                    vec!["AMZN", "TJX", "DASH", "HD", "BABA"]
-                        .into_iter()
-                        .map(String::from)
-                        .collect(),
+                    vec![
+                        "AMZN", "TJX", "DASH", "HD", "BABA", "TSLA", "MCD", "NKE", "SBUX",
+                        "LOW", "GM", "F", "CMG", "BKNG", "ABNB",
+                    ]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
                 ),
                 Sector::new(
                     "consumer_defensive",
                     "Consumer Defensive",
-                    vec!["WMT", "PM", "UL", "COST", "PG", "MDLZ"]
-                        .into_iter()
-                        .map(String::from)
-                        .collect(),
+                    vec![
+                        "WMT", "PM", "UL", "COST", "PG", "MDLZ", "KO", "PEP", "MO", "CL",
+                        "GIS", "KHC", "STZ", "SYY", "KR", "HSY",
+                    ]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
                 ),
                 Sector::new(
                     "energy",
                     "Energy",
-                    vec!["XOM", "CVX", "SHEL"]
-                        .into_iter()
-                        .map(String::from)
-                        .collect(),
+                    vec![
+                        "XOM", "CVX", "SHEL", "COP", "SLB", "EOG", "MPC", "VLO", "PSX", "OXY",
+                        "BP", "HAL", "DVN", "KMI",
+                    ]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
                 ),
                 Sector::new(
                     "financial",
                     "Financial",
-                    vec!["BRK-B", "JPM", "MS", "COIN", "PYPL", "IBKR"]
-                        .into_iter()
-                        .map(String::from)
-                        .collect(),
+                    vec![
+                        "BRK-B", "JPM", "MS", "COIN", "PYPL", "IBKR", "BAC", "WFC", "GS", "C",
+                        "V", "MA", "BLK", "SCHW", "AXP", "CME", "ICE",
+                    ]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
                 ),
                 Sector::new(
                     "healthcare",
                     "Healthcare",
-                    vec!["LLY", "JNJ", "ABBV", "UNH"]
-                        .into_iter()
-                        .map(String::from)
-                        .collect(),
+                    vec![
+                        "LLY", "JNJ", "ABBV", "UNH", "PFE", "MRK", "TMO", "ABT", "BMY", "AMGN",
+                        "GILD", "CVS", "ISRG", "DHR", "VRTX",
+                    ]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
                 ),
                 Sector::new(
                     "industrials",
                     "Industrials",
-                    vec!["GE", "RTX", "BA", "ETN", "MMM"]
-                        .into_iter()
-                        .map(String::from)
-                        .collect(),
+                    vec![
+                        "GE", "RTX", "BA", "ETN", "MMM", "CAT", "HON", "UNP", "DE", "LMT",
+                        "UPS", "NOC", "GD", "WM", "FDX", "EMR",
+                    ]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
                 ),
                 Sector::new(
                     "real_estate",
                     "Real Estate",
-                    vec!["PLD", "AMT", "O"]
-                        .into_iter()
-                        .map(String::from)
-                        .collect(),
+                    vec![
+                        "PLD", "AMT", "O", "EQIX", "CCI", "SPG", "PSA", "WELL", "DLR", "AVB",
+                        "EQR", "SBAC", "VTR",
+                    ]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
                 ),
                 Sector::new(
                     "technology",
                     "Technology",
-                    vec!["NVDA", "AAPL", "PLTR", "CSCO", "MSFT", "AMD"]
+                    vec![
+                        "NVDA", "AAPL", "PLTR", "CSCO", "MSFT", "AMD", "AVGO", "CRM", "ORCL",
+                        "ADBE", "INTC", "QCOM", "TXN", "NOW", "MU", "AMAT", "IBM",
+                    ]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
+                ),
+                Sector::new(
+                    "utilities",
+                    "Utilities",
+                    vec![
+                        "EIX", "NEE", "DUK", "AEP", "SO", "D", "SRE", "XEL", "ED", "EXC",
+                        "WEC", "CEG", "PEG", "AWK", "ES",
+                    ]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
+                ),
+                // Broad Market ETFs
+                Sector::new(
+                    "etf_broad_market",
+                    "ETF - Broad Market",
+                    vec![
+                        "SPY", "VOO", "IVV", "QQQ", "VTI", "IWM", "DIA", "RSP", "VXF", "SPLG",
+                    ]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
+                ),
+                // Sector ETFs
+                Sector::new(
+                    "etf_technology",
+                    "ETF - Technology",
+                    vec!["XLK", "VGT", "SMH", "SOXX", "IGV", "FTEC", "FDN"]
                         .into_iter()
                         .map(String::from)
                         .collect(),
                 ),
                 Sector::new(
-                    "utilities",
-                    "Utilities",
-                    vec!["EIX", "NEE", "DUK", "AEP", "SO"]
+                    "etf_financials",
+                    "ETF - Financials",
+                    vec!["XLF", "VFH", "KRE", "KBE", "IAI"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                Sector::new(
+                    "etf_healthcare",
+                    "ETF - Healthcare",
+                    vec!["XLV", "VHT", "IBB", "XBI", "ARKG"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                Sector::new(
+                    "etf_energy",
+                    "ETF - Energy",
+                    vec!["XLE", "VDE", "XOP", "OIH", "AMLP"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                Sector::new(
+                    "etf_industrials",
+                    "ETF - Industrials",
+                    vec!["XLI", "VIS", "ITA", "PPA"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                Sector::new(
+                    "etf_consumer_disc",
+                    "ETF - Consumer Discretionary",
+                    vec!["XLY", "VCR", "BITO"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                Sector::new(
+                    "etf_consumer_staples",
+                    "ETF - Consumer Staples",
+                    vec!["XLP", "VDC", "KXI"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                Sector::new(
+                    "etf_utilities",
+                    "ETF - Utilities",
+                    vec!["XLU", "VPU"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                Sector::new(
+                    "etf_materials",
+                    "ETF - Materials",
+                    vec!["XLB", "VAW", "GDX", "GDXJ", "SLV", "GLD"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                Sector::new(
+                    "etf_real_estate",
+                    "ETF - Real Estate",
+                    vec!["VNQ", "XLRE", "IYR", "MORT"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                Sector::new(
+                    "etf_communications",
+                    "ETF - Communications",
+                    vec!["XLC", "VOX"]
                         .into_iter()
                         .map(String::from)
                         .collect(),
@@ -366,8 +500,10 @@ tickers = ["JPM", "GS"]
     #[test]
     fn test_default_universe() {
         let universe = Universe::default_universe();
-        assert_eq!(universe.sector_count(), 11);
-        assert!(universe.ticker_count() > 40);
+        // 11 individual stock sectors + 12 ETF sectors = 23 total
+        assert_eq!(universe.sector_count(), 23);
+        // Expanded to ~200 tickers
+        assert!(universe.ticker_count() > 180);
     }
 
     #[test]

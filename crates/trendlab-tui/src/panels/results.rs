@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, Panel, ResultsViewMode};
+use trendlab_engine::app::{App, Panel, ResultsViewMode};
 use crate::ui::{colors, panel_block};
 use trendlab_core::ConfidenceGrade;
 

@@ -9,6 +9,7 @@ import {
 } from './components/panels';
 import { useKeyboardNavigation, useFocusManagement, type KeyboardAction } from './hooks';
 import { useAppStore, type PanelId } from './store';
+import { EventBridge } from './events';
 
 /** Panel component map */
 const PANEL_COMPONENTS: Record<PanelId, React.ComponentType> = {
@@ -142,6 +143,9 @@ export function App() {
 
   return (
     <div className="app-container">
+      {/* Worker event bridge - listens for backend events and syncs store */}
+      <EventBridge />
+
       <header className="app-header">
         <span className="app-title">TrendLab</span>
         <span className="text-muted" style={{ fontSize: 'var(--font-size-sm)' }}>

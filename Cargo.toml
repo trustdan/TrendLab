@@ -4,6 +4,7 @@ members = [
     "crates/trendlab-core",
     "crates/trendlab-cli",
     "crates/trendlab-bdd",
+    "crates/trendlab-engine",
     "crates/trendlab-tui",
     "crates/trendlab-launcher",
     "crates/trendlab-logging",
@@ -73,4 +74,5 @@ maud = "0.26"
 
 # Internal crates
 trendlab-core = { path = "crates/trendlab-core" }
+trendlab-engine = { path = "crates/trendlab-engine" }
 trendlab-logging = { path = "crates/trendlab-logging" }

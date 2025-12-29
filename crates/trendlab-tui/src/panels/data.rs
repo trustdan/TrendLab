@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, DataViewMode, OperationState, Panel};
+use trendlab_engine::app::{App, DataViewMode, OperationState, Panel};
 use crate::ui::{colors, panel_block};
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {

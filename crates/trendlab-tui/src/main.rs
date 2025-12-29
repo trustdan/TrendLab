@@ -22,13 +22,15 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use trendlab_logging::LogConfig;
 
-mod app;
 mod panels;
 mod ui;
-mod worker;
 
-use app::{App, Panel};
-use worker::{spawn_worker, WorkerChannels, WorkerCommand, WorkerUpdate};
+use trendlab_engine::app::{
+    App, AutoStage, ChartViewMode, OperationState, Panel, ResultsViewMode, SearchSuggestion,
+    StartupMode, StrategyCurve, StrategyFocus, StrategySelection, StrategyType, TickerBestStrategy,
+    TickerCurve, WinningConfig, YoloConfigField,
+};
+use trendlab_engine::worker::{spawn_worker, WorkerChannels, WorkerCommand, WorkerUpdate};
 
 fn main() -> Result<()> {
     // Initialize logging from environment (set by launcher)
@@ -172,12 +174,12 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
     }
 
     // Handle search mode in Data panel
-    if app.active_panel == app::Panel::Data && app.data.search_mode {
+    if app.active_panel == Panel::Data && app.data.search_mode {
         return handle_search_key(app, code, channels);
     }
 
     // Handle Help panel search mode
-    if app.active_panel == app::Panel::Help && app.help.search_mode {
+    if app.active_panel == Panel::Help && app.help.search_mode {
         return handle_help_search_key(app, code);
     }
 
@@ -204,10 +206,10 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
 
         KeyCode::BackTab => {
             // In Strategy panel, BackTab goes from params back to strategy selection
-            if app.active_panel == app::Panel::Strategy
-                && app.strategy.focus == app::StrategyFocus::Parameters
+            if app.active_panel == Panel::Strategy
+                && app.strategy.focus == StrategyFocus::Parameters
             {
-                app.strategy.focus = app::StrategyFocus::Selection;
+                app.strategy.focus = StrategyFocus::Selection;
                 app.strategy.editing_strategy = true;
             } else {
                 app.prev_panel();
@@ -262,8 +264,8 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
 
         KeyCode::Enter => {
             // Enter to expand/collapse categories or confirm actions
-            if app.active_panel == app::Panel::Strategy
-                && app.strategy.focus == app::StrategyFocus::Selection
+            if app.active_panel == Panel::Strategy
+                && app.strategy.focus == StrategyFocus::Selection
                 && app.strategy.focus_on_category
             {
                 app.handle_strategy_enter();
@@ -281,7 +283,7 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
 
         KeyCode::Char('s') => {
             // 's' for sort (in results panel) or search (in data panel)
-            if app.active_panel == app::Panel::Data {
+            if app.active_panel == Panel::Data {
                 // Enter search mode
                 app.data.search_mode = true;
                 app.data.search_input.clear();
@@ -301,7 +303,7 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
                 app.yolo.config.start_date = app.fetch_range.0;
                 app.yolo.config.end_date = app.fetch_range.1;
                 app.yolo.config.randomization_pct = app.yolo.randomization_pct;
-                app.yolo.config.focused_field = app::YoloConfigField::StartDate;
+                app.yolo.config.focused_field = YoloConfigField::StartDate;
                 app.yolo.show_config = true;
             } else if app.yolo.enabled {
                 app.status_message = "YOLO mode running. Press ESC to stop.".to_string();
@@ -354,6 +356,14 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
             KeyResult::Continue
         }
 
+        KeyCode::Char('P') => {
+            // 'P' (Shift+P) for Pine Script generation from selected result
+            if app.active_panel == Panel::Results {
+                app.handle_pine_export();
+            }
+            KeyResult::Continue
+        }
+
         KeyCode::Char('R') => {
             // Reset to canonical defaults (lookbacks, grids, fetch range)
             app.reset_ui_defaults();
@@ -370,8 +380,8 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
 
         KeyCode::Char(' ') => {
             // Space to toggle selection
-            if app.active_panel == app::Panel::Strategy
-                && app.strategy.focus == app::StrategyFocus::Selection
+            if app.active_panel == Panel::Strategy
+                && app.strategy.focus == StrategyFocus::Selection
             {
                 app.handle_strategy_space();
             } else {
@@ -382,11 +392,11 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
 
         KeyCode::Char('a') => {
             // 'a' to select all in current context, or toggle analysis in Results panel
-            if app.active_panel == app::Panel::Results {
+            if app.active_panel == Panel::Results {
                 // Toggle analysis view
                 app.handle_toggle_analysis(channels);
-            } else if app.active_panel == app::Panel::Strategy
-                && app.strategy.focus == app::StrategyFocus::Selection
+            } else if app.active_panel == Panel::Strategy
+                && app.strategy.focus == StrategyFocus::Selection
             {
                 app.handle_strategy_select_all();
             } else {
@@ -397,10 +407,10 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
 
         KeyCode::Char('n') => {
             // 'n' to deselect all in current context, or next search match in Help
-            if app.active_panel == app::Panel::Help && !app.help.search_query.is_empty() {
+            if app.active_panel == Panel::Help && !app.help.search_query.is_empty() {
                 app.help_next_match();
-            } else if app.active_panel == app::Panel::Strategy
-                && app.strategy.focus == app::StrategyFocus::Selection
+            } else if app.active_panel == Panel::Strategy
+                && app.strategy.focus == StrategyFocus::Selection
             {
                 app.handle_strategy_select_none();
             } else {
@@ -411,7 +421,7 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
 
         KeyCode::Char('N') => {
             // 'N' for previous search match in Help panel
-            if app.active_panel == app::Panel::Help && !app.help.search_query.is_empty() {
+            if app.active_panel == Panel::Help && !app.help.search_query.is_empty() {
                 app.help_prev_match();
             }
             KeyResult::Continue
@@ -419,7 +429,7 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
 
         KeyCode::Char('/') => {
             // '/' to enter search mode in Help panel
-            if app.active_panel == app::Panel::Help {
+            if app.active_panel == Panel::Help {
                 app.help.search_mode = true;
                 app.help.search_query.clear();
                 app.help.search_matches.clear();
@@ -430,7 +440,7 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
 
         KeyCode::Char('g') => {
             // 'g' for gg (jump to top) in Help panel - need to track double press
-            if app.active_panel == app::Panel::Help {
+            if app.active_panel == Panel::Help {
                 // Simple implementation: single 'g' jumps to top
                 app.help.scroll_offset = 0;
             }
@@ -439,7 +449,7 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
 
         KeyCode::Char('G') => {
             // 'G' to jump to bottom in Help panel
-            if app.active_panel == app::Panel::Help {
+            if app.active_panel == Panel::Help {
                 app.help_jump_to_bottom();
             }
             KeyResult::Continue
@@ -447,7 +457,7 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
 
         KeyCode::Char('e') => {
             // 'e' to toggle ensemble mode in Strategy panel
-            if app.active_panel == app::Panel::Strategy {
+            if app.active_panel == Panel::Strategy {
                 app.handle_toggle_ensemble();
             }
             KeyResult::Continue
@@ -579,7 +589,6 @@ fn handle_help_search_key(app: &mut App, code: KeyCode) -> KeyResult {
 
 /// Handle keys while the startup modal is active.
 fn handle_startup_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyResult {
-    use app::{StartupMode, StrategySelection, StrategyType};
     use trendlab_core::SweepDepth;
 
     match code {
@@ -683,7 +692,6 @@ fn handle_startup_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -
 
 /// Handle key input for YOLO config modal
 fn handle_yolo_config_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyResult {
-    use app::YoloConfigField;
     use trendlab_core::SweepDepth;
 
     match code {
@@ -811,7 +819,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                 app.data.search_loading = false;
                 app.data.search_suggestions = results
                     .into_iter()
-                    .map(|r| app::SearchSuggestion {
+                    .map(|r| SearchSuggestion {
                         symbol: r.symbol,
                         name: r.name,
                         exchange: r.exchange,
@@ -836,7 +844,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             total,
         } => {
             app.status_message = format!("Fetching {} ({}/{})", symbol, index + 1, total);
-            app.operation = app::OperationState::FetchingData {
+            app.operation = OperationState::FetchingData {
                 current_symbol: symbol,
                 completed: index,
                 total,
@@ -871,16 +879,16 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
 
         WorkerUpdate::FetchAllComplete { symbols_fetched } => {
             app.set_status_success(format!("Fetch complete: {} symbols", symbols_fetched));
-            app.operation = app::OperationState::Idle;
+            app.operation = OperationState::Idle;
 
             // Full-auto: if we were fetching missing symbols, start the appropriate sweep.
-            if app.auto.enabled && app.auto.stage == app::AutoStage::FetchingMissing {
-                app.auto.stage = app::AutoStage::Sweeping;
+            if app.auto.enabled && app.auto.stage == AutoStage::FetchingMissing {
+                app.auto.stage = AutoStage::Sweeping;
                 match app.startup.strategy_selection {
-                    app::StrategySelection::AllStrategies => {
+                    StrategySelection::AllStrategies => {
                         app.start_multi_strategy_sweep(channels);
                     }
-                    app::StrategySelection::Single(_) => {
+                    StrategySelection::Single(_) => {
                         app.start_multi_sweep(channels);
                     }
                 }
@@ -908,7 +916,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
         WorkerUpdate::CacheLoadError { symbol, error } => {
             // For full-auto we treat missing cache as expected; we will fetch later.
             app.set_status_warning(format!("Cache miss {}: {}", symbol, error));
-            if app.auto.enabled && app.auto.stage == app::AutoStage::LoadingCache {
+            if app.auto.enabled && app.auto.stage == AutoStage::LoadingCache {
                 app.auto.pending_missing.push(symbol);
             }
         }
@@ -922,11 +930,11 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                 symbols_loaded, symbols_missing
             ));
 
-            if app.auto.enabled && app.auto.stage == app::AutoStage::LoadingCache {
+            if app.auto.enabled && app.auto.stage == AutoStage::LoadingCache {
                 // Fetch missing tickers (if any), then start the appropriate sweep.
                 if !app.auto.pending_missing.is_empty() {
                     let missing = std::mem::take(&mut app.auto.pending_missing);
-                    app.auto.stage = app::AutoStage::FetchingMissing;
+                    app.auto.stage = AutoStage::FetchingMissing;
                     let (start, end) = app.fetch_range();
                     let _ = channels.command_tx.send(WorkerCommand::FetchData {
                         symbols: missing.clone(),
@@ -937,12 +945,12 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                     app.status_message =
                         format!("Full-Auto: fetching {} missing tickers...", missing.len());
                 } else {
-                    app.auto.stage = app::AutoStage::Sweeping;
+                    app.auto.stage = AutoStage::Sweeping;
                     match app.startup.strategy_selection {
-                        app::StrategySelection::AllStrategies => {
+                        StrategySelection::AllStrategies => {
                             app.start_multi_strategy_sweep(channels);
                         }
-                        app::StrategySelection::Single(_) => {
+                        StrategySelection::Single(_) => {
                             app.start_multi_sweep(channels);
                         }
                     }
@@ -957,7 +965,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             app.sweep.total_configs = total_configs;
             app.sweep.completed_configs = 0;
             app.sweep.progress = 0.0;
-            app.operation = app::OperationState::RunningSweep {
+            app.operation = OperationState::RunningSweep {
                 completed: 0,
                 total: total_configs,
             };
@@ -969,7 +977,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             app.sweep.progress = completed as f64 / total as f64;
             app.status_message = format!("Sweep: {}/{} configs", completed, total);
 
-            if let app::OperationState::RunningSweep {
+            if let OperationState::RunningSweep {
                 completed: ref mut c,
                 total: ref mut t,
             } = app.operation
@@ -984,7 +992,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             app.set_status_success(format!("Sweep complete: {} configs", count));
             app.sweep.is_running = false;
             app.sweep.progress = 1.0;
-            app.operation = app::OperationState::Idle;
+            app.operation = OperationState::Idle;
 
             // Transfer results to results panel
             app.results.results = result.config_results;
@@ -994,7 +1002,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
         WorkerUpdate::SweepCancelled { completed } => {
             app.set_status_warning(format!("Sweep cancelled after {} configs", completed));
             app.sweep.is_running = false;
-            app.operation = app::OperationState::Idle;
+            app.operation = OperationState::Idle;
         }
 
         // Multi-sweep updates
@@ -1037,12 +1045,12 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                 symbol_count, total_configs
             );
             app.sweep.is_running = false;
-            app.operation = app::OperationState::Idle;
+            app.operation = OperationState::Idle;
 
             // Store multi-sweep result and derive summaries
             app.results.multi_sweep_result = Some(result.clone());
             app.results.update_ticker_summaries();
-            app.results.view_mode = app::ResultsViewMode::PerTicker;
+            app.results.view_mode = ResultsViewMode::PerTicker;
             app.results.selected_ticker_index = 0;
 
             // Also store first symbol's detailed results for drill-down
@@ -1052,7 +1060,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             }
 
             // Populate synthesized multi-curve chart: best config per symbol + aggregated portfolio.
-            let mut curves: Vec<app::TickerCurve> = Vec::new();
+            let mut curves: Vec<TickerCurve> = Vec::new();
             for (symbol, sweep_result) in &result.symbol_results {
                 if let Some(best) = sweep_result.top_n(1, RankMetric::Sharpe, false).first() {
                     let equity: Vec<f64> = best
@@ -1063,7 +1071,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                         .collect();
                     let dates: Vec<chrono::DateTime<chrono::Utc>> =
                         best.backtest_result.equity.iter().map(|p| p.ts).collect();
-                    curves.push(app::TickerCurve {
+                    curves.push(TickerCurve {
                         symbol: symbol.clone(),
                         equity,
                         dates,
@@ -1077,11 +1085,11 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                 .as_ref()
                 .map(|a| a.equity_curve.clone())
                 .unwrap_or_default();
-            app.chart.view_mode = app::ChartViewMode::MultiTicker;
+            app.chart.view_mode = ChartViewMode::MultiTicker;
 
             if app.auto.enabled && app.auto.jump_to_chart_on_complete {
-                app.active_panel = app::Panel::Chart;
-                app.auto.stage = app::AutoStage::Idle;
+                app.active_panel = Panel::Chart;
+                app.auto.stage = AutoStage::Idle;
                 app.auto.enabled = false;
                 app.status_message = format!(
                     "Full-Auto complete: showing combined chart ({} symbols)",
@@ -1094,7 +1102,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             app.status_message =
                 format!("Multi-sweep cancelled after {} symbols", completed_symbols);
             app.sweep.is_running = false;
-            app.operation = app::OperationState::Idle;
+            app.operation = OperationState::Idle;
         }
 
         // Multi-strategy sweep updates
@@ -1142,16 +1150,16 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                 symbol_count, strategy_count
             );
             app.sweep.is_running = false;
-            app.operation = app::OperationState::Idle;
+            app.operation = OperationState::Idle;
 
             // Store multi-strategy result
             app.results.multi_strategy_result = Some(result.clone());
 
             // Populate strategy comparison curves (best config per strategy)
-            let mut strategy_curves: Vec<app::StrategyCurve> = Vec::new();
+            let mut strategy_curves: Vec<StrategyCurve> = Vec::new();
             for entry in &result.strategy_comparison {
                 if let Some(best) = result.best_per_strategy.get(&entry.strategy_type) {
-                    strategy_curves.push(app::StrategyCurve {
+                    strategy_curves.push(StrategyCurve {
                         strategy_type: entry.strategy_type,
                         config_display: best.config_id.display(),
                         equity: best.equity_curve.clone(),
@@ -1163,9 +1171,9 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             app.chart.strategy_curves = strategy_curves;
 
             // Populate per-ticker best strategy curves
-            let mut ticker_best: Vec<app::TickerBestStrategy> = Vec::new();
+            let mut ticker_best: Vec<TickerBestStrategy> = Vec::new();
             for (symbol, best) in &result.best_per_symbol {
-                ticker_best.push(app::TickerBestStrategy {
+                ticker_best.push(TickerBestStrategy {
                     symbol: symbol.clone(),
                     strategy_type: best.strategy_type,
                     config_display: best.config_id.display(),
@@ -1178,12 +1186,12 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             app.chart.ticker_best_strategies = ticker_best;
 
             // Set chart to strategy comparison view
-            app.chart.view_mode = app::ChartViewMode::StrategyComparison;
+            app.chart.view_mode = ChartViewMode::StrategyComparison;
 
             // Auto-jump to chart if in full-auto mode
             if app.auto.enabled && app.auto.jump_to_chart_on_complete {
-                app.active_panel = app::Panel::Chart;
-                app.auto.stage = app::AutoStage::Idle;
+                app.active_panel = Panel::Chart;
+                app.auto.stage = AutoStage::Idle;
                 app.auto.enabled = false;
                 app.status_message = format!(
                     "Full-Auto complete: {} strategies across {} symbols",
@@ -1198,7 +1206,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                 completed_configs
             );
             app.sweep.is_running = false;
-            app.operation = app::OperationState::Idle;
+            app.operation = OperationState::Idle;
         }
 
         // Statistical analysis updates
@@ -1268,9 +1276,9 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             );
 
             // Update chart with top 4 equity curves from cross-symbol leaderboard
-            let mut strategy_curves: Vec<app::StrategyCurve> = Vec::new();
+            let mut strategy_curves: Vec<StrategyCurve> = Vec::new();
             for entry in &cross_symbol_leaderboard.entries {
-                strategy_curves.push(app::StrategyCurve {
+                strategy_curves.push(StrategyCurve {
                     strategy_type: entry.strategy_type,
                     config_display: entry.config_id.display(),
                     equity: entry.combined_equity_curve.clone(),
@@ -1293,11 +1301,11 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
                 });
             }
             app.chart.strategy_curves = strategy_curves;
-            app.chart.view_mode = app::ChartViewMode::StrategyComparison;
+            app.chart.view_mode = ChartViewMode::StrategyComparison;
 
             // Set winning config from best entry for display in Statistics panel
             if let Some(best) = cross_symbol_leaderboard.entries.first() {
-                app.chart.winning_config = Some(app::WinningConfig {
+                app.chart.winning_config = Some(WinningConfig {
                     strategy_name: best.strategy_type.name().to_string(),
                     config_display: best.config_id.display(),
                     symbol: Some(format!("{} symbols", best.symbols.len())),
@@ -1364,7 +1372,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             let _ = total_configs_tested; // Suppress unused warning
             let _ = total_iterations;
             app.sweep.is_running = false;
-            app.operation = app::OperationState::Idle;
+            app.operation = OperationState::Idle;
 
             let best_avg_sharpe = cross_symbol_leaderboard.best_avg_sharpe().unwrap_or(0.0);
             app.status_message = format!(
@@ -1373,9 +1381,9 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             );
 
             // Keep the final cross-symbol leaderboard curves on chart
-            let mut strategy_curves: Vec<app::StrategyCurve> = Vec::new();
+            let mut strategy_curves: Vec<StrategyCurve> = Vec::new();
             for entry in &cross_symbol_leaderboard.entries {
-                strategy_curves.push(app::StrategyCurve {
+                strategy_curves.push(StrategyCurve {
                     strategy_type: entry.strategy_type,
                     config_display: entry.config_id.display(),
                     equity: entry.combined_equity_curve.clone(),
@@ -1401,7 +1409,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
 
             // Set winning config from best entry for display in Statistics panel
             if let Some(best) = cross_symbol_leaderboard.entries.first() {
-                app.chart.winning_config = Some(app::WinningConfig {
+                app.chart.winning_config = Some(WinningConfig {
                     strategy_name: best.strategy_type.name().to_string(),
                     config_display: best.config_id.display(),
                     symbol: Some(format!("{} symbols", best.symbols.len())),

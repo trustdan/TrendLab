@@ -72,24 +72,24 @@ export interface StartSweepResponse {
 // Sweep Events
 // ============================================================================
 
-/** Sweep progress event payload */
+/** Sweep progress event payload (worker events may omit job_id/config_id) */
 export interface SweepProgressPayload {
-  job_id: string;
+  job_id?: string;
   current: number;
   total: number;
   symbol: string;
   strategy: string;
-  config_id: string;
+  config_id?: string;
   message: string;
 }
 
-/** Sweep complete event payload */
+/** Sweep complete event payload (worker events may omit details) */
 export interface SweepCompletePayload {
-  job_id: string;
-  total_configs: number;
-  successful: number;
-  failed: number;
-  elapsed_ms: number;
+  job_id?: string;
+  total_configs?: number;
+  successful?: number;
+  failed?: number;
+  elapsed_ms?: number;
 }
 
 /** Sweep cancelled event payload */

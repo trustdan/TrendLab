@@ -1,42 +1,34 @@
-//! Sweep panel commands - parameter sweeps and cost model configuration
+//! Sweep panel commands - parameter sweeps via worker thread.
+//!
+//! Sweep operations are delegated to the worker thread (same as TUI).
+//! This module provides thin wrappers around the engine state.
 
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
-use tauri::{AppHandle, Emitter, Manager, State};
-use tokio;
-use trendlab_core::{
-    run_strategy_sweep_polars_parallel, scan_symbol_parquet_lazy, CostModel as CoreCostModel,
-    PolarsBacktestConfig, StrategyGridConfig, SweepDepth as CoreSweepDepth,
-};
-use trendlab_launcher::ipc::JobType;
+use tauri::State;
+use trendlab_core::SweepDepth as CoreSweepDepth;
+use trendlab_engine::worker::WorkerCommand;
 
-use crate::commands::results::{ResultMetrics, ResultRow};
-use crate::error::{GuiError, RwLockExt};
-use crate::events::EventEnvelope;
-use crate::jobs::JobStatus;
+use crate::error::GuiError;
 use crate::state::AppState;
 
 // ============================================================================
-// Types
+// Types (GUI-specific for JSON serialization)
 // ============================================================================
 
-/// Sweep depth level (controls parameter grid density)
+/// Sweep depth level (controls parameter grid density).
+/// Maps to trendlab_core::SweepDepth.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SweepDepth {
-    /// Quick sweep: minimal grid for fast validation
     Quick,
-    /// Normal sweep: balanced coverage
     #[default]
     Normal,
-    /// Deep sweep: comprehensive coverage
     Deep,
-    /// Exhaustive sweep: maximum coverage (slow)
     Exhaustive,
 }
 
 impl SweepDepth {
-    /// Get display name for the depth level
     pub fn name(&self) -> &'static str {
         match self {
             SweepDepth::Quick => "Quick",
@@ -46,7 +38,6 @@ impl SweepDepth {
         }
     }
 
-    /// Get description for the depth level
     pub fn description(&self) -> &'static str {
         match self {
             SweepDepth::Quick => "3-5 values per param, ~50 configs",
@@ -56,7 +47,6 @@ impl SweepDepth {
         }
     }
 
-    /// Get estimated config count multiplier
     pub fn config_multiplier(&self) -> usize {
         match self {
             SweepDepth::Quick => 25,
@@ -66,8 +56,8 @@ impl SweepDepth {
         }
     }
 
-    /// Convert to core sweep depth
-    fn as_core(self) -> CoreSweepDepth {
+    /// Convert to core sweep depth.
+    pub fn to_core(&self) -> CoreSweepDepth {
         match self {
             SweepDepth::Quick => CoreSweepDepth::Quick,
             SweepDepth::Normal => CoreSweepDepth::Standard,
@@ -75,28 +65,21 @@ impl SweepDepth {
             SweepDepth::Exhaustive => CoreSweepDepth::Comprehensive,
         }
     }
-}
 
-/// Convert a strategy name to a StrategyGridConfig
-fn strategy_name_to_config(name: &str, depth: CoreSweepDepth) -> Option<StrategyGridConfig> {
-    match name.to_lowercase().as_str() {
-        "donchian" | "donchian breakout" => Some(StrategyGridConfig::donchian_with_depth(depth)),
-        "turtle_s1" | "turtle s1" => Some(StrategyGridConfig::turtle_s1()),
-        "turtle_s2" | "turtle s2" => Some(StrategyGridConfig::turtle_s2()),
-        "ma_crossover" | "ma crossover" | "moving average crossover" => {
-            Some(StrategyGridConfig::ma_crossover_with_depth(depth))
+    /// Convert from core sweep depth.
+    pub fn from_core(depth: &CoreSweepDepth) -> Self {
+        match depth {
+            CoreSweepDepth::Quick => SweepDepth::Quick,
+            CoreSweepDepth::Standard => SweepDepth::Normal,
+            CoreSweepDepth::Comprehensive => SweepDepth::Deep,
         }
-        "tsmom" | "time series momentum" => Some(StrategyGridConfig::tsmom_with_depth(depth)),
-        _ => None,
     }
 }
 
-/// Cost model configuration
+/// Cost model configuration for frontend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CostModel {
-    /// Trading fees in basis points (1 bp = 0.01%)
     pub fees_bps: f64,
-    /// Slippage in basis points
     pub slippage_bps: f64,
 }
 
@@ -109,26 +92,31 @@ impl Default for CostModel {
     }
 }
 
-/// Sweep configuration (full sweep job config)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SweepConfig {
-    pub symbols: Vec<String>,
-    pub strategies: Vec<String>,
-    pub depth: SweepDepth,
-    pub cost_model: CostModel,
-    pub date_range: DateRange,
+impl CostModel {
+    pub fn to_core(&self) -> trendlab_core::CostModel {
+        trendlab_core::CostModel {
+            fees_bps_per_side: self.fees_bps,
+            slippage_bps: self.slippage_bps,
+        }
+    }
+
+    pub fn from_core(core: &trendlab_core::CostModel) -> Self {
+        Self {
+            fees_bps: core.fees_bps_per_side,
+            slippage_bps: core.slippage_bps,
+        }
+    }
 }
 
-/// Date range for sweep
+/// Date range for sweep.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DateRange {
-    pub start: String, // "YYYY-MM-DD"
+    pub start: String,
     pub end: String,
 }
 
 impl Default for DateRange {
     fn default() -> Self {
-        // Default to 10 years of history
         let end = chrono::Local::now().format("%Y-%m-%d").to_string();
         let start = (chrono::Local::now() - chrono::Duration::days(365 * 10))
             .format("%Y-%m-%d")
@@ -137,17 +125,7 @@ impl Default for DateRange {
     }
 }
 
-/// Sweep state stored in AppState
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SweepState {
-    pub depth: SweepDepth,
-    pub cost_model: CostModel,
-    pub date_range: DateRange,
-    pub is_running: bool,
-    pub current_job_id: Option<String>,
-}
-
-/// Selection summary for display
+/// Selection summary for display.
 #[derive(Debug, Clone, Serialize)]
 pub struct SelectionSummary {
     pub symbols: Vec<String>,
@@ -158,7 +136,7 @@ pub struct SelectionSummary {
     pub has_cached_data: bool,
 }
 
-/// Depth option for selector
+/// Depth option for selector.
 #[derive(Debug, Clone, Serialize)]
 pub struct DepthOption {
     pub id: String,
@@ -167,54 +145,31 @@ pub struct DepthOption {
     pub estimated_configs: usize,
 }
 
-/// Start sweep response
+/// Sweep state response for frontend.
 #[derive(Debug, Clone, Serialize)]
-pub struct StartSweepResponse {
-    pub job_id: String,
-    pub total_configs: usize,
-}
-
-/// Sweep progress event payload
-#[derive(Debug, Clone, Serialize)]
-pub struct SweepProgressPayload {
-    pub job_id: String,
-    pub current: usize,
-    pub total: usize,
-    pub symbol: String,
-    pub strategy: String,
-    pub config_id: String,
-    pub message: String,
-}
-
-/// Sweep complete event payload
-#[derive(Debug, Clone, Serialize)]
-pub struct SweepCompletePayload {
-    pub job_id: String,
-    pub total_configs: usize,
-    pub successful: usize,
-    pub failed: usize,
-    pub elapsed_ms: u64,
+pub struct SweepStateResponse {
+    pub depth: SweepDepth,
+    pub cost_model: CostModel,
+    pub date_range: DateRange,
+    pub is_running: bool,
 }
 
 // ============================================================================
 // Commands
 // ============================================================================
 
-/// Get current selection summary for the sweep panel
+/// Get current selection summary for the sweep panel.
 #[tauri::command]
 pub fn get_selection_summary(state: State<'_, AppState>) -> SelectionSummary {
     let symbols = state.get_selected_tickers();
     let strategies = state.get_selected_strategies();
-    let sweep_state = state.sweep.read_or_recover();
+    let depth = SweepDepth::from_core(&state.get_sweep_depth());
 
     let symbol_count = symbols.len();
     let strategy_count = strategies.len();
+    let base_configs = symbol_count * strategy_count * depth.config_multiplier();
 
-    // Estimate configs based on depth and selection
-    let base_configs = symbol_count * strategy_count * sweep_state.depth.config_multiplier();
-
-    // Check if selected symbols have cached data
-    let cached = state.cached_symbols.read_or_recover();
+    let cached = state.cached_symbols.read().unwrap();
     let has_cached_data = symbols.iter().all(|s| cached.contains(s));
 
     SelectionSummary {
@@ -227,7 +182,7 @@ pub fn get_selection_summary(state: State<'_, AppState>) -> SelectionSummary {
     }
 }
 
-/// Get available depth options
+/// Get available depth options.
 #[tauri::command]
 pub fn get_depth_options(state: State<'_, AppState>) -> Vec<DepthOption> {
     let symbols = state.get_selected_tickers();
@@ -262,72 +217,74 @@ pub fn get_depth_options(state: State<'_, AppState>) -> Vec<DepthOption> {
     ]
 }
 
-/// Get current sweep depth
+/// Get current sweep depth.
 #[tauri::command]
 pub fn get_sweep_depth(state: State<'_, AppState>) -> SweepDepth {
-    let sweep_state = state.sweep.read_or_recover();
-    sweep_state.depth
+    SweepDepth::from_core(&state.get_sweep_depth())
 }
 
-/// Set sweep depth
+/// Set sweep depth.
 #[tauri::command]
 pub fn set_sweep_depth(state: State<'_, AppState>, depth: SweepDepth) {
-    let mut sweep_state = state.sweep.write_or_recover();
-    sweep_state.depth = depth;
+    state.set_sweep_depth(depth.to_core());
 }
 
-/// Get cost model
+/// Get cost model.
 #[tauri::command]
 pub fn get_cost_model(state: State<'_, AppState>) -> CostModel {
-    let sweep_state = state.sweep.read_or_recover();
-    sweep_state.cost_model.clone()
+    CostModel::from_core(&state.get_cost_model())
 }
 
-/// Set cost model
+/// Set cost model.
 #[tauri::command]
 pub fn set_cost_model(state: State<'_, AppState>, cost_model: CostModel) {
-    let mut sweep_state = state.sweep.write_or_recover();
-    sweep_state.cost_model = cost_model;
+    state.set_cost_model(cost_model.to_core());
 }
 
-/// Get date range
+/// Get date range.
 #[tauri::command]
 pub fn get_date_range(state: State<'_, AppState>) -> DateRange {
-    let sweep_state = state.sweep.read_or_recover();
-    sweep_state.date_range.clone()
+    let (start, end) = state.get_date_range();
+    DateRange {
+        start: start.format("%Y-%m-%d").to_string(),
+        end: end.format("%Y-%m-%d").to_string(),
+    }
 }
 
-/// Set date range
+/// Set date range.
 #[tauri::command]
-pub fn set_date_range(state: State<'_, AppState>, date_range: DateRange) {
-    let mut sweep_state = state.sweep.write_or_recover();
-    sweep_state.date_range = date_range;
+pub fn set_date_range(state: State<'_, AppState>, date_range: DateRange) -> Result<(), GuiError> {
+    let start = parse_date(&date_range.start)?;
+    let end = parse_date(&date_range.end)?;
+    state.set_date_range(start, end);
+    Ok(())
 }
 
-/// Get sweep state (is running, job id)
+/// Get sweep state (is running, current progress).
 #[tauri::command]
-pub fn get_sweep_state(state: State<'_, AppState>) -> SweepState {
-    let sweep_state = state.sweep.read_or_recover();
-    sweep_state.clone()
+pub fn get_sweep_state(state: State<'_, AppState>) -> SweepStateResponse {
+    let (start, end) = state.get_date_range();
+    SweepStateResponse {
+        depth: SweepDepth::from_core(&state.get_sweep_depth()),
+        cost_model: CostModel::from_core(&state.get_cost_model()),
+        date_range: DateRange {
+            start: start.format("%Y-%m-%d").to_string(),
+            end: end.format("%Y-%m-%d").to_string(),
+        },
+        is_running: state.is_sweep_running(),
+    }
 }
 
-/// Start a parameter sweep
+/// Start a parameter sweep via the worker thread.
 #[tauri::command]
-pub async fn start_sweep(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<StartSweepResponse, GuiError> {
+pub fn start_sweep(state: State<'_, AppState>) -> Result<(), GuiError> {
     // Check if already running
-    {
-        let sweep_state = state.sweep.read_or_recover();
-        if sweep_state.is_running {
-            return Err(GuiError::InvalidState(
-                "A sweep is already running".to_string(),
-            ));
-        }
+    if state.is_sweep_running() {
+        return Err(GuiError::InvalidState(
+            "A sweep is already running".to_string(),
+        ));
     }
 
-    // Get selections
     let symbols = state.get_selected_tickers();
     let strategies = state.get_selected_strategies();
 
@@ -344,315 +301,151 @@ pub async fn start_sweep(
         });
     }
 
-    // Get sweep config
-    let (depth, _cost_model, _date_range) = {
-        let sweep_state = state.sweep.read_or_recover();
-        (
-            sweep_state.depth,
-            sweep_state.cost_model.clone(),
-            sweep_state.date_range.clone(),
-        )
+    // Get sweep config from state
+    let (start_date, end_date) = state.get_date_range();
+    let core_cost_model = state.get_cost_model();
+
+    // Build strategy grid from selected strategies
+    let strategy_grid = build_strategy_grid(&strategies, &state.get_sweep_depth());
+
+    // Build backtest config
+    let backtest_config = trendlab_core::BacktestConfig {
+        initial_cash: 100_000.0,
+        fill_model: trendlab_core::FillModel::NextOpen,
+        cost_model: core_cost_model,
+        qty: 100.0,
+        pyramid_config: trendlab_core::PyramidConfig::default(),
     };
 
-    // Generate job ID
-    let job_id = format!("sweep-{}", chrono::Utc::now().timestamp_millis());
+    // Clear cancellation flag
+    state.clear_cancel();
 
-    // Calculate total configs (simplified estimate)
-    let total_configs = symbols.len() * strategies.len() * depth.config_multiplier();
+    // Send command to worker
+    state
+        .send_command(WorkerCommand::StartMultiStrategySweepFromParquet {
+            symbols,
+            start: start_date,
+            end: end_date,
+            strategy_grid,
+            backtest_config,
+        })
+        .map_err(|e| GuiError::Internal(format!("Failed to start sweep: {}", e)))
+}
 
-    // Create job and get cancellation token
-    let token = state.jobs.create(job_id.clone());
-
-    // Mark sweep as running
-    {
-        let mut sweep_state = state.sweep.write_or_recover();
-        sweep_state.is_running = true;
-        sweep_state.current_job_id = Some(job_id.clone());
+/// Cancel a running sweep.
+#[tauri::command]
+pub fn cancel_sweep(state: State<'_, AppState>) -> Result<(), GuiError> {
+    if !state.is_sweep_running() {
+        return Err(GuiError::InvalidState("No sweep is running".to_string()));
     }
 
-    state.jobs.set_status(&job_id, JobStatus::Running);
+    state.request_cancel();
+    let _ = state.send_command(WorkerCommand::Cancel);
+    Ok(())
+}
 
-    // Emit started event
-    let _ = app.emit(
-        "sweep:started",
-        EventEnvelope::new(
-            "sweep:started",
-            &job_id,
-            serde_json::json!({
-                "job_id": job_id,
-                "total_configs": total_configs,
-                "symbols": symbols,
-                "strategies": strategies,
-            }),
-        ),
-    );
+// ============================================================================
+// Helpers
+// ============================================================================
 
-    // Emit to companion terminal (if connected)
-    state
-        .companion_job_started(
-            &job_id,
-            JobType::Sweep,
-            &format!(
-                "Sweep: {} symbols × {} strategies",
-                symbols.len(),
-                strategies.len()
-            ),
-        )
-        .await;
-
-    // Clone what we need for the async task
-    let job_id_clone = job_id.clone();
-    let app_clone = app.clone();
-    let symbols_clone = symbols.clone();
-    let strategies_clone = strategies.clone();
-
-    // Clone cost model for the task
-    let cost_model_clone = {
-        let sweep_state = state.sweep.read_or_recover();
-        sweep_state.cost_model.clone()
-    };
-    let core_depth = depth.as_core();
-
-    // Spawn background task
-    tokio::spawn(async move {
-        let state_handle = app_clone.state::<AppState>();
-        let start_time = std::time::Instant::now();
-        let mut completed = 0usize;
-        let mut failed = 0usize;
-        let mut actual_total = 0usize;
-        let mut all_results: Vec<ResultRow> = Vec::new();
-
-        // Configure Polars backtest
-        let polars_config = PolarsBacktestConfig::new(100_000.0, 100.0).with_cost_model(
-            CoreCostModel {
-                fees_bps_per_side: cost_model_clone.fees_bps,
-                slippage_bps: cost_model_clone.slippage_bps,
-            },
-        );
-
-        let parquet_dir = Path::new("data/parquet");
-
-        // Run actual backtests
-        for symbol in &symbols_clone {
-            // Check for cancellation
-            if token.is_cancelled() {
-                let _ = state_handle.sweep.write().map(|mut s| {
-                    s.is_running = false;
-                    s.current_job_id = None;
-                });
-                state_handle
-                    .jobs
-                    .set_status(&job_id_clone, JobStatus::Cancelled);
-
-                let _ = app_clone.emit(
-                    "sweep:cancelled",
-                    EventEnvelope::new(
-                        "sweep:cancelled",
-                        &job_id_clone,
-                        serde_json::json!({
-                            "job_id": job_id_clone,
-                            "completed": completed,
-                        }),
-                    ),
-                );
-
-                state_handle
-                    .companion_job_failed(&job_id_clone, "Cancelled by user")
-                    .await;
-
-                return;
-            }
-
-            // Load data for this symbol from Parquet
-            let df = match scan_symbol_parquet_lazy(parquet_dir, symbol, "1d", None, None) {
-                Ok(lf) => match lf.collect() {
-                    Ok(df) => df,
-                    Err(e) => {
-                        tracing::warn!("Failed to collect DataFrame for {}: {}", symbol, e);
-                        failed += 1;
-                        continue;
-                    }
-                },
-                Err(e) => {
-                    tracing::warn!("Failed to scan Parquet for {}: {}", symbol, e);
-                    failed += 1;
-                    continue;
-                }
-            };
-
-            for strategy in &strategies_clone {
-                // Check for cancellation
-                if token.is_cancelled() {
-                    break;
-                }
-
-                // Convert strategy name to config
-                let strategy_config = match strategy_name_to_config(strategy, core_depth) {
-                    Some(config) => config,
-                    None => {
-                        tracing::warn!("Unknown strategy: {}", strategy);
-                        failed += 1;
-                        continue;
-                    }
-                };
-
-                // Calculate expected configs for this strategy
-                let expected_configs = strategy_config.config_count();
-                actual_total += expected_configs;
-
-                // Emit progress before running sweep
-                let _ = app_clone.emit(
-                    "sweep:progress",
-                    EventEnvelope::new(
-                        "sweep:progress",
-                        &job_id_clone,
-                        SweepProgressPayload {
-                            job_id: job_id_clone.clone(),
-                            current: completed,
-                            total: total_configs,
-                            symbol: symbol.clone(),
-                            strategy: strategy.clone(),
-                            config_id: format!("{}-{}", symbol, strategy),
-                            message: format!(
-                                "{} × {} ({} configs)",
-                                symbol, strategy, expected_configs
-                            ),
-                        },
-                    ),
-                );
-
-                state_handle
-                    .companion_job_progress(
-                        &job_id_clone,
-                        completed as u64,
-                        total_configs as u64,
-                        &format!("{} × {}", symbol, strategy),
-                    )
-                    .await;
-
-                // Run the actual backtest sweep (blocking in spawn_blocking to avoid blocking async runtime)
-                let df_clone = df.clone();
-                let config_clone = strategy_config.clone();
-                let polars_config_clone = polars_config.clone();
-
-                let sweep_result = tokio::task::spawn_blocking(move || {
-                    run_strategy_sweep_polars_parallel(&df_clone, &config_clone, &polars_config_clone)
-                })
-                .await;
-
-                match sweep_result {
-                    Ok(Ok(result)) => {
-                        completed += result.config_results.len();
-                        tracing::info!(
-                            "Sweep {} × {} completed: {} configs",
-                            symbol,
-                            strategy,
-                            result.config_results.len()
-                        );
-
-                        // Convert SweepConfigResult to ResultRow and collect
-                        for config_result in &result.config_results {
-                            let row = ResultRow {
-                                id: format!("{}-{}-{}", symbol, strategy, config_result.config_id.id()),
-                                symbol: symbol.clone(),
-                                strategy: strategy.clone(),
-                                config_id: config_result.config_id.id(),
-                                metrics: ResultMetrics {
-                                    total_return: config_result.metrics.total_return,
-                                    cagr: config_result.metrics.cagr,
-                                    sharpe: config_result.metrics.sharpe,
-                                    sortino: config_result.metrics.sortino,
-                                    max_drawdown: config_result.metrics.max_drawdown,
-                                    calmar: config_result.metrics.calmar,
-                                    win_rate: config_result.metrics.win_rate,
-                                    profit_factor: config_result.metrics.profit_factor,
-                                    num_trades: config_result.metrics.num_trades,
-                                    turnover: config_result.metrics.turnover,
-                                },
-                                equity_curve: config_result
-                                    .backtest_result
-                                    .equity
-                                    .iter()
-                                    .map(|e| e.equity)
-                                    .collect(),
-                            };
-                            all_results.push(row);
-                        }
-                    }
-                    Ok(Err(e)) => {
-                        tracing::warn!("Sweep failed for {} × {}: {}", symbol, strategy, e);
-                        failed += expected_configs;
-                    }
-                    Err(e) => {
-                        tracing::error!("Sweep task panicked for {} × {}: {}", symbol, strategy, e);
-                        failed += expected_configs;
-                    }
-                }
-            }
-        }
-
-        // Store all results in state for the Results panel to access
-        if !all_results.is_empty() {
-            state_handle.set_results(job_id_clone.clone(), all_results);
-            tracing::info!("Stored {} sweep results for job {}", completed, job_id_clone);
-        }
-
-        // Mark complete
-        {
-            let mut sweep_state = state_handle.sweep.write_or_recover();
-            sweep_state.is_running = false;
-            sweep_state.current_job_id = None;
-        }
-        state_handle
-            .jobs
-            .set_status(&job_id_clone, JobStatus::Completed);
-
-        let elapsed = start_time.elapsed();
-        let _ = app_clone.emit(
-            "sweep:complete",
-            EventEnvelope::new(
-                "sweep:complete",
-                &job_id_clone,
-                SweepCompletePayload {
-                    job_id: job_id_clone.clone(),
-                    total_configs: actual_total,
-                    successful: completed,
-                    failed,
-                    elapsed_ms: elapsed.as_millis() as u64,
-                },
-            ),
-        );
-
-        state_handle
-            .companion_job_complete(
-                &job_id_clone,
-                &format!(
-                    "Completed {} configs, {} successful, {} failed",
-                    actual_total, completed, failed
-                ),
-                elapsed.as_millis() as u64,
-            )
-            .await;
-    });
-
-    Ok(StartSweepResponse {
-        job_id,
-        total_configs,
+fn parse_date(s: &str) -> Result<NaiveDate, GuiError> {
+    NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| GuiError::InvalidInput {
+        message: format!("Invalid date '{}': {}", s, e),
     })
 }
 
-/// Cancel a running sweep (delegates to job cancellation)
-#[tauri::command]
-pub fn cancel_sweep(state: State<'_, AppState>) -> Result<(), GuiError> {
-    let job_id = {
-        let sweep_state = state.sweep.read_or_recover();
-        sweep_state.current_job_id.clone()
-    };
+/// Build a MultiStrategyGrid from selected strategy IDs and depth.
+fn build_strategy_grid(
+    strategies: &[String],
+    depth: &CoreSweepDepth,
+) -> trendlab_core::MultiStrategyGrid {
+    use trendlab_core::{MAType, OpeningPeriod, StrategyGridConfig, StrategyParams, StrategyTypeId};
 
-    if let Some(job_id) = job_id {
-        state.jobs.cancel(&job_id);
-        Ok(())
-    } else {
-        Err(GuiError::InvalidState("No sweep is running".to_string()))
-    }
+    let configs: Vec<StrategyGridConfig> = strategies
+        .iter()
+        .filter_map(|id| {
+            let (strategy_type, params) = match id.as_str() {
+                "donchian" => (
+                    StrategyTypeId::Donchian,
+                    StrategyParams::Donchian {
+                        entry_lookbacks: match depth {
+                            CoreSweepDepth::Quick => vec![20, 40, 55],
+                            CoreSweepDepth::Standard => vec![10, 20, 30, 40, 55],
+                            CoreSweepDepth::Comprehensive => {
+                                vec![10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]
+                            }
+                        },
+                        exit_lookbacks: match depth {
+                            CoreSweepDepth::Quick => vec![10, 20],
+                            CoreSweepDepth::Standard => vec![5, 10, 15, 20],
+                            CoreSweepDepth::Comprehensive => vec![5, 10, 15, 20, 25, 30],
+                        },
+                    },
+                ),
+                "keltner" => (
+                    StrategyTypeId::Keltner,
+                    StrategyParams::Keltner {
+                        ema_periods: vec![10, 20, 30],
+                        atr_periods: vec![10, 14, 20],
+                        multipliers: vec![1.5, 2.0, 2.5],
+                    },
+                ),
+                "starc" => (
+                    StrategyTypeId::STARC,
+                    StrategyParams::STARC {
+                        sma_periods: vec![5, 10, 20],
+                        atr_periods: vec![14, 20],
+                        multipliers: vec![1.5, 2.0, 2.5],
+                    },
+                ),
+                "supertrend" => (
+                    StrategyTypeId::Supertrend,
+                    StrategyParams::Supertrend {
+                        atr_periods: vec![10, 14, 20],
+                        multipliers: vec![2.0, 3.0, 4.0],
+                    },
+                ),
+                "ma_crossover" => (
+                    StrategyTypeId::MACrossover,
+                    StrategyParams::MACrossover {
+                        fast_periods: vec![10, 20, 50],
+                        slow_periods: vec![50, 100, 200],
+                        ma_types: vec![MAType::SMA, MAType::EMA],
+                    },
+                ),
+                "tsmom" => (
+                    StrategyTypeId::Tsmom,
+                    StrategyParams::Tsmom {
+                        lookbacks: vec![21, 63, 126, 252],
+                    },
+                ),
+                "turtle_s1" => (StrategyTypeId::TurtleS1, StrategyParams::TurtleS1),
+                "turtle_s2" => (StrategyTypeId::TurtleS2, StrategyParams::TurtleS2),
+                "parabolic_sar" => (
+                    StrategyTypeId::ParabolicSar,
+                    StrategyParams::ParabolicSar {
+                        af_starts: vec![0.01, 0.02, 0.03],
+                        af_steps: vec![0.02],
+                        af_maxs: vec![0.15, 0.20, 0.25],
+                    },
+                ),
+                "opening_range" => (
+                    StrategyTypeId::OpeningRangeBreakout,
+                    StrategyParams::OpeningRangeBreakout {
+                        range_bars: vec![3, 5, 10],
+                        periods: vec![OpeningPeriod::Weekly, OpeningPeriod::Monthly],
+                    },
+                ),
+                _ => return None,
+            };
+
+            Some(StrategyGridConfig {
+                strategy_type,
+                enabled: true,
+                params,
+            })
+        })
+        .collect();
+
+    trendlab_core::MultiStrategyGrid { strategies: configs }
 }

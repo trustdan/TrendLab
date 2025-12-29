@@ -89,6 +89,48 @@ export interface YoloStoppedPayload {
   totalConfigsTested: number;
 }
 
+// ============================================================================
+// Worker Event Payloads (from trendlab-engine worker updates)
+// ============================================================================
+
+/** Worker fetch started */
+export interface WorkerFetchStartedPayload {
+  symbol: string;
+  index: number;
+  total: number;
+}
+
+/** Worker fetch complete */
+export interface WorkerFetchCompletePayload {
+  symbol: string;
+}
+
+/** Worker fetch all complete */
+export interface WorkerFetchAllCompletePayload {
+  symbolsFetched: number;
+}
+
+/** Worker sweep started */
+export interface WorkerSweepStartedPayload {
+  totalConfigs: number;
+}
+
+/** Worker sweep progress */
+export interface WorkerSweepProgressPayload {
+  completed: number;
+  total: number;
+}
+
+/** Worker sweep cancelled */
+export interface WorkerSweepCancelledPayload {
+  completed: number;
+}
+
+/** Worker YOLO iteration */
+export interface WorkerYoloIterationPayload {
+  iteration: number;
+}
+
 /** All event types */
 export type EventType =
   | 'job:progress'
@@ -106,7 +148,18 @@ export type EventType =
   | 'yolo:started'
   | 'yolo:progress'
   | 'yolo:iteration_complete'
-  | 'yolo:stopped';
+  | 'yolo:stopped'
+  // Worker events (from trendlab-engine)
+  | 'worker:search-results'
+  | 'worker:fetch-started'
+  | 'worker:fetch-complete'
+  | 'worker:fetch-all-complete'
+  | 'worker:sweep-started'
+  | 'worker:sweep-progress'
+  | 'worker:sweep-complete'
+  | 'worker:sweep-cancelled'
+  | 'worker:yolo-iteration'
+  | 'worker:yolo-stopped';
 
 /** Map event type to payload type */
 export interface EventPayloadMap {
@@ -126,4 +179,15 @@ export interface EventPayloadMap {
   'yolo:progress': YoloProgressPayload;
   'yolo:iteration_complete': YoloIterationCompletePayload;
   'yolo:stopped': YoloStoppedPayload;
+  // Worker events
+  'worker:search-results': Record<string, never>;
+  'worker:fetch-started': WorkerFetchStartedPayload;
+  'worker:fetch-complete': WorkerFetchCompletePayload;
+  'worker:fetch-all-complete': WorkerFetchAllCompletePayload;
+  'worker:sweep-started': WorkerSweepStartedPayload;
+  'worker:sweep-progress': WorkerSweepProgressPayload;
+  'worker:sweep-complete': Record<string, never>;
+  'worker:sweep-cancelled': WorkerSweepCancelledPayload;
+  'worker:yolo-iteration': WorkerYoloIterationPayload;
+  'worker:yolo-stopped': Record<string, never>;
 }

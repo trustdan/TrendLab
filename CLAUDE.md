@@ -108,8 +108,28 @@ Invoke with `/skill-name` or via the Skill tool.
 ### Pine Script Export
 | Command | Purpose |
 |---------|---------|
+| `/pine:generate [strategy] [config]` | Generate Pine Script v6 and save to pine-scripts/ |
 | `/pine:export-artifact [run_id] [config_id]` | Export StrategyArtifact JSON for Pine generation |
 | `/pine:parity-check [artifact.json]` | Create parity checklist + test vectors for Pine validation |
+
+#### Pine Script Generation Pipeline
+
+When you ask for a Pine Script (e.g., "generate pine script for 52-week high 80/70/59"):
+
+1. **Identify**: Parse strategy type and config from your request or TUI screenshot
+2. **Artifact Lookup**: Search `artifacts/exports/` for matching artifact JSON
+3. **Auto-Create**: If no artifact exists, create one from strategy parameters
+4. **Generate**: Build Pine Script v6 using artifact's indicators and rules
+5. **Save**: Write to `pine-scripts/strategies/<strategy>/<config>.pine`
+6. **Index**: Update `pine-scripts/README.md` with new entry
+
+**Invoke**: `/pine:generate [strategy] [config]` or ask naturally
+
+**Output Location**: `pine-scripts/strategies/<strategy_id>/<params>.pine`
+
+**Example**:
+- Input: "generate pine script for the top 52-week high config"
+- Output: `pine-scripts/strategies/52wk_high/80_70_59.pine`
 
 ### Development
 | Command | Purpose |

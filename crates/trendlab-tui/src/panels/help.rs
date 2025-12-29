@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, HelpSection, Panel};
+use trendlab_engine::app::{App, HelpSection, Panel};
 use crate::ui::colors;
 
 /// A single help entry with key binding and description
@@ -147,6 +147,7 @@ const RESULTS_HELP: HelpContent = HelpContent {
         HelpEntry { key: "v", description: "Cycle view mode (list/detailed)" },
         HelpEntry { key: "t", description: "Toggle analysis view" },
         HelpEntry { key: "p", description: "Cycle risk profile" },
+        HelpEntry { key: "P", description: "Export Pine Script (Leaderboard view)" },
         HelpEntry { key: "gg", description: "Jump to top" },
         HelpEntry { key: "G", description: "Jump to bottom" },
     ],
@@ -171,6 +172,10 @@ Apply different weighting schemes to rank results:
 Analysis View (press 't'):
 Shows statistical analysis including regime performance, streak analysis,
 and robustness metrics.
+
+Pine Script Export (press 'P' in Leaderboard view):
+Exports strategy configuration for TradingView Pine Script generation.
+Output goes to: pine-scripts/strategies/<strategy>/<config>.pine
 "#,
 };
 

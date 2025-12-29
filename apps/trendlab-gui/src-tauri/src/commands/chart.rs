@@ -173,13 +173,58 @@ impl Default for ChartState {
 /// Get current chart state.
 #[tauri::command]
 pub fn get_chart_state(state: State<'_, AppState>) -> ChartState {
-    state.get_chart_state()
+    use trendlab_engine::app::ChartViewMode as EngineMode;
+
+    // Read engine state fields individually (ChartState doesn't implement Clone)
+    let engine = state.engine_read();
+    let view_mode = engine.chart.view_mode;
+    let candle_symbol = engine.chart.candle_symbol.clone();
+    let show_drawdown = engine.chart.show_drawdown;
+    let show_volume = engine.chart.show_volume;
+    let show_crosshair = engine.chart.show_crosshair;
+    let selected_index = engine.chart.selected_result_index;
+
+    // Get config_id from selected result if available
+    let config_id = selected_index.and_then(|idx| {
+        engine.results.results.get(idx).map(|r| r.config_id.id())
+    });
+    drop(engine);
+
+    let mode = match view_mode {
+        EngineMode::Candlestick => ChartMode::Candlestick,
+        EngineMode::Single => ChartMode::Equity,
+        EngineMode::MultiTicker => ChartMode::MultiTicker,
+        EngineMode::Portfolio => ChartMode::Portfolio,
+        EngineMode::StrategyComparison => ChartMode::StrategyComparison,
+        EngineMode::PerTickerBestStrategy => ChartMode::MultiTicker, // Map to closest equivalent
+    };
+
+    ChartState {
+        mode,
+        symbol: candle_symbol,
+        strategy: None, // Not stored in engine's ChartState
+        config_id,
+        overlays: ChartOverlays {
+            drawdown: show_drawdown,
+            volume: show_volume,
+            trades: true,
+            crosshair: show_crosshair,
+        },
+    }
 }
 
 /// Set chart mode.
 #[tauri::command]
 pub fn set_chart_mode(state: State<'_, AppState>, mode: ChartMode) {
-    state.set_chart_mode(mode);
+    use trendlab_engine::app::ChartViewMode as EngineMode;
+    let engine_mode = match mode {
+        ChartMode::Candlestick => EngineMode::Candlestick,
+        ChartMode::Equity => EngineMode::Single,
+        ChartMode::MultiTicker => EngineMode::MultiTicker,
+        ChartMode::Portfolio => EngineMode::Portfolio,
+        ChartMode::StrategyComparison => EngineMode::StrategyComparison,
+    };
+    state.set_chart_mode(engine_mode);
 }
 
 /// Set chart symbol/strategy/config for single result view.
@@ -202,7 +247,7 @@ pub fn toggle_overlay(state: State<'_, AppState>, overlay: String, enabled: bool
 /// Get overlay settings.
 #[tauri::command]
 pub fn get_overlays(state: State<'_, AppState>) -> ChartOverlays {
-    state.get_chart_state().overlays
+    get_chart_state(state).overlays
 }
 
 /// Get candlestick data for a symbol.
@@ -317,29 +362,26 @@ pub fn get_equity_curve(
     state: State<'_, AppState>,
     result_id: String,
 ) -> Result<Vec<EquityPoint>, GuiError> {
-    let results_state = state.get_results_state();
+    let engine = state.engine_read();
 
-    let result = results_state
+    let result = engine
+        .results
         .results
         .iter()
-        .find(|r| r.id == result_id)
+        .find(|r| r.config_id.id() == result_id)
         .ok_or_else(|| GuiError::NotFound {
             resource: format!("Result with id '{}'", result_id),
         })?;
 
-    // Get candle data to map equity values to timestamps
-    let candles = get_candle_data(state.clone(), result.symbol.clone())?;
-
-    // Map equity curve values to timestamps
+    // Map engine's equity points to GUI's equity points
+    // Engine's EquityPoint has ts (DateTime) and equity (f64)
     let equity: Vec<EquityPoint> = result
-        .equity_curve
+        .backtest_result
+        .equity
         .iter()
-        .enumerate()
-        .filter_map(|(i, &value)| {
-            candles.get(i).map(|c| EquityPoint {
-                time: c.time,
-                value,
-            })
+        .map(|p| EquityPoint {
+            time: p.ts.timestamp(),
+            value: p.equity,
         })
         .collect();
 
@@ -352,36 +394,34 @@ pub fn get_drawdown_curve(
     state: State<'_, AppState>,
     result_id: String,
 ) -> Result<Vec<DrawdownPoint>, GuiError> {
-    let results_state = state.get_results_state();
+    let engine = state.engine_read();
 
-    let result = results_state
+    let result = engine
+        .results
         .results
         .iter()
-        .find(|r| r.id == result_id)
+        .find(|r| r.config_id.id() == result_id)
         .ok_or_else(|| GuiError::NotFound {
             resource: format!("Result with id '{}'", result_id),
         })?;
 
-    // Get candle data for timestamps
-    let candles = get_candle_data(state.clone(), result.symbol.clone())?;
-
     // Calculate drawdown from equity curve
     let mut peak = f64::NEG_INFINITY;
     let drawdown: Vec<DrawdownPoint> = result
-        .equity_curve
+        .backtest_result
+        .equity
         .iter()
-        .enumerate()
-        .filter_map(|(i, &value)| {
-            peak = peak.max(value);
+        .map(|p| {
+            peak = peak.max(p.equity);
             let dd = if peak > 0.0 {
-                (value - peak) / peak
+                (p.equity - peak) / peak
             } else {
                 0.0
             };
-            candles.get(i).map(|c| DrawdownPoint {
-                time: c.time,
+            DrawdownPoint {
+                time: p.ts.timestamp(),
                 drawdown: dd,
-            })
+            }
         })
         .collect();
 
@@ -393,23 +433,7 @@ pub fn get_drawdown_curve(
 pub fn get_multi_ticker_curves(
     state: State<'_, AppState>,
 ) -> Result<Vec<NamedEquityCurve>, GuiError> {
-    let results_state = state.get_results_state();
-
-    // Get best result per ticker
-    let mut best_by_ticker: std::collections::HashMap<
-        String,
-        &crate::commands::results::ResultRow,
-    > = std::collections::HashMap::new();
-
-    for r in &results_state.results {
-        if let Some(existing) = best_by_ticker.get(&r.symbol) {
-            if r.metrics.sharpe > existing.metrics.sharpe {
-                best_by_ticker.insert(r.symbol.clone(), r);
-            }
-        } else {
-            best_by_ticker.insert(r.symbol.clone(), r);
-        }
-    }
+    let engine = state.engine_read();
 
     // Color palette for series
     let colors = [
@@ -425,26 +449,54 @@ pub fn get_multi_ticker_curves(
 
     let mut curves: Vec<NamedEquityCurve> = Vec::new();
 
-    for (i, (symbol, result)) in best_by_ticker.iter().enumerate() {
-        // Get timestamps from candle data
-        if let Ok(candles) = get_candle_data(state.clone(), symbol.clone()) {
-            let data: Vec<EquityPoint> = result
-                .equity_curve
-                .iter()
-                .enumerate()
-                .filter_map(|(j, &value)| {
-                    candles.get(j).map(|c| EquityPoint {
-                        time: c.time,
-                        value,
+    // Use multi_sweep_result if available (has per-symbol breakdown)
+    if let Some(ref multi) = engine.results.multi_sweep_result {
+        for (i, (symbol, sweep_result)) in multi.symbol_results.iter().enumerate() {
+            // Get best result by Sharpe for this symbol
+            if let Some(best) = sweep_result.config_results.iter().max_by(|a, b| {
+                a.metrics.sharpe.partial_cmp(&b.metrics.sharpe).unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                let data: Vec<EquityPoint> = best
+                    .backtest_result
+                    .equity
+                    .iter()
+                    .map(|p| EquityPoint {
+                        time: p.ts.timestamp(),
+                        value: p.equity,
                     })
-                })
-                .collect();
+                    .collect();
 
-            curves.push(NamedEquityCurve {
-                name: symbol.clone(),
-                color: colors[i % colors.len()].to_string(),
-                data,
-            });
+                curves.push(NamedEquityCurve {
+                    name: symbol.clone(),
+                    color: colors[i % colors.len()].to_string(),
+                    data,
+                });
+            }
+        }
+    } else {
+        // Fall back to ticker summaries if available
+        for (i, summary) in engine.results.ticker_summaries.iter().enumerate() {
+            // Find the result matching this ticker's best config
+            if let Some(result) = engine.results.results.iter().find(|r| {
+                r.config_id.entry_lookback == summary.best_config_entry
+                    && r.config_id.exit_lookback == summary.best_config_exit
+            }) {
+                let data: Vec<EquityPoint> = result
+                    .backtest_result
+                    .equity
+                    .iter()
+                    .map(|p| EquityPoint {
+                        time: p.ts.timestamp(),
+                        value: p.equity,
+                    })
+                    .collect();
+
+                curves.push(NamedEquityCurve {
+                    name: summary.symbol.clone(),
+                    color: colors[i % colors.len()].to_string(),
+                    data,
+                });
+            }
         }
     }
 
@@ -454,34 +506,38 @@ pub fn get_multi_ticker_curves(
 /// Get portfolio (combined) equity curve.
 #[tauri::command]
 pub fn get_portfolio_curve(state: State<'_, AppState>) -> Result<Vec<EquityPoint>, GuiError> {
-    let results_state = state.get_results_state();
+    let engine = state.engine_read();
 
-    if results_state.results.is_empty() {
+    // Collect best results per symbol from multi_sweep_result
+    let mut best_results: Vec<&trendlab_core::SweepConfigResult> = Vec::new();
+
+    if let Some(ref multi) = engine.results.multi_sweep_result {
+        for (_symbol, sweep_result) in &multi.symbol_results {
+            if let Some(best) = sweep_result.config_results.iter().max_by(|a, b| {
+                a.metrics.sharpe.partial_cmp(&b.metrics.sharpe).unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                best_results.push(best);
+            }
+        }
+    } else if !engine.results.results.is_empty() {
+        // Fallback: use all results as a single "portfolio"
+        if let Some(best) = engine.results.results.iter().max_by(|a, b| {
+            a.metrics.sharpe.partial_cmp(&b.metrics.sharpe).unwrap_or(std::cmp::Ordering::Equal)
+        }) {
+            best_results.push(best);
+        }
+    }
+
+    if best_results.is_empty() {
         return Err(GuiError::NotFound {
             resource: "No results for portfolio".to_string(),
         });
     }
 
-    // Get best result per ticker
-    let mut best_by_ticker: std::collections::HashMap<
-        String,
-        &crate::commands::results::ResultRow,
-    > = std::collections::HashMap::new();
-
-    for r in &results_state.results {
-        if let Some(existing) = best_by_ticker.get(&r.symbol) {
-            if r.metrics.sharpe > existing.metrics.sharpe {
-                best_by_ticker.insert(r.symbol.clone(), r);
-            }
-        } else {
-            best_by_ticker.insert(r.symbol.clone(), r);
-        }
-    }
-
     // Find the result with the most data points
-    let max_len = best_by_ticker
-        .values()
-        .map(|r| r.equity_curve.len())
+    let max_len = best_results
+        .iter()
+        .map(|r| r.backtest_result.equity.len())
         .max()
         .unwrap_or(0);
 
@@ -491,26 +547,23 @@ pub fn get_portfolio_curve(state: State<'_, AppState>) -> Result<Vec<EquityPoint
         });
     }
 
-    // Get timestamps from first symbol's candle data
-    let first_symbol = best_by_ticker.keys().next().unwrap();
-    let candles = get_candle_data(state.clone(), first_symbol.clone())?;
-
-    // Sum equity curves (equal weight)
-    let n_curves = best_by_ticker.len() as f64;
+    // Get timestamps from first result
+    let first_result = best_results[0];
+    let n_curves = best_results.len() as f64;
     let mut portfolio: Vec<EquityPoint> = Vec::new();
 
     for i in 0..max_len {
-        let sum: f64 = best_by_ticker
-            .values()
-            .filter_map(|r| r.equity_curve.get(i))
+        let sum: f64 = best_results
+            .iter()
+            .filter_map(|r| r.backtest_result.equity.get(i).map(|p| p.equity))
             .sum();
 
         // Average (equal weight)
         let value = sum / n_curves;
 
-        if let Some(c) = candles.get(i) {
+        if let Some(p) = first_result.backtest_result.equity.get(i) {
             portfolio.push(EquityPoint {
-                time: c.time,
+                time: p.ts.timestamp(),
                 value,
             });
         }
@@ -522,23 +575,7 @@ pub fn get_portfolio_curve(state: State<'_, AppState>) -> Result<Vec<EquityPoint
 /// Get strategy comparison curves.
 #[tauri::command]
 pub fn get_strategy_curves(state: State<'_, AppState>) -> Result<Vec<NamedEquityCurve>, GuiError> {
-    let results_state = state.get_results_state();
-
-    // Get best result per strategy
-    let mut best_by_strategy: std::collections::HashMap<
-        String,
-        &crate::commands::results::ResultRow,
-    > = std::collections::HashMap::new();
-
-    for r in &results_state.results {
-        if let Some(existing) = best_by_strategy.get(&r.strategy) {
-            if r.metrics.sharpe > existing.metrics.sharpe {
-                best_by_strategy.insert(r.strategy.clone(), r);
-            }
-        } else {
-            best_by_strategy.insert(r.strategy.clone(), r);
-        }
-    }
+    let engine = state.engine_read();
 
     // Color palette for series
     let colors = [
@@ -552,24 +589,63 @@ pub fn get_strategy_curves(state: State<'_, AppState>) -> Result<Vec<NamedEquity
 
     let mut curves: Vec<NamedEquityCurve> = Vec::new();
 
-    for (i, (strategy, result)) in best_by_strategy.iter().enumerate() {
-        // Get timestamps from candle data
-        if let Ok(candles) = get_candle_data(state.clone(), result.symbol.clone()) {
+    // Use multi_strategy_result if available
+    if let Some(ref multi) = engine.results.multi_strategy_result {
+        // Collect best result per strategy type
+        let mut best_by_strategy: std::collections::HashMap<String, &trendlab_core::SweepConfigResult> =
+            std::collections::HashMap::new();
+
+        for ((_symbol, strategy_type), sweep_result) in &multi.results {
+            let strategy_name = strategy_type.name().to_string();
+            if let Some(best) = sweep_result.config_results.iter().max_by(|a, b| {
+                a.metrics.sharpe.partial_cmp(&b.metrics.sharpe).unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                if let Some(existing) = best_by_strategy.get(&strategy_name) {
+                    if best.metrics.sharpe > existing.metrics.sharpe {
+                        best_by_strategy.insert(strategy_name, best);
+                    }
+                } else {
+                    best_by_strategy.insert(strategy_name, best);
+                }
+            }
+        }
+
+        for (i, (strategy, result)) in best_by_strategy.iter().enumerate() {
             let data: Vec<EquityPoint> = result
-                .equity_curve
+                .backtest_result
+                .equity
                 .iter()
-                .enumerate()
-                .filter_map(|(j, &value)| {
-                    candles.get(j).map(|c| EquityPoint {
-                        time: c.time,
-                        value,
-                    })
+                .map(|p| EquityPoint {
+                    time: p.ts.timestamp(),
+                    value: p.equity,
                 })
                 .collect();
 
             curves.push(NamedEquityCurve {
                 name: strategy.clone(),
                 color: colors[i % colors.len()].to_string(),
+                data,
+            });
+        }
+    } else {
+        // Fallback: use current results (single strategy likely)
+        // Group by config pattern (since we don't have strategy name directly)
+        if let Some(best) = engine.results.results.iter().max_by(|a, b| {
+            a.metrics.sharpe.partial_cmp(&b.metrics.sharpe).unwrap_or(std::cmp::Ordering::Equal)
+        }) {
+            let data: Vec<EquityPoint> = best
+                .backtest_result
+                .equity
+                .iter()
+                .map(|p| EquityPoint {
+                    time: p.ts.timestamp(),
+                    value: p.equity,
+                })
+                .collect();
+
+            curves.push(NamedEquityCurve {
+                name: best.config_id.id(),
+                color: colors[0].to_string(),
                 data,
             });
         }
@@ -584,40 +660,73 @@ pub fn get_trades(
     state: State<'_, AppState>,
     result_id: String,
 ) -> Result<Vec<TradeMarker>, GuiError> {
-    // For now, return empty since we don't have trade data in ResultRow
-    // TODO: Add trades to ResultRow when backtest is fully implemented
-    let results_state = state.get_results_state();
+    let engine = state.engine_read();
 
-    // Verify result exists
-    if !results_state.results.iter().any(|r| r.id == result_id) {
-        return Err(GuiError::NotFound {
+    let result = engine
+        .results
+        .results
+        .iter()
+        .find(|r| r.config_id.id() == result_id)
+        .ok_or_else(|| GuiError::NotFound {
             resource: format!("Result with id '{}'", result_id),
-        });
-    }
+        })?;
 
-    // Placeholder: return empty trades list
-    // Real implementation would extract from backtest results
-    Ok(vec![])
+    // Convert trades from backtest result to GUI markers
+    // Trade has: entry: Fill, exit: Fill, gross_pnl, net_pnl, direction
+    // Fill has: ts, side, qty, price, fees, raw_price, atr_at_fill
+    let trades: Vec<TradeMarker> = result
+        .backtest_result
+        .trades
+        .iter()
+        .flat_map(|t| {
+            let direction = format!("{:?}", t.direction).to_lowercase();
+            vec![
+                TradeMarker {
+                    time: t.entry.ts.timestamp(),
+                    price: t.entry.price,
+                    marker_type: "entry".to_string(),
+                    direction: direction.clone(),
+                    pnl: None,
+                    text: format!("Entry @ {:.2}", t.entry.price),
+                },
+                TradeMarker {
+                    time: t.exit.ts.timestamp(),
+                    price: t.exit.price,
+                    marker_type: "exit".to_string(),
+                    direction,
+                    pnl: Some(t.net_pnl),
+                    text: format!("Exit @ {:.2} (P&L: {:.2})", t.exit.price, t.net_pnl),
+                },
+            ]
+        })
+        .collect();
+
+    Ok(trades)
 }
 
 /// Get complete chart data based on current state.
 #[tauri::command]
 pub fn get_chart_data(state: State<'_, AppState>) -> Result<ChartData, GuiError> {
-    let chart_state = state.get_chart_state();
-    let results_state = state.get_results_state();
+    // Get GUI chart state (converted from engine's ChartState)
+    let gui_chart_state = get_chart_state(state.clone());
+
+    // Get engine state for results access
+    let engine = state.engine_read();
+    let results_count = engine.results.results.len();
+    drop(engine); // Release lock early
 
     debug!(
-        mode = ?chart_state.mode,
-        symbol = ?chart_state.symbol,
-        strategy = ?chart_state.strategy,
-        config_id = ?chart_state.config_id,
-        results_count = results_state.results.len(),
+        mode = ?gui_chart_state.mode,
+        symbol = ?gui_chart_state.symbol,
+        strategy = ?gui_chart_state.strategy,
+        config_id = ?gui_chart_state.config_id,
+        results_count = results_count,
         "Getting chart data"
     );
 
-    match chart_state.mode {
+    match gui_chart_state.mode {
         ChartMode::Candlestick => {
-            let symbol = chart_state.symbol.clone().ok_or_else(|| {
+            let symbol = gui_chart_state.symbol.clone().ok_or_else(|| {
                 warn!("Candlestick mode requested but no symbol selected");
                 GuiError::InvalidInput {
                     message: "No symbol selected for candlestick chart".to_string(),
@@ -637,66 +746,50 @@ pub fn get_chart_data(state: State<'_, AppState>) -> Result<ChartData, GuiError>
         }
         ChartMode::Equity => {
             debug!("Equity mode: searching for matching result");
-            // Find result matching symbol/strategy/config
-            let result = results_state
-                .results
-                .iter()
-                .find(|r| {
-                    chart_state
-                        .symbol
-                        .as_ref()
-                        .map(|s| &r.symbol == s)
-                        .unwrap_or(true)
-                        && chart_state
-                            .strategy
-                            .as_ref()
-                            .map(|s| &r.strategy == s)
-                            .unwrap_or(true)
-                        && chart_state
-                            .config_id
-                            .as_ref()
-                            .map(|c| &r.config_id == c)
-                            .unwrap_or(true)
-                })
-                .or_else(|| {
-                    // Fall back to selected result
-                    trace!(selected_id = ?results_state.selected_id, "No direct match, falling back to selected result");
-                    results_state
-                        .selected_id
-                        .as_ref()
-                        .and_then(|id| results_state.results.iter().find(|r| &r.id == id))
-                })
-                .ok_or_else(|| {
-                    warn!(
-                        symbol = ?chart_state.symbol,
-                        strategy = ?chart_state.strategy,
-                        config_id = ?chart_state.config_id,
-                        selected_id = ?results_state.selected_id,
-                        results_count = results_state.results.len(),
-                        "No matching result found for equity chart"
-                    );
-                    GuiError::NotFound {
-                        resource: "No matching result for equity chart".to_string(),
-                    }
-                })?;
 
-            debug!(
-                result_id = %result.id,
-                result_symbol = %result.symbol,
-                result_strategy = %result.strategy,
-                "Found matching result for equity chart"
-            );
+            // Find result matching config_id, or fall back to selected result
+            let engine = state.engine_read();
+            let result_id = if let Some(ref config_id) = gui_chart_state.config_id {
+                // Match by config_id string
+                engine
+                    .results
+                    .results
+                    .iter()
+                    .find(|r| r.config_id.id() == *config_id)
+                    .map(|r| r.config_id.id())
+            } else {
+                // Fall back to selected result by index
+                engine
+                    .results
+                    .results
+                    .get(engine.results.selected_index)
+                    .map(|r| r.config_id.id())
+            };
+            drop(engine);
 
-            let equity = get_equity_curve(state.clone(), result.id.clone())?;
+            let result_id = result_id.ok_or_else(|| {
+                warn!(
+                    config_id = ?gui_chart_state.config_id,
+                    results_count = results_count,
+                    "No matching result found for equity chart"
+                );
+                GuiError::NotFound {
+                    resource: "No matching result for equity chart".to_string(),
+                }
+            })?;
 
-            let drawdown = if chart_state.overlays.drawdown {
-                Some(get_drawdown_curve(state.clone(), result.id.clone())?)
+            debug!(result_id = %result_id, "Found matching result for equity chart");
+
+            let equity = get_equity_curve(state.clone(), result_id.clone())?;
+
+            let drawdown = if gui_chart_state.overlays.drawdown {
+                Some(get_drawdown_curve(state.clone(), result_id.clone())?)
             } else {
                 None
             };
 
-            let trades = if chart_state.overlays.trades {
-                Some(get_trades(state.clone(), result.id.clone())?)
+            let trades = if gui_chart_state.overlays.trades {
+                Some(get_trades(state.clone(), result_id.clone())?)
             } else {
                 None
             };

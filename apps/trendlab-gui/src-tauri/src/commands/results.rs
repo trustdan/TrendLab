@@ -187,22 +187,47 @@ impl ResultsState {
 /// Check if there are results available.
 #[tauri::command]
 pub fn has_results(state: State<'_, AppState>) -> bool {
-    state.get_results_state().has_results()
+    state.has_results()
 }
 
 /// Get results count.
 #[tauri::command]
 pub fn get_results_count(state: State<'_, AppState>) -> usize {
-    state.get_results_state().count()
+    state.get_results_count()
 }
 
 /// Get all results with optional filtering and sorting.
 #[tauri::command]
 pub fn get_results(state: State<'_, AppState>, query: Option<ResultsQuery>) -> Vec<ResultRow> {
-    let results_state = state.get_results_state();
+    let engine = state.engine_read();
     let query = query.unwrap_or_default();
 
-    let mut results = results_state.results.clone();
+    // Convert engine's SweepConfigResult to GUI's ResultRow
+    let mut results: Vec<ResultRow> = engine
+        .results
+        .results
+        .iter()
+        .map(|r| ResultRow {
+            id: format!("{:?}", r.config_id),
+            symbol: "".to_string(), // SweepConfigResult doesn't have symbol
+            strategy: format!("{:?}", r.config_id),
+            config_id: format!("{:?}", r.config_id),
+            metrics: ResultMetrics {
+                total_return: r.metrics.total_return,
+                cagr: r.metrics.cagr,
+                sharpe: r.metrics.sharpe,
+                sortino: r.metrics.sortino,
+                max_drawdown: r.metrics.max_drawdown,
+                calmar: r.metrics.calmar,
+                win_rate: r.metrics.win_rate,
+                profit_factor: r.metrics.profit_factor,
+                num_trades: r.metrics.num_trades,
+                turnover: r.metrics.turnover,
+            },
+            equity_curve: r.backtest_result.equity.iter().map(|p| p.equity).collect(),
+        })
+        .collect();
+    drop(engine); // Release lock before filtering
 
     // Apply symbol filter
     if let Some(ref symbol) = query.symbol_filter {
@@ -278,128 +303,86 @@ pub fn get_results(state: State<'_, AppState>, query: Option<ResultsQuery>) -> V
 /// Get ticker summaries (best per ticker).
 #[tauri::command]
 pub fn get_ticker_summaries(state: State<'_, AppState>) -> Vec<TickerSummary> {
-    let results_state = state.get_results_state();
+    let engine = state.engine_read();
 
-    // Group by ticker
-    let mut by_ticker: HashMap<String, Vec<&ResultRow>> = HashMap::new();
-    for r in &results_state.results {
-        by_ticker.entry(r.symbol.clone()).or_default().push(r);
-    }
-
-    // Build summaries
-    let mut summaries: Vec<TickerSummary> = by_ticker
-        .into_iter()
-        .map(|(symbol, rows)| {
-            let configs_tested = rows.len();
-            let sharpes: Vec<f64> = rows.iter().map(|r| r.metrics.sharpe).collect();
-            let avg_sharpe = sharpes.iter().sum::<f64>() / sharpes.len() as f64;
-
-            // Find best by Sharpe
-            let best = rows
-                .iter()
-                .max_by(|a, b| {
-                    a.metrics
-                        .sharpe
-                        .partial_cmp(&b.metrics.sharpe)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .unwrap();
-
-            let worst_drawdown = rows
-                .iter()
-                .map(|r| r.metrics.max_drawdown)
-                .fold(0.0_f64, |a, b| a.max(b));
-
-            TickerSummary {
-                symbol,
-                configs_tested,
-                best_strategy: best.strategy.clone(),
-                best_sharpe: best.metrics.sharpe,
-                avg_sharpe,
-                best_cagr: best.metrics.cagr,
-                worst_drawdown,
-            }
+    // Use engine's ticker_summaries from multi-sweep results
+    engine
+        .results
+        .ticker_summaries
+        .iter()
+        .map(|t| TickerSummary {
+            symbol: t.symbol.clone(),
+            configs_tested: 1,
+            best_strategy: format!("{}/{}", t.best_config_entry, t.best_config_exit),
+            best_sharpe: t.sharpe,
+            avg_sharpe: t.sharpe,
+            best_cagr: t.cagr,
+            worst_drawdown: t.max_drawdown,
         })
-        .collect();
-
-    // Sort by best Sharpe descending
-    summaries.sort_by(|a, b| {
-        b.best_sharpe
-            .partial_cmp(&a.best_sharpe)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    summaries
+        .collect()
 }
 
 /// Get strategy summaries (comparison across strategies).
 #[tauri::command]
 pub fn get_strategy_summaries(state: State<'_, AppState>) -> Vec<StrategySummary> {
-    let results_state = state.get_results_state();
+    let engine = state.engine_read();
 
-    // Group by strategy
-    let mut by_strategy: HashMap<String, Vec<&ResultRow>> = HashMap::new();
-    for r in &results_state.results {
-        by_strategy.entry(r.strategy.clone()).or_default().push(r);
+    // Use multi-strategy result's strategy_comparison if available
+    // StrategyComparisonEntry has: strategy_type, total_configs_tested, avg_cagr, avg_sharpe, best_sharpe, worst_drawdown
+    if let Some(ref multi_strategy) = engine.results.multi_strategy_result {
+        return multi_strategy
+            .strategy_comparison
+            .iter()
+            .map(|s| StrategySummary {
+                strategy: s.strategy_type.name().to_string(),
+                tickers_tested: 0, // Not tracked in StrategyComparisonEntry
+                configs_tested: s.total_configs_tested,
+                avg_sharpe: s.avg_sharpe,
+                best_sharpe: s.best_sharpe,
+                avg_cagr: s.avg_cagr,
+                best_cagr: s.avg_cagr, // Use avg_cagr as fallback (best_cagr not tracked)
+                worst_drawdown: s.worst_drawdown,
+            })
+            .collect();
     }
 
-    // Build summaries
-    let mut summaries: Vec<StrategySummary> = by_strategy
-        .into_iter()
-        .map(|(strategy, rows)| {
-            let configs_tested = rows.len();
-
-            // Count unique tickers
-            let tickers: std::collections::HashSet<_> = rows.iter().map(|r| &r.symbol).collect();
-            let tickers_tested = tickers.len();
-
-            let sharpes: Vec<f64> = rows.iter().map(|r| r.metrics.sharpe).collect();
-            let cagrs: Vec<f64> = rows.iter().map(|r| r.metrics.cagr).collect();
-
-            let avg_sharpe = sharpes.iter().sum::<f64>() / sharpes.len() as f64;
-            let best_sharpe = sharpes.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-            let avg_cagr = cagrs.iter().sum::<f64>() / cagrs.len() as f64;
-            let best_cagr = cagrs.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-            let worst_drawdown = rows
-                .iter()
-                .map(|r| r.metrics.max_drawdown)
-                .fold(0.0_f64, |a, b| a.max(b));
-
-            StrategySummary {
-                strategy,
-                tickers_tested,
-                configs_tested,
-                avg_sharpe,
-                best_sharpe,
-                avg_cagr,
-                best_cagr,
-                worst_drawdown,
-            }
-        })
-        .collect();
-
-    // Sort by average Sharpe descending
-    summaries.sort_by(|a, b| {
-        b.avg_sharpe
-            .partial_cmp(&a.avg_sharpe)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    summaries
+    // Fallback: return empty if no multi-strategy results
+    Vec::new()
 }
 
-/// Get a single result by ID.
+/// Get a single result by index.
 #[tauri::command]
 pub fn get_result_detail(
     state: State<'_, AppState>,
     result_id: String,
 ) -> Result<ResultRow, GuiError> {
-    let results_state = state.get_results_state();
-    results_state
+    let engine = state.engine_read();
+
+    // Find by config_id string match
+    engine
+        .results
         .results
         .iter()
-        .find(|r| r.id == result_id)
-        .cloned()
+        .find(|r| format!("{:?}", r.config_id) == result_id)
+        .map(|r| ResultRow {
+            id: format!("{:?}", r.config_id),
+            symbol: "".to_string(),
+            strategy: format!("{:?}", r.config_id),
+            config_id: format!("{:?}", r.config_id),
+            metrics: ResultMetrics {
+                total_return: r.metrics.total_return,
+                cagr: r.metrics.cagr,
+                sharpe: r.metrics.sharpe,
+                sortino: r.metrics.sortino,
+                max_drawdown: r.metrics.max_drawdown,
+                calmar: r.metrics.calmar,
+                win_rate: r.metrics.win_rate,
+                profit_factor: r.metrics.profit_factor,
+                num_trades: r.metrics.num_trades,
+                turnover: r.metrics.turnover,
+            },
+            equity_curve: r.backtest_result.equity.iter().map(|p| p.equity).collect(),
+        })
         .ok_or_else(|| GuiError::NotFound {
             resource: format!("Result with id '{}'", result_id),
         })
@@ -411,48 +394,74 @@ pub fn select_result(state: State<'_, AppState>, result_id: Option<String>) {
     state.set_selected_result(result_id);
 }
 
-/// Get the selected result ID.
+/// Get the selected result index.
 #[tauri::command]
 pub fn get_selected_result(state: State<'_, AppState>) -> Option<String> {
-    state.get_results_state().selected_id
+    let engine = state.engine_read();
+    let idx = engine.results.selected_index;
+    engine.results.results.get(idx).map(|r| format!("{:?}", r.config_id))
 }
 
 /// Set view mode.
 #[tauri::command]
 pub fn set_view_mode(state: State<'_, AppState>, view_mode: ViewMode) {
-    state.set_view_mode(view_mode);
+    use trendlab_engine::app::ResultsViewMode as EngineViewMode;
+    let engine_mode = match view_mode {
+        ViewMode::PerTicker => EngineViewMode::PerTicker,
+        ViewMode::ByStrategy => EngineViewMode::Aggregated,
+        ViewMode::AllConfigs => EngineViewMode::SingleSymbol,
+    };
+    state.set_view_mode(engine_mode);
 }
 
 /// Get view mode.
 #[tauri::command]
 pub fn get_view_mode(state: State<'_, AppState>) -> ViewMode {
-    state.get_results_state().view_mode
+    use trendlab_engine::app::ResultsViewMode as EngineViewMode;
+    let engine = state.engine_read();
+    match engine.results.view_mode {
+        EngineViewMode::SingleSymbol => ViewMode::AllConfigs,
+        EngineViewMode::PerTicker => ViewMode::PerTicker,
+        EngineViewMode::Aggregated => ViewMode::ByStrategy,
+        EngineViewMode::Leaderboard => ViewMode::PerTicker,
+    }
 }
 
-/// Set sort configuration.
+/// Set sort column (0-based index).
 #[tauri::command]
-pub fn set_sort_config(state: State<'_, AppState>, sort_by: SortMetric, ascending: bool) {
-    state.set_sort_config(sort_by, ascending);
+pub fn set_sort_config(state: State<'_, AppState>, sort_by: SortMetric, _ascending: bool) {
+    // Map SortMetric to column index
+    let column = match sort_by {
+        SortMetric::Sharpe => 0,
+        SortMetric::Cagr => 1,
+        SortMetric::Sortino => 2,
+        SortMetric::MaxDrawdown => 3,
+        SortMetric::Calmar => 4,
+        SortMetric::WinRate => 5,
+        SortMetric::ProfitFactor => 6,
+        SortMetric::TotalReturn => 7,
+        SortMetric::NumTrades => 8,
+    };
+    state.set_sort_column(column);
 }
 
 /// Export strategy artifact for a result.
 #[tauri::command]
 pub fn export_artifact(state: State<'_, AppState>, result_id: String) -> Result<String, GuiError> {
-    let results_state = state.get_results_state();
-    let result = results_state
+    let engine = state.engine_read();
+
+    let result = engine
+        .results
         .results
         .iter()
-        .find(|r| r.id == result_id)
+        .find(|r| format!("{:?}", r.config_id) == result_id)
         .ok_or_else(|| GuiError::NotFound {
             resource: format!("Result with id '{}'", result_id),
         })?;
 
     // TODO: Actually generate and save artifact using trendlab_core::create_donchian_artifact
     // For now, return a placeholder path
-    let artifact_path = format!(
-        "artifacts/{}_{}_{}.json",
-        result.symbol, result.strategy, result.config_id
-    );
+    let artifact_path = format!("artifacts/{:?}.json", result.config_id);
 
     Ok(artifact_path)
 }
