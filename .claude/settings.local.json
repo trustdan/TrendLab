@@ -85,7 +85,8 @@
       "Bash(if not exist \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\.github\\\\workflows\" mkdir \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\.github\\\\workflows\")",
       "Bash(if not exist \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\reports\\\\scans\" mkdir \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\reports\\\\scans\")",
       "Bash(powershell.exe -Command \"python scripts/analyze_yolo.py --charts --data-dir target/release/artifacts\")",
-      "Bash(npx tauri --version)"
+      "Bash(npx tauri --version)",
+      "Bash(git push)"
     ]
   }
 }
