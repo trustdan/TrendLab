@@ -9,8 +9,8 @@ use ratatui::{
     Frame,
 };
 
-use trendlab_engine::app::{App, StrategyCurve, TickerBestStrategy};
 use crate::ui::{colors, panel_block};
+use trendlab_engine::app::{App, StrategyCurve, TickerBestStrategy};
 
 use super::colors::strategy_color;
 use super::empty_states::draw_no_strategy_data;

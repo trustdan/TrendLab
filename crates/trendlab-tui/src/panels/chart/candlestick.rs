@@ -12,8 +12,8 @@ use ratatui::{
     Frame,
 };
 
-use trendlab_engine::app::{App, CandleData};
 use crate::ui::{colors, panel_block};
+use trendlab_engine::app::{App, CandleData};
 
 use super::empty_states::draw_no_candle_data;
 use super::formatters::{calculate_price_bounds, format_price};

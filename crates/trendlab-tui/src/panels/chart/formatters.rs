@@ -1,10 +1,7 @@
 //! Value formatting helpers for chart rendering
 
 use chrono::{DateTime, Utc};
-use ratatui::{
-    style::Style,
-    text::Span,
-};
+use ratatui::{style::Style, text::Span};
 
 use crate::ui::colors;
 

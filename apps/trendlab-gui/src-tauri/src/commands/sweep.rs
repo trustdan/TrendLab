@@ -381,7 +381,9 @@ fn build_strategy_grid(
     strategies: &[String],
     depth: &CoreSweepDepth,
 ) -> trendlab_core::MultiStrategyGrid {
-    use trendlab_core::{MAType, OpeningPeriod, StrategyGridConfig, StrategyParams, StrategyTypeId};
+    use trendlab_core::{
+        MAType, OpeningPeriod, StrategyGridConfig, StrategyParams, StrategyTypeId,
+    };
 
     let configs: Vec<StrategyGridConfig> = strategies
         .iter()
@@ -469,5 +471,7 @@ fn build_strategy_grid(
         })
         .collect();
 
-    trendlab_core::MultiStrategyGrid { strategies: configs }
+    trendlab_core::MultiStrategyGrid {
+        strategies: configs,
+    }
 }

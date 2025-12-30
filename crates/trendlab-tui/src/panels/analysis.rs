@@ -8,8 +8,8 @@ use ratatui::{
     Frame,
 };
 
-use trendlab_engine::app::App;
 use crate::ui::{colors, panel_block};
+use trendlab_engine::app::App;
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     // Split into sections

@@ -208,8 +208,8 @@ impl Universe {
                     "basic_materials",
                     "Basic Materials",
                     vec![
-                        "LIN", "SCCO", "NEM", "CF", "FCX", "APD", "SHW", "DOW", "NUE", "ECL",
-                        "DD", "PPG", "ALB", "CTVA",
+                        "LIN", "SCCO", "NEM", "CF", "FCX", "APD", "SHW", "DOW", "NUE", "ECL", "DD",
+                        "PPG", "ALB", "CTVA",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -219,8 +219,8 @@ impl Universe {
                     "comms_services",
                     "Communication Services",
                     vec![
-                        "GOOG", "META", "RDDT", "NFLX", "DIS", "T", "VZ", "CMCSA", "TMUS",
-                        "SPOT", "ROKU", "CHTR", "EA", "TTWO",
+                        "GOOG", "META", "RDDT", "NFLX", "DIS", "T", "VZ", "CMCSA", "TMUS", "SPOT",
+                        "ROKU", "CHTR", "EA", "TTWO",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -230,8 +230,8 @@ impl Universe {
                     "consumer_cyclical",
                     "Consumer Cyclical",
                     vec![
-                        "AMZN", "TJX", "DASH", "HD", "BABA", "TSLA", "MCD", "NKE", "SBUX",
-                        "LOW", "GM", "F", "CMG", "BKNG", "ABNB",
+                        "AMZN", "TJX", "DASH", "HD", "BABA", "TSLA", "MCD", "NKE", "SBUX", "LOW",
+                        "GM", "F", "CMG", "BKNG", "ABNB",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -241,8 +241,8 @@ impl Universe {
                     "consumer_defensive",
                     "Consumer Defensive",
                     vec![
-                        "WMT", "PM", "UL", "COST", "PG", "MDLZ", "KO", "PEP", "MO", "CL",
-                        "GIS", "KHC", "STZ", "SYY", "KR", "HSY",
+                        "WMT", "PM", "UL", "COST", "PG", "MDLZ", "KO", "PEP", "MO", "CL", "GIS",
+                        "KHC", "STZ", "SYY", "KR", "HSY",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -263,8 +263,8 @@ impl Universe {
                     "financial",
                     "Financial",
                     vec![
-                        "BRK-B", "JPM", "MS", "COIN", "PYPL", "IBKR", "BAC", "WFC", "GS", "C",
-                        "V", "MA", "BLK", "SCHW", "AXP", "CME", "ICE",
+                        "BRK-B", "JPM", "MS", "COIN", "PYPL", "IBKR", "BAC", "WFC", "GS", "C", "V",
+                        "MA", "BLK", "SCHW", "AXP", "CME", "ICE",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -285,8 +285,8 @@ impl Universe {
                     "industrials",
                     "Industrials",
                     vec![
-                        "GE", "RTX", "BA", "ETN", "MMM", "CAT", "HON", "UNP", "DE", "LMT",
-                        "UPS", "NOC", "GD", "WM", "FDX", "EMR",
+                        "GE", "RTX", "BA", "ETN", "MMM", "CAT", "HON", "UNP", "DE", "LMT", "UPS",
+                        "NOC", "GD", "WM", "FDX", "EMR",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -318,8 +318,8 @@ impl Universe {
                     "utilities",
                     "Utilities",
                     vec![
-                        "EIX", "NEE", "DUK", "AEP", "SO", "D", "SRE", "XEL", "ED", "EXC",
-                        "WEC", "CEG", "PEG", "AWK", "ES",
+                        "EIX", "NEE", "DUK", "AEP", "SO", "D", "SRE", "XEL", "ED", "EXC", "WEC",
+                        "CEG", "PEG", "AWK", "ES",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -396,10 +396,7 @@ impl Universe {
                 Sector::new(
                     "etf_utilities",
                     "ETF - Utilities",
-                    vec!["XLU", "VPU"]
-                        .into_iter()
-                        .map(String::from)
-                        .collect(),
+                    vec!["XLU", "VPU"].into_iter().map(String::from).collect(),
                 ),
                 Sector::new(
                     "etf_materials",
@@ -420,10 +417,7 @@ impl Universe {
                 Sector::new(
                     "etf_communications",
                     "ETF - Communications",
-                    vec!["XLC", "VOX"]
-                        .into_iter()
-                        .map(String::from)
-                        .collect(),
+                    vec!["XLC", "VOX"].into_iter().map(String::from).collect(),
                 ),
             ],
         }

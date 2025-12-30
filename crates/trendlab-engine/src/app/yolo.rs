@@ -186,7 +186,8 @@ impl YoloState {
                 all_time_cross.try_insert(entry.clone());
             }
             // Update requested dates to match the current session (most recent test)
-            if let (Some(start), Some(end)) = (cross_symbol.requested_start, cross_symbol.requested_end)
+            if let (Some(start), Some(end)) =
+                (cross_symbol.requested_start, cross_symbol.requested_end)
             {
                 all_time_cross.set_requested_range(start, end);
             }

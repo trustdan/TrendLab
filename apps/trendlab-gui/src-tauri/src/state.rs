@@ -167,18 +167,24 @@ impl AppState {
     }
 
     /// Send a command to the worker
-    pub fn send_command(&self, cmd: WorkerCommand) -> Result<(), std::sync::mpsc::SendError<WorkerCommand>> {
+    #[allow(clippy::result_large_err)]
+    pub fn send_command(
+        &self,
+        cmd: WorkerCommand,
+    ) -> Result<(), std::sync::mpsc::SendError<WorkerCommand>> {
         self.command_tx.send(cmd)
     }
 
     /// Request cancellation of the current operation
     pub fn request_cancel(&self) {
-        self.cancel_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.cancel_flag
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Clear the cancellation flag (call before starting a new operation)
     pub fn clear_cancel(&self) {
-        self.cancel_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.cancel_flag
+            .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     // ========================================================================
@@ -385,13 +391,20 @@ impl AppState {
     }
 
     /// Get strategy params (placeholder - returns empty map for now).
-    pub fn get_strategy_params(&self, _strategy_id: &str) -> crate::commands::strategy::StrategyParamValues {
+    pub fn get_strategy_params(
+        &self,
+        _strategy_id: &str,
+    ) -> crate::commands::strategy::StrategyParamValues {
         // TODO: Store per-strategy params in engine
         crate::commands::strategy::StrategyParamValues::default()
     }
 
     /// Set strategy params (placeholder - no-op for now).
-    pub fn set_strategy_params(&self, _strategy_id: &str, _params: crate::commands::strategy::StrategyParamValues) {
+    pub fn set_strategy_params(
+        &self,
+        _strategy_id: &str,
+        _params: crate::commands::strategy::StrategyParamValues,
+    ) {
         // TODO: Store per-strategy params in engine
     }
 
@@ -423,7 +436,11 @@ impl AppState {
     /// Get chart overlays state.
     pub fn get_chart_overlays(&self) -> (bool, bool, bool) {
         let engine = self.engine.read().unwrap();
-        (engine.chart.show_drawdown, engine.chart.show_volume, engine.chart.show_crosshair)
+        (
+            engine.chart.show_drawdown,
+            engine.chart.show_volume,
+            engine.chart.show_crosshair,
+        )
     }
 
     /// Get candle symbol.
@@ -445,7 +462,12 @@ impl AppState {
     }
 
     /// Set chart selection (symbol for candle view).
-    pub fn set_chart_selection(&self, symbol: Option<String>, _strategy: Option<String>, _config_id: Option<String>) {
+    pub fn set_chart_selection(
+        &self,
+        symbol: Option<String>,
+        _strategy: Option<String>,
+        _config_id: Option<String>,
+    ) {
         let mut engine = self.engine.write().unwrap();
         // Only symbol is stored in engine's chart state for candlestick view
         engine.chart.candle_symbol = symbol;
@@ -488,7 +510,7 @@ impl AppState {
     /// Get results view mode.
     pub fn get_view_mode(&self) -> trendlab_engine::app::ResultsViewMode {
         let engine = self.engine.read().unwrap();
-        engine.results.view_mode.clone()
+        engine.results.view_mode
     }
 
     /// Set results view mode.
@@ -531,7 +553,7 @@ impl AppState {
     /// Get sweep depth.
     pub fn get_sweep_depth(&self) -> trendlab_core::SweepDepth {
         let depth = self.sweep_depth.read().unwrap();
-        depth.clone()
+        *depth
     }
 
     /// Set sweep depth.
@@ -587,14 +609,17 @@ impl AppState {
     /// Get sweep running state.
     pub fn is_sweep_running(&self) -> bool {
         let engine = self.engine.read().unwrap();
-        matches!(engine.operation, trendlab_engine::app::OperationState::RunningSweep { .. })
+        matches!(
+            engine.operation,
+            trendlab_engine::app::OperationState::RunningSweep { .. }
+        )
     }
 
     /// Get sweep cost model.
     /// Note: Cost model is stored in GUI state, not engine.
     pub fn get_cost_model(&self) -> trendlab_core::CostModel {
         let cost = self.cost_model.read().unwrap();
-        cost.clone()
+        *cost
     }
 
     /// Set sweep cost model.

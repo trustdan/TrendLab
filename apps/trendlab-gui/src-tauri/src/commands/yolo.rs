@@ -227,8 +227,12 @@ pub fn get_yolo_state(state: State<'_, AppState>) -> YoloStateResponse {
 /// Get leaderboards.
 #[tauri::command]
 pub fn get_leaderboard(state: State<'_, AppState>) -> LeaderboardsResponse {
-    let per_symbol = state.get_per_symbol_leaderboard().map(|lb| convert_leaderboard(&lb));
-    let cross_symbol = state.get_cross_symbol_leaderboard().map(|lb| convert_cross_symbol_leaderboard(&lb));
+    let per_symbol = state
+        .get_per_symbol_leaderboard()
+        .map(|lb| convert_leaderboard(&lb));
+    let cross_symbol = state
+        .get_cross_symbol_leaderboard()
+        .map(|lb| convert_cross_symbol_leaderboard(&lb));
 
     LeaderboardsResponse {
         per_symbol,
@@ -337,7 +341,9 @@ pub fn stop_yolo_mode(state: State<'_, AppState>) -> Result<(), GuiError> {
 
 /// Build a MultiStrategyGrid from selected strategy IDs.
 fn build_strategy_grid(strategies: &[String]) -> trendlab_core::MultiStrategyGrid {
-    use trendlab_core::{MAType, OpeningPeriod, StrategyGridConfig, StrategyParams, StrategyTypeId};
+    use trendlab_core::{
+        MAType, OpeningPeriod, StrategyGridConfig, StrategyParams, StrategyTypeId,
+    };
 
     let configs: Vec<StrategyGridConfig> = strategies
         .iter()
@@ -415,5 +421,7 @@ fn build_strategy_grid(strategies: &[String]) -> trendlab_core::MultiStrategyGri
         })
         .collect();
 
-    trendlab_core::MultiStrategyGrid { strategies: configs }
+    trendlab_core::MultiStrategyGrid {
+        strategies: configs,
+    }
 }

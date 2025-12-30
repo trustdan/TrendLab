@@ -966,7 +966,10 @@ impl SupertrendConfirmedStrategy {
     pub fn new(atr_period: usize, multiplier: f64, confirmation_bars: usize) -> Self {
         assert!(atr_period > 0, "ATR period must be at least 1");
         assert!(multiplier > 0.0, "Multiplier must be positive");
-        assert!(confirmation_bars > 0, "Confirmation bars must be at least 1");
+        assert!(
+            confirmation_bars > 0,
+            "Confirmation bars must be at least 1"
+        );
 
         Self {
             atr_period,
@@ -1212,10 +1215,11 @@ impl Strategy for SupertrendCooldownStrategy {
         match current_position {
             Position::Flat => {
                 // Entry: Trend flips to uptrend AND cooldown satisfied
-                if current_st.is_uptrend && !prev_st.is_uptrend {
-                    if self.bars_since_exit >= self.cooldown_bars {
-                        return Signal::EnterLong;
-                    }
+                if current_st.is_uptrend
+                    && !prev_st.is_uptrend
+                    && self.bars_since_exit >= self.cooldown_bars
+                {
+                    return Signal::EnterLong;
                 }
                 Signal::Hold
             }

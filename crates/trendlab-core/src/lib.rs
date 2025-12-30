@@ -71,10 +71,11 @@ pub use clustering::{
 };
 pub use data::{
     bars_to_dataframe, build_yahoo_chart_url, build_yahoo_url, dataframe_to_bars,
-    get_parquet_date_range, parquet_path, parse_yahoo_chart_json, parse_yahoo_csv, partition_by_year,
-    read_parquet, scan_multiple_parquet_lazy, scan_parquet_lazy, scan_symbol_parquet_lazy,
-    write_parquet, write_partitioned_parquet, CacheMetadata, DataQualityChecker, DataQualityReport,
-    DataSource, FetchRequest, FetchResult, ProviderError, QualityIssue,
+    get_parquet_date_range, parquet_path, parse_yahoo_chart_json, parse_yahoo_csv,
+    partition_by_year, read_parquet, scan_multiple_parquet_lazy, scan_parquet_lazy,
+    scan_symbol_parquet_lazy, write_parquet, write_partitioned_parquet, CacheMetadata,
+    DataQualityChecker, DataQualityReport, DataSource, FetchRequest, FetchResult, ProviderError,
+    QualityIssue,
 };
 pub use error::TrendLabError;
 pub use indicator_cache::{

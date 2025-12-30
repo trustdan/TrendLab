@@ -8,8 +8,8 @@ use ratatui::{
     Frame,
 };
 
-use trendlab_engine::app::{App, MessageType, Panel, YoloConfigField};
 use crate::panels;
+use trendlab_engine::app::{App, MessageType, Panel, YoloConfigField};
 
 /// Tokyo Night color palette
 pub mod colors {
@@ -212,8 +212,8 @@ pub fn panel_block(title: &str, is_active: bool) -> Block<'_> {
 }
 
 fn draw_startup_modal(f: &mut Frame, app: &App) {
-    use trendlab_engine::app::{StartupMode, StrategySelection};
     use trendlab_core::SweepDepth;
+    use trendlab_engine::app::{StartupMode, StrategySelection};
 
     // Centered popup
     let area = centered_rect(80, 70, f.area());

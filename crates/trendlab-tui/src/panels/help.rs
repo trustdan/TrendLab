@@ -8,8 +8,8 @@ use ratatui::{
     Frame,
 };
 
-use trendlab_engine::app::{App, HelpSection, Panel};
 use crate::ui::colors;
+use trendlab_engine::app::{App, HelpSection, Panel};
 
 /// A single help entry with key binding and description
 struct HelpEntry {
@@ -31,13 +31,34 @@ struct HelpContent {
 const GLOBAL_HELP: HelpContent = HelpContent {
     title: "Global Navigation",
     entries: &[
-        HelpEntry { key: "1-6", description: "Jump to panel (Data, Strategy, Sweep, Results, Chart, Help)" },
-        HelpEntry { key: "Tab", description: "Next panel" },
-        HelpEntry { key: "Shift+Tab", description: "Previous panel" },
-        HelpEntry { key: "?", description: "Open Help panel" },
-        HelpEntry { key: "q", description: "Quit application" },
-        HelpEntry { key: "Esc", description: "Cancel / dismiss modal" },
-        HelpEntry { key: "R", description: "Reset defaults (randomize if enabled)" },
+        HelpEntry {
+            key: "1-6",
+            description: "Jump to panel (Data, Strategy, Sweep, Results, Chart, Help)",
+        },
+        HelpEntry {
+            key: "Tab",
+            description: "Next panel",
+        },
+        HelpEntry {
+            key: "Shift+Tab",
+            description: "Previous panel",
+        },
+        HelpEntry {
+            key: "?",
+            description: "Open Help panel",
+        },
+        HelpEntry {
+            key: "q",
+            description: "Quit application",
+        },
+        HelpEntry {
+            key: "Esc",
+            description: "Cancel / dismiss modal",
+        },
+        HelpEntry {
+            key: "R",
+            description: "Reset defaults (randomize if enabled)",
+        },
     ],
     details: r#"
 TrendLab uses a panel-based interface with vim-style navigation throughout.
@@ -55,15 +76,42 @@ status bar), this randomizes parameters for exploration.
 const DATA_HELP: HelpContent = HelpContent {
     title: "Data Panel",
     entries: &[
-        HelpEntry { key: "j/↓", description: "Move down in list" },
-        HelpEntry { key: "k/↑", description: "Move up in list" },
-        HelpEntry { key: "h/←", description: "Back to sectors" },
-        HelpEntry { key: "l/→/Enter", description: "Enter sector / expand" },
-        HelpEntry { key: "Space", description: "Toggle ticker selection" },
-        HelpEntry { key: "a", description: "Select all tickers (in sector or global)" },
-        HelpEntry { key: "n", description: "Deselect all (none)" },
-        HelpEntry { key: "f", description: "Fetch data for selected tickers" },
-        HelpEntry { key: "s", description: "Search symbols (Yahoo Finance)" },
+        HelpEntry {
+            key: "j/↓",
+            description: "Move down in list",
+        },
+        HelpEntry {
+            key: "k/↑",
+            description: "Move up in list",
+        },
+        HelpEntry {
+            key: "h/←",
+            description: "Back to sectors",
+        },
+        HelpEntry {
+            key: "l/→/Enter",
+            description: "Enter sector / expand",
+        },
+        HelpEntry {
+            key: "Space",
+            description: "Toggle ticker selection",
+        },
+        HelpEntry {
+            key: "a",
+            description: "Select all tickers (in sector or global)",
+        },
+        HelpEntry {
+            key: "n",
+            description: "Deselect all (none)",
+        },
+        HelpEntry {
+            key: "f",
+            description: "Fetch data for selected tickers",
+        },
+        HelpEntry {
+            key: "s",
+            description: "Search symbols (Yahoo Finance)",
+        },
     ],
     details: r#"
 The Data panel displays a sector/ticker hierarchy for selecting instruments.
@@ -83,13 +131,34 @@ any Yahoo Finance symbol not in the default universe.
 const STRATEGY_HELP: HelpContent = HelpContent {
     title: "Strategy Panel",
     entries: &[
-        HelpEntry { key: "j/↓", description: "Next category/field" },
-        HelpEntry { key: "k/↑", description: "Previous category/field" },
-        HelpEntry { key: "h/←", description: "Decrease value / collapse" },
-        HelpEntry { key: "l/→", description: "Increase value / expand" },
-        HelpEntry { key: "Enter", description: "Expand/collapse category" },
-        HelpEntry { key: "e", description: "Toggle ensemble mode" },
-        HelpEntry { key: "Space", description: "Toggle strategy in ensemble" },
+        HelpEntry {
+            key: "j/↓",
+            description: "Next category/field",
+        },
+        HelpEntry {
+            key: "k/↑",
+            description: "Previous category/field",
+        },
+        HelpEntry {
+            key: "h/←",
+            description: "Decrease value / collapse",
+        },
+        HelpEntry {
+            key: "l/→",
+            description: "Increase value / expand",
+        },
+        HelpEntry {
+            key: "Enter",
+            description: "Expand/collapse category",
+        },
+        HelpEntry {
+            key: "e",
+            description: "Toggle ensemble mode",
+        },
+        HelpEntry {
+            key: "Space",
+            description: "Toggle strategy in ensemble",
+        },
     ],
     details: r#"
 Configure backtest parameters across 5 strategy categories:
@@ -112,11 +181,26 @@ with Space when ensemble mode is active.
 const SWEEP_HELP: HelpContent = HelpContent {
     title: "Sweep Panel",
     entries: &[
-        HelpEntry { key: "Enter", description: "Start parameter sweep" },
-        HelpEntry { key: "Esc", description: "Cancel running sweep" },
-        HelpEntry { key: "j/↓", description: "Next sweep depth" },
-        HelpEntry { key: "k/↑", description: "Previous sweep depth" },
-        HelpEntry { key: "y", description: "YOLO mode (configure and run)" },
+        HelpEntry {
+            key: "Enter",
+            description: "Start parameter sweep",
+        },
+        HelpEntry {
+            key: "Esc",
+            description: "Cancel running sweep",
+        },
+        HelpEntry {
+            key: "j/↓",
+            description: "Next sweep depth",
+        },
+        HelpEntry {
+            key: "k/↑",
+            description: "Previous sweep depth",
+        },
+        HelpEntry {
+            key: "y",
+            description: "YOLO mode (configure and run)",
+        },
     ],
     details: r#"
 Parameter sweeps test multiple configurations to find optimal settings.
@@ -152,16 +236,46 @@ Results panel when the sweep completes.
 const RESULTS_HELP: HelpContent = HelpContent {
     title: "Results Panel",
     entries: &[
-        HelpEntry { key: "j/↓", description: "Next result" },
-        HelpEntry { key: "k/↑", description: "Previous result" },
-        HelpEntry { key: "Enter", description: "View result in Chart panel" },
-        HelpEntry { key: "s", description: "Cycle sort column" },
-        HelpEntry { key: "v", description: "Cycle view mode (list/detailed)" },
-        HelpEntry { key: "t", description: "Toggle analysis view" },
-        HelpEntry { key: "p", description: "Cycle risk profile" },
-        HelpEntry { key: "P", description: "Export Pine Script (Leaderboard view)" },
-        HelpEntry { key: "gg", description: "Jump to top" },
-        HelpEntry { key: "G", description: "Jump to bottom" },
+        HelpEntry {
+            key: "j/↓",
+            description: "Next result",
+        },
+        HelpEntry {
+            key: "k/↑",
+            description: "Previous result",
+        },
+        HelpEntry {
+            key: "Enter",
+            description: "View result in Chart panel",
+        },
+        HelpEntry {
+            key: "s",
+            description: "Cycle sort column",
+        },
+        HelpEntry {
+            key: "v",
+            description: "Cycle view mode (list/detailed)",
+        },
+        HelpEntry {
+            key: "t",
+            description: "Toggle analysis view",
+        },
+        HelpEntry {
+            key: "p",
+            description: "Cycle risk profile",
+        },
+        HelpEntry {
+            key: "P",
+            description: "Export Pine Script (Leaderboard view)",
+        },
+        HelpEntry {
+            key: "gg",
+            description: "Jump to top",
+        },
+        HelpEntry {
+            key: "G",
+            description: "Jump to bottom",
+        },
     ],
     details: r#"
 Browse and analyze sweep results with sorting and filtering.
@@ -194,15 +308,42 @@ Output goes to: pine-scripts/strategies/<strategy>/<config>.pine
 const CHART_HELP: HelpContent = HelpContent {
     title: "Chart Panel",
     entries: &[
-        HelpEntry { key: "h/←", description: "Scroll left (earlier)" },
-        HelpEntry { key: "l/→", description: "Scroll right (later)" },
-        HelpEntry { key: "j/↓", description: "Zoom out" },
-        HelpEntry { key: "k/↑", description: "Zoom in" },
-        HelpEntry { key: "m", description: "Cycle chart mode" },
-        HelpEntry { key: "v", description: "Toggle volume subplot" },
-        HelpEntry { key: "c", description: "Toggle crosshair" },
-        HelpEntry { key: "d", description: "Toggle drawdown overlay" },
-        HelpEntry { key: "0", description: "Reset view to default" },
+        HelpEntry {
+            key: "h/←",
+            description: "Scroll left (earlier)",
+        },
+        HelpEntry {
+            key: "l/→",
+            description: "Scroll right (later)",
+        },
+        HelpEntry {
+            key: "j/↓",
+            description: "Zoom out",
+        },
+        HelpEntry {
+            key: "k/↑",
+            description: "Zoom in",
+        },
+        HelpEntry {
+            key: "m",
+            description: "Cycle chart mode",
+        },
+        HelpEntry {
+            key: "v",
+            description: "Toggle volume subplot",
+        },
+        HelpEntry {
+            key: "c",
+            description: "Toggle crosshair",
+        },
+        HelpEntry {
+            key: "d",
+            description: "Toggle drawdown overlay",
+        },
+        HelpEntry {
+            key: "0",
+            description: "Reset view to default",
+        },
     ],
     details: r#"
 Visualize price data and backtest results with interactive charts.
@@ -230,11 +371,26 @@ Entry signals shown as green triangles, exits as red triangles.
 const FEATURES_HELP: HelpContent = HelpContent {
     title: "Features Overview",
     entries: &[
-        HelpEntry { key: "Risk Profiles", description: "Weighted ranking for different trading styles" },
-        HelpEntry { key: "YOLO Mode", description: "Custom date range sweeps with randomization" },
-        HelpEntry { key: "Statistical Analysis", description: "Regime splits, streak analysis, robustness" },
-        HelpEntry { key: "Ensemble Mode", description: "Compare multiple strategies simultaneously" },
-        HelpEntry { key: "Symbol Search", description: "Find any Yahoo Finance symbol" },
+        HelpEntry {
+            key: "Risk Profiles",
+            description: "Weighted ranking for different trading styles",
+        },
+        HelpEntry {
+            key: "YOLO Mode",
+            description: "Custom date range sweeps with randomization",
+        },
+        HelpEntry {
+            key: "Statistical Analysis",
+            description: "Regime splits, streak analysis, robustness",
+        },
+        HelpEntry {
+            key: "Ensemble Mode",
+            description: "Compare multiple strategies simultaneously",
+        },
+        HelpEntry {
+            key: "Symbol Search",
+            description: "Find any Yahoo Finance symbol",
+        },
     ],
     details: r#"
 Key Features:
@@ -341,7 +497,11 @@ fn draw_section_tabs(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
         .title(Span::styled(
             " Help ",
             Style::default()
-                .fg(if is_active { colors::BLUE } else { colors::FG_DARK })
+                .fg(if is_active {
+                    colors::BLUE
+                } else {
+                    colors::FG_DARK
+                })
                 .add_modifier(Modifier::BOLD),
         ));
 
@@ -368,16 +528,18 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
         ]));
 
         if !app.help.search_matches.is_empty() {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!(
-                        "  {} match{} (n/N to navigate)",
-                        app.help.search_matches.len(),
-                        if app.help.search_matches.len() == 1 { "" } else { "es" }
-                    ),
-                    Style::default().fg(colors::FG_DARK),
+            lines.push(Line::from(vec![Span::styled(
+                format!(
+                    "  {} match{} (n/N to navigate)",
+                    app.help.search_matches.len(),
+                    if app.help.search_matches.len() == 1 {
+                        ""
+                    } else {
+                        "es"
+                    }
                 ),
-            ]));
+                Style::default().fg(colors::FG_DARK),
+            )]));
         }
         lines.push(Line::from(""));
     }
@@ -410,8 +572,14 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
 
         // Check if this line matches search
         let is_match = !app.help.search_query.is_empty()
-            && (entry.key.to_lowercase().contains(&app.help.search_query.to_lowercase())
-                || entry.description.to_lowercase().contains(&app.help.search_query.to_lowercase()));
+            && (entry
+                .key
+                .to_lowercase()
+                .contains(&app.help.search_query.to_lowercase())
+                || entry
+                    .description
+                    .to_lowercase()
+                    .contains(&app.help.search_query.to_lowercase()));
 
         let key_style = if is_match {
             Style::default()
@@ -449,7 +617,9 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
     for detail_line in content.details.trim().lines() {
         // Check if this line matches search
         let is_match = !app.help.search_query.is_empty()
-            && detail_line.to_lowercase().contains(&app.help.search_query.to_lowercase());
+            && detail_line
+                .to_lowercase()
+                .contains(&app.help.search_query.to_lowercase());
 
         let style = if is_match {
             Style::default()
@@ -467,7 +637,10 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
     let total_lines = lines.len();
 
     // Apply scroll offset
-    let scroll_offset = app.help.scroll_offset.min(total_lines.saturating_sub(visible_height));
+    let scroll_offset = app
+        .help
+        .scroll_offset
+        .min(total_lines.saturating_sub(visible_height));
     let visible_lines: Vec<Line> = lines
         .into_iter()
         .skip(scroll_offset)
@@ -482,7 +655,11 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
 
     // Build title with scroll indicator
     let scroll_info = if total_lines > visible_height {
-        format!(" [{}/{}] ", scroll_offset + 1, total_lines.saturating_sub(visible_height) + 1)
+        format!(
+            " [{}/{}] ",
+            scroll_offset + 1,
+            total_lines.saturating_sub(visible_height) + 1
+        )
     } else {
         String::new()
     };
@@ -492,7 +669,11 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
         .border_style(Style::default().fg(border_color))
         .title(Span::styled(
             format!(" {} {}", content.title, scroll_info),
-            Style::default().fg(if is_active { colors::BLUE } else { colors::FG_DARK }),
+            Style::default().fg(if is_active {
+                colors::BLUE
+            } else {
+                colors::FG_DARK
+            }),
         ));
 
     let para = Paragraph::new(visible_lines)
@@ -515,6 +696,7 @@ fn get_section_content(section: HelpSection) -> &'static HelpContent {
 }
 
 /// Get the total line count for a section (for scroll calculation)
+#[allow(dead_code)]
 pub fn get_section_line_count(section: HelpSection) -> usize {
     let content = get_section_content(section);
     // Quick reference lines + detail lines + headers + spacing

@@ -399,7 +399,11 @@ pub fn select_result(state: State<'_, AppState>, result_id: Option<String>) {
 pub fn get_selected_result(state: State<'_, AppState>) -> Option<String> {
     let engine = state.engine_read();
     let idx = engine.results.selected_index;
-    engine.results.results.get(idx).map(|r| format!("{:?}", r.config_id))
+    engine
+        .results
+        .results
+        .get(idx)
+        .map(|r| format!("{:?}", r.config_id))
 }
 
 /// Set view mode.

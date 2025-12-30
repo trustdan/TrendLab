@@ -53,10 +53,7 @@ pub fn get_selection(state: tauri::State<'_, AppState>) -> Vec<String> {
 /// Search for symbols via Yahoo Finance.
 /// Uses the worker thread for the actual search.
 #[tauri::command]
-pub fn search_symbols(
-    state: tauri::State<'_, AppState>,
-    query: String,
-) -> Result<(), GuiError> {
+pub fn search_symbols(state: tauri::State<'_, AppState>, query: String) -> Result<(), GuiError> {
     if query.trim().is_empty() {
         return Ok(());
     }
@@ -140,14 +137,16 @@ pub fn get_operation_state(state: tauri::State<'_, AppState>) -> OperationStateR
             index: None,
             total: None,
         },
-        trendlab_engine::app::OperationState::FetchingData { current_symbol, completed, total } => {
-            OperationStateResponse {
-                state: "fetching".to_string(),
-                symbol: Some(current_symbol.clone()),
-                index: Some(*completed),
-                total: Some(*total),
-            }
-        }
+        trendlab_engine::app::OperationState::FetchingData {
+            current_symbol,
+            completed,
+            total,
+        } => OperationStateResponse {
+            state: "fetching".to_string(),
+            symbol: Some(current_symbol.clone()),
+            index: Some(*completed),
+            total: Some(*total),
+        },
         trendlab_engine::app::OperationState::RunningSweep { completed, total } => {
             OperationStateResponse {
                 state: "sweeping".to_string(),

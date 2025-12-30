@@ -7,7 +7,6 @@
 //! - Ranking and stability analysis
 
 use crate::backtest::{run_backtest, BacktestConfig, BacktestResult, CostModel};
-use crate::TrendLabError;
 use crate::bar::Bar;
 use crate::indicators::MACDEntryMode;
 use crate::indicators::MAType;
@@ -24,6 +23,7 @@ use crate::strategy::{
     SupertrendAsymmetricStrategy, SupertrendConfirmedStrategy, SupertrendCooldownStrategy,
     SupertrendStrategy, SupertrendVolumeStrategy, TsmomStrategy, VotingMethod, WilliamsRStrategy,
 };
+use crate::TrendLabError;
 use chrono::{DateTime, Utc};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -1158,7 +1158,10 @@ impl StrategyConfigId {
                 volume_threshold_pct,
             } => format!(
                 "ST+Vol {}/{:.1}/{}/{:.0}%",
-                atr_period, multiplier, volume_lookback, volume_threshold_pct * 100.0
+                atr_period,
+                multiplier,
+                volume_lookback,
+                volume_threshold_pct * 100.0
             ),
             Self::SupertrendConfirmed {
                 atr_period,
@@ -1367,7 +1370,11 @@ impl StrategyConfigId {
             } => format!("{}_{}", entry_lookback, exit_lookback),
             Self::TurtleS1 => "20_10".to_string(),
             Self::TurtleS2 => "55_20".to_string(),
-            Self::MACrossover { fast, slow, ma_type } => {
+            Self::MACrossover {
+                fast,
+                slow,
+                ma_type,
+            } => {
                 format!("{}_{}_{}", fast, slow, ma_type.name())
             }
             Self::Tsmom { lookback } => format!("{}", lookback),
@@ -1401,7 +1408,13 @@ impl StrategyConfigId {
                 multiplier,
                 volume_lookback,
                 volume_threshold_pct,
-            } => format!("{}_{:.1}_{}_{:.0}", atr_period, multiplier, volume_lookback, volume_threshold_pct * 100.0),
+            } => format!(
+                "{}_{:.1}_{}_{:.0}",
+                atr_period,
+                multiplier,
+                volume_lookback,
+                volume_threshold_pct * 100.0
+            ),
             Self::SupertrendConfirmed {
                 atr_period,
                 multiplier,
@@ -1411,7 +1424,10 @@ impl StrategyConfigId {
                 atr_period,
                 entry_multiplier,
                 exit_multiplier,
-            } => format!("{}_{:.1}_{:.1}", atr_period, entry_multiplier, exit_multiplier),
+            } => format!(
+                "{}_{:.1}_{:.1}",
+                atr_period, entry_multiplier, exit_multiplier
+            ),
             Self::SupertrendCooldown {
                 atr_period,
                 multiplier,
@@ -1421,7 +1437,12 @@ impl StrategyConfigId {
                 period,
                 entry_pct,
                 exit_pct,
-            } => format!("{}_{:.0}_{:.0}", period, entry_pct * 100.0, exit_pct * 100.0),
+            } => format!(
+                "{}_{:.0}_{:.0}",
+                period,
+                entry_pct * 100.0,
+                exit_pct * 100.0
+            ),
             Self::FiftyTwoWeekHighMomentum {
                 period,
                 entry_pct,
@@ -1430,7 +1451,11 @@ impl StrategyConfigId {
                 momentum_threshold,
             } => format!(
                 "{}_{:.0}_{:.0}_{}_{:.0}",
-                period, entry_pct * 100.0, exit_pct * 100.0, momentum_period, momentum_threshold * 100.0
+                period,
+                entry_pct * 100.0,
+                exit_pct * 100.0,
+                momentum_period,
+                momentum_threshold * 100.0
             ),
             Self::FiftyTwoWeekHighTrailing {
                 period,
@@ -1438,7 +1463,9 @@ impl StrategyConfigId {
                 trailing_stop_pct,
             } => format!(
                 "{}_{:.0}_{:.0}",
-                period, entry_pct * 100.0, trailing_stop_pct * 100.0
+                period,
+                entry_pct * 100.0,
+                trailing_stop_pct * 100.0
             ),
             Self::DarvasBox {
                 box_confirmation_bars,
@@ -1458,13 +1485,19 @@ impl StrategyConfigId {
                 af_step,
                 af_max,
                 trend_ma_period,
-            } => format!("{:.2}_{:.2}_{:.2}_{}", af_start, af_step, af_max, trend_ma_period),
+            } => format!(
+                "{:.2}_{:.2}_{:.2}_{}",
+                af_start, af_step, af_max, trend_ma_period
+            ),
             Self::ParabolicSarDelayed {
                 af_start,
                 af_step,
                 af_max,
                 delay_bars,
-            } => format!("{:.2}_{:.2}_{:.2}_{}", af_start, af_step, af_max, delay_bars),
+            } => format!(
+                "{:.2}_{:.2}_{:.2}_{}",
+                af_start, af_step, af_max, delay_bars
+            ),
             Self::OpeningRangeBreakout { range_bars, period } => {
                 format!("{}__{:?}", range_bars, period)
             }
@@ -1475,7 +1508,11 @@ impl StrategyConfigId {
             } => format!(
                 "{}_{}_{:?}",
                 base_strategy.id(),
-                horizons.iter().map(|h| h.to_string()).collect::<Vec<_>>().join("_"),
+                horizons
+                    .iter()
+                    .map(|h| h.to_string())
+                    .collect::<Vec<_>>()
+                    .join("_"),
                 voting
             ),
             // Phase 5: Oscillator Strategies
@@ -1661,21 +1698,35 @@ impl StrategyConfigId {
     /// Generate Pine Script v6 for this strategy configuration.
     ///
     /// Returns a complete, ready-to-use TradingView Pine Script.
-    pub fn to_pine_script(&self, avg_sharpe: Option<f64>, hit_rate: Option<f64>, symbol_count: Option<usize>) -> String {
+    pub fn to_pine_script(
+        &self,
+        avg_sharpe: Option<f64>,
+        hit_rate: Option<f64>,
+        symbol_count: Option<usize>,
+    ) -> String {
         let strategy_name = self.strategy_type().name();
         let config_display = self.display();
 
         // Performance comment
         let perf_comment = match (avg_sharpe, hit_rate, symbol_count) {
             (Some(sharpe), Some(hit), Some(count)) => {
-                format!("// PERFORMANCE: Avg Sharpe {:.3}, Hit Rate {:.1}%, {} symbols\n", sharpe, hit * 100.0, count)
+                format!(
+                    "// PERFORMANCE: Avg Sharpe {:.3}, Hit Rate {:.1}%, {} symbols\n",
+                    sharpe,
+                    hit * 100.0,
+                    count
+                )
             }
             _ => String::new(),
         };
 
         match self {
-            Self::Supertrend { atr_period, multiplier } => {
-                format!(r#"//@version=6
+            Self::Supertrend {
+                atr_period,
+                multiplier,
+            } => {
+                format!(
+                    r#"//@version=6
 strategy("{0} ({1})", overlay=true, margin_long=100, margin_short=100,
          default_qty_type=strategy.percent_of_equity, default_qty_value=100,
          commission_type=strategy.commission.percent, commission_value=0.1,
@@ -1721,13 +1772,20 @@ bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
 // Entry/Exit markers
 plotshape(supertrendDir == -1 and supertrendDir[1] == 1, "Entry", shape.triangleup, location.belowbar, color.green, size=size.small)
 plotshape(supertrendDir == 1 and supertrendDir[1] == -1, "Exit", shape.triangledown, location.abovebar, color.red, size=size.small)
-"#, strategy_name, config_display, atr_period, multiplier, perf_comment)
+"#,
+                    strategy_name, config_display, atr_period, multiplier, perf_comment
+                )
             }
 
-            Self::FiftyTwoWeekHigh { period, entry_pct, exit_pct } => {
+            Self::FiftyTwoWeekHigh {
+                period,
+                entry_pct,
+                exit_pct,
+            } => {
                 let entry_pct_display = entry_pct * 100.0;
                 let exit_pct_display = exit_pct * 100.0;
-                format!(r#"//@version=6
+                format!(
+                    r#"//@version=6
 strategy("{0} ({1})", overlay=true, margin_long=100, margin_short=100,
          default_qty_type=strategy.percent_of_equity, default_qty_value=100,
          commission_type=strategy.commission.percent, commission_value=0.1,
@@ -1777,11 +1835,25 @@ bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
 // Entry/Exit markers
 plotshape(entryCondition and strategy.position_size[1] == 0, "Entry", shape.triangleup, location.belowbar, color.green, size=size.small)
 plotshape(exitCondition and strategy.position_size[1] > 0, "Exit", shape.triangledown, location.abovebar, color.red, size=size.small)
-"#, strategy_name, config_display, period, entry_pct_display, exit_pct_display, perf_comment, entry_pct, exit_pct)
+"#,
+                    strategy_name,
+                    config_display,
+                    period,
+                    entry_pct_display,
+                    exit_pct_display,
+                    perf_comment,
+                    entry_pct,
+                    exit_pct
+                )
             }
 
-            Self::ParabolicSar { af_start, af_step, af_max } => {
-                format!(r#"//@version=6
+            Self::ParabolicSar {
+                af_start,
+                af_step,
+                af_max,
+            } => {
+                format!(
+                    r#"//@version=6
 strategy("{0} ({1})", overlay=true, margin_long=100, margin_short=100,
          default_qty_type=strategy.percent_of_equity, default_qty_value=100,
          commission_type=strategy.commission.percent, commission_value=0.1,
@@ -1827,11 +1899,17 @@ bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
 // Entry/Exit markers
 plotshape(entryCondition, "Entry", shape.triangleup, location.belowbar, color.green, size=size.small)
 plotshape(exitCondition, "Exit", shape.triangledown, location.abovebar, color.red, size=size.small)
-"#, strategy_name, config_display, af_start, af_step, af_max, perf_comment)
+"#,
+                    strategy_name, config_display, af_start, af_step, af_max, perf_comment
+                )
             }
 
-            Self::LarryWilliams { range_multiplier, atr_stop_mult } => {
-                format!(r#"//@version=6
+            Self::LarryWilliams {
+                range_multiplier,
+                atr_stop_mult,
+            } => {
+                format!(
+                    r#"//@version=6
 strategy("{0} ({1})", overlay=true, margin_long=100, margin_short=100,
          default_qty_type=strategy.percent_of_equity, default_qty_value=100,
          commission_type=strategy.commission.percent, commission_value=0.1,
@@ -1880,11 +1958,18 @@ bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
 // Entry/Exit markers
 plotshape(entryCondition and strategy.position_size[1] == 0, "Entry", shape.triangleup, location.belowbar, color.green, size=size.small)
 plotshape(exitCondition and strategy.position_size[1] > 0, "Exit", shape.triangledown, location.abovebar, color.red, size=size.small)
-"#, strategy_name, config_display, range_multiplier, atr_stop_mult, perf_comment)
+"#,
+                    strategy_name, config_display, range_multiplier, atr_stop_mult, perf_comment
+                )
             }
 
-            Self::STARC { sma_period, atr_period, multiplier } => {
-                format!(r#"//@version=6
+            Self::STARC {
+                sma_period,
+                atr_period,
+                multiplier,
+            } => {
+                format!(
+                    r#"//@version=6
 strategy("{0} ({1})", overlay=true, margin_long=100, margin_short=100,
          default_qty_type=strategy.percent_of_equity, default_qty_value=100,
          commission_type=strategy.commission.percent, commission_value=0.1,
@@ -1934,11 +2019,14 @@ bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
 // Entry/Exit markers
 plotshape(entryCondition and strategy.position_size[1] == 0, "Entry", shape.triangleup, location.belowbar, color.green, size=size.small)
 plotshape(exitCondition and strategy.position_size[1] > 0, "Exit", shape.triangledown, location.abovebar, color.red, size=size.small)
-"#, strategy_name, config_display, sma_period, atr_period, multiplier, perf_comment)
+"#,
+                    strategy_name, config_display, sma_period, atr_period, multiplier, perf_comment
+                )
             }
 
             Self::Tsmom { lookback } => {
-                format!(r#"//@version=6
+                format!(
+                    r#"//@version=6
 strategy("{0} ({1})", overlay=false, margin_long=100, margin_short=100,
          default_qty_type=strategy.percent_of_equity, default_qty_value=100,
          commission_type=strategy.commission.percent, commission_value=0.1,
@@ -1978,15 +2066,22 @@ hline(0, "Zero Line", color=color.gray)
 
 // Background color when in position
 bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
-"#, strategy_name, config_display, lookback, perf_comment)
+"#,
+                    strategy_name, config_display, lookback, perf_comment
+                )
             }
 
-            Self::MACrossover { fast, slow, ma_type } => {
+            Self::MACrossover {
+                fast,
+                slow,
+                ma_type,
+            } => {
                 let ma_func = match ma_type {
                     MAType::SMA => "ta.sma",
                     MAType::EMA => "ta.ema",
                 };
-                format!(r#"//@version=6
+                format!(
+                    r#"//@version=6
 strategy("{0} ({1})", overlay=true, margin_long=100, margin_short=100,
          default_qty_type=strategy.percent_of_equity, default_qty_value=100,
          commission_type=strategy.commission.percent, commission_value=0.1,
@@ -2032,11 +2127,17 @@ bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
 // Entry/Exit markers
 plotshape(goldenCross, "Golden Cross", shape.triangleup, location.belowbar, color.green, size=size.small)
 plotshape(deathCross, "Death Cross", shape.triangledown, location.abovebar, color.red, size=size.small)
-"#, strategy_name, config_display, fast, slow, ma_type, perf_comment, ma_func)
+"#,
+                    strategy_name, config_display, fast, slow, ma_type, perf_comment, ma_func
+                )
             }
 
-            Self::Donchian { entry_lookback, exit_lookback } => {
-                format!(r#"//@version=6
+            Self::Donchian {
+                entry_lookback,
+                exit_lookback,
+            } => {
+                format!(
+                    r#"//@version=6
 strategy("{0} ({1})", overlay=true, margin_long=100, margin_short=100,
          default_qty_type=strategy.percent_of_equity, default_qty_value=100,
          commission_type=strategy.commission.percent, commission_value=0.1,
@@ -2084,11 +2185,14 @@ bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
 // Entry/Exit markers
 plotshape(entryCondition and strategy.position_size[1] == 0, "Entry", shape.triangleup, location.belowbar, color.green, size=size.small)
 plotshape(exitCondition and strategy.position_size[1] > 0, "Exit", shape.triangledown, location.abovebar, color.red, size=size.small)
-"#, strategy_name, config_display, entry_lookback, exit_lookback, perf_comment)
+"#,
+                    strategy_name, config_display, entry_lookback, exit_lookback, perf_comment
+                )
             }
 
             Self::Aroon { period } => {
-                format!(r#"//@version=6
+                format!(
+                    r#"//@version=6
 strategy("{0} ({1})", overlay=false, margin_long=100, margin_short=100,
          default_qty_type=strategy.percent_of_equity, default_qty_value=100,
          commission_type=strategy.commission.percent, commission_value=0.1,
@@ -2130,12 +2234,15 @@ hline(50, "Mid Line", color=color.gray)
 
 // Background color when in position
 bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
-"#, strategy_name, config_display, period, perf_comment)
+"#,
+                    strategy_name, config_display, period, perf_comment
+                )
             }
 
             // Turtle systems use fixed parameters
             Self::TurtleS1 => {
-                format!(r#"//@version=6
+                format!(
+                    r#"//@version=6
 strategy("Turtle System S1 (20/10)", overlay=true, margin_long=100, margin_short=100,
          default_qty_type=strategy.percent_of_equity, default_qty_value=100,
          commission_type=strategy.commission.percent, commission_value=0.1,
@@ -2173,11 +2280,14 @@ plot(exitLow, "10-Day Low", color=color.red, linewidth=1)
 
 // Background color when in position
 bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
-"#, perf_comment=perf_comment)
+"#,
+                    perf_comment = perf_comment
+                )
             }
 
             Self::TurtleS2 => {
-                format!(r#"//@version=6
+                format!(
+                    r#"//@version=6
 strategy("Turtle System S2 (55/20)", overlay=true, margin_long=100, margin_short=100,
          default_qty_type=strategy.percent_of_equity, default_qty_value=100,
          commission_type=strategy.commission.percent, commission_value=0.1,
@@ -2215,18 +2325,23 @@ plot(exitLow, "20-Day Low", color=color.red, linewidth=1)
 
 // Background color when in position
 bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : na)
-"#, perf_comment=perf_comment)
+"#,
+                    perf_comment = perf_comment
+                )
             }
 
             // Default fallback for strategies not yet implemented
             _ => {
-                format!(r#"//@version=6
+                format!(
+                    r#"//@version=6
 // ============================================================================
 // STRATEGY: {} ({})
 // NOTE: Pine Script generation not yet implemented for this strategy type.
 //       Use /pine:generate to create a custom script.
 // ============================================================================
-"#, strategy_name, config_display)
+"#,
+                    strategy_name, config_display
+                )
             }
         }
     }
@@ -3466,12 +3581,7 @@ impl StrategyGridConfig {
     pub fn supertrend_volume_with_depth(depth: SweepDepth) -> Self {
         let (atr_periods, multipliers, volume_lookbacks, volume_threshold_pcts) = match depth {
             SweepDepth::Quick => (vec![10], vec![3.0], vec![20], vec![1.2]),
-            SweepDepth::Standard => (
-                vec![10, 14],
-                vec![2.5, 3.0],
-                vec![20],
-                vec![1.2, 1.5],
-            ),
+            SweepDepth::Standard => (vec![10, 14], vec![2.5, 3.0], vec![20], vec![1.2, 1.5]),
             SweepDepth::Comprehensive => (
                 vec![7, 10, 14],
                 vec![2.0, 2.5, 3.0],
@@ -3514,11 +3624,9 @@ impl StrategyGridConfig {
         let (atr_periods, entry_multipliers, exit_multipliers) = match depth {
             SweepDepth::Quick => (vec![10], vec![2.5], vec![3.5]),
             SweepDepth::Standard => (vec![10, 14], vec![2.0, 2.5], vec![3.0, 3.5]),
-            SweepDepth::Comprehensive => (
-                vec![7, 10, 14],
-                vec![2.0, 2.5, 3.0],
-                vec![3.0, 3.5, 4.0],
-            ),
+            SweepDepth::Comprehensive => {
+                (vec![7, 10, 14], vec![2.0, 2.5, 3.0], vec![3.0, 3.5, 4.0])
+            }
         };
         Self {
             strategy_type: StrategyTypeId::SupertrendAsymmetric,
@@ -3536,7 +3644,9 @@ impl StrategyGridConfig {
         let (atr_periods, multipliers, cooldown_bars) = match depth {
             SweepDepth::Quick => (vec![10], vec![3.0], vec![10]),
             SweepDepth::Standard => (vec![10, 14], vec![2.5, 3.0], vec![5, 10, 20]),
-            SweepDepth::Comprehensive => (vec![7, 10, 14], vec![2.0, 2.5, 3.0], vec![5, 10, 15, 20]),
+            SweepDepth::Comprehensive => {
+                (vec![7, 10, 14], vec![2.0, 2.5, 3.0], vec![5, 10, 15, 20])
+            }
         };
         Self {
             strategy_type: StrategyTypeId::SupertrendCooldown,
@@ -3773,12 +3883,7 @@ impl StrategyGridConfig {
     pub fn parabolic_sar_filtered_with_depth(depth: SweepDepth) -> Self {
         let (af_starts, af_steps, af_maxs, trend_ma_periods) = match depth {
             SweepDepth::Quick => (vec![0.02], vec![0.02], vec![0.20], vec![50]),
-            SweepDepth::Standard => (
-                vec![0.02, 0.03],
-                vec![0.02],
-                vec![0.20],
-                vec![50, 200],
-            ),
+            SweepDepth::Standard => (vec![0.02, 0.03], vec![0.02], vec![0.20], vec![50, 200]),
             SweepDepth::Comprehensive => (
                 vec![0.01, 0.02, 0.03],
                 vec![0.02],
@@ -3802,12 +3907,7 @@ impl StrategyGridConfig {
     pub fn parabolic_sar_delayed_with_depth(depth: SweepDepth) -> Self {
         let (af_starts, af_steps, af_maxs, delay_bars) = match depth {
             SweepDepth::Quick => (vec![0.02], vec![0.02], vec![0.20], vec![1]),
-            SweepDepth::Standard => (
-                vec![0.02, 0.03],
-                vec![0.02],
-                vec![0.20],
-                vec![1, 2, 3],
-            ),
+            SweepDepth::Standard => (vec![0.02, 0.03], vec![0.02], vec![0.20], vec![1, 2, 3]),
             SweepDepth::Comprehensive => (
                 vec![0.01, 0.02, 0.03],
                 vec![0.02],

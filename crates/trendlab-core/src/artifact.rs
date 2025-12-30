@@ -786,7 +786,10 @@ pub fn create_supertrend_artifact(
             st_map.insert("supertrend".to_string(), st.supertrend);
             st_map.insert("upper_band".to_string(), st.upper_band);
             st_map.insert("lower_band".to_string(), st.lower_band);
-            st_map.insert("is_uptrend".to_string(), if st.is_uptrend { 1.0 } else { 0.0 });
+            st_map.insert(
+                "is_uptrend".to_string(),
+                if st.is_uptrend { 1.0 } else { 0.0 },
+            );
             indicators.insert("supertrend".to_string(), IndicatorValue::Multi(st_map));
         }
 
@@ -813,18 +816,13 @@ pub fn create_supertrend_artifact(
             p.insert("multiplier".to_string(), ParamValue::from(multiplier));
             p
         },
-        pine_expr: Some(format!(
-            "ta.supertrend({}, {})",
-            multiplier, atr_period
-        )),
+        pine_expr: Some(format!("ta.supertrend({}, {})", multiplier, atr_period)),
     }];
 
     // Build rules
     let rules = Rules {
         entry: Rule {
-            condition: format!(
-                "Supertrend flips to uptrend (close crosses above supertrend line)"
-            ),
+            condition: "Supertrend flips to uptrend (close crosses above supertrend line)".to_string(),
             pine_condition: format!(
                 "[supertrend, direction] = ta.supertrend({}, {})\nta.crossover(close, supertrend)",
                 multiplier, atr_period
@@ -832,9 +830,8 @@ pub fn create_supertrend_artifact(
             position_required: Some("flat".to_string()),
         },
         exit: Rule {
-            condition: format!(
-                "Supertrend flips to downtrend (close crosses below supertrend line)"
-            ),
+            condition: "Supertrend flips to downtrend (close crosses below supertrend line)"
+                .to_string(),
             pine_condition: format!(
                 "[supertrend, direction] = ta.supertrend({}, {})\nta.crossunder(close, supertrend)",
                 multiplier, atr_period
@@ -867,7 +864,9 @@ pub fn create_supertrend_artifact(
         parity_vectors: ParityVectors {
             description: Some(format!(
                 "Parity vectors for Supertrend({}/{:.1}) on {} bars",
-                atr_period, multiplier, bars.len()
+                atr_period,
+                multiplier,
+                bars.len()
             )),
             vectors,
         },
@@ -934,7 +933,10 @@ pub fn create_parabolic_sar_artifact(
             sar_map.insert("sar".to_string(), sar.sar);
             sar_map.insert("af".to_string(), sar.af);
             sar_map.insert("ep".to_string(), sar.ep);
-            sar_map.insert("is_uptrend".to_string(), if sar.is_uptrend { 1.0 } else { 0.0 });
+            sar_map.insert(
+                "is_uptrend".to_string(),
+                if sar.is_uptrend { 1.0 } else { 0.0 },
+            );
             indicators.insert("parabolic_sar".to_string(), IndicatorValue::Multi(sar_map));
         }
 
@@ -962,10 +964,7 @@ pub fn create_parabolic_sar_artifact(
             p.insert("af_max".to_string(), ParamValue::from(af_max));
             p
         },
-        pine_expr: Some(format!(
-            "ta.sar({}, {}, {})",
-            af_start, af_step, af_max
-        )),
+        pine_expr: Some(format!("ta.sar({}, {}, {})", af_start, af_step, af_max)),
     }];
 
     // Build rules
@@ -1013,7 +1012,10 @@ pub fn create_parabolic_sar_artifact(
         parity_vectors: ParityVectors {
             description: Some(format!(
                 "Parity vectors for Parabolic SAR({:.2}/{:.2}/{:.2}) on {} bars",
-                af_start, af_step, af_max, bars.len()
+                af_start,
+                af_step,
+                af_max,
+                bars.len()
             )),
             vectors,
         },
@@ -1041,7 +1043,13 @@ pub fn create_artifact_from_config(
         StrategyConfigId::Donchian {
             entry_lookback,
             exit_lookback,
-        } => create_donchian_artifact(bars, *entry_lookback, *exit_lookback, cost_model, &dummy_result),
+        } => create_donchian_artifact(
+            bars,
+            *entry_lookback,
+            *exit_lookback,
+            cost_model,
+            &dummy_result,
+        ),
 
         StrategyConfigId::TurtleS1 => {
             // Turtle S1: 20-day breakout, 10-day exit

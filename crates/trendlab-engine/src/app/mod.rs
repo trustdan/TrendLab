@@ -357,8 +357,8 @@ impl App {
                         .iter()
                         .filter_map(|v| v.parse::<i32>().ok())
                         .map(|n| {
-                            randomization::round_to_step_f64((n as f64) * entry_factor, 5.0).max(5.0)
-                                as i32
+                            randomization::round_to_step_f64((n as f64) * entry_factor, 5.0)
+                                .max(5.0) as i32
                         })
                         .map(|n| n.to_string())
                         .collect();
@@ -1662,10 +1662,8 @@ impl App {
 
                     // Check if file already exists
                     if output_file.exists() {
-                        self.status_message = format!(
-                            "Pine script already exists: {}",
-                            output_file.display()
-                        );
+                        self.status_message =
+                            format!("Pine script already exists: {}", output_file.display());
                         return;
                     }
 
@@ -1688,10 +1686,8 @@ impl App {
                     // Write the file
                     match std::fs::write(&output_file, &pine_content) {
                         Ok(_) => {
-                            self.status_message = format!(
-                                "Pine script saved: {}",
-                                output_file.display()
-                            );
+                            self.status_message =
+                                format!("Pine script saved: {}", output_file.display());
                         }
                         Err(e) => {
                             self.status_message = format!("Failed to write Pine script: {}", e);

@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use trendlab_core::{MultiStrategySweepResult, MultiSweepResult, StatisticalAnalysis, SweepConfigResult};
+use trendlab_core::{
+    MultiStrategySweepResult, MultiSweepResult, StatisticalAnalysis, SweepConfigResult,
+};
 
 /// View mode for the Results panel (per-ticker vs aggregated portfolio)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

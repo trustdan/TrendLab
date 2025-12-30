@@ -8,9 +8,12 @@ use ratatui::{
     Frame,
 };
 
-use trendlab_engine::app::{App, Panel, ResultsViewMode};
 use crate::ui::{colors, panel_block};
 use trendlab_core::ConfidenceGrade;
+use trendlab_engine::app::{App, Panel, ResultsViewMode};
+
+/// Sector statistics: (sector_name, hit_rate_percentage)
+type SectorStats = Vec<(String, f64)>;
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     // Split for table and help text
@@ -464,12 +467,16 @@ fn draw_aggregated_view(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
                     .map(|s| s.max_drawdown)
                     .fold(0.0_f64, f64::min);
 
-                let best_cagr = summaries
-                    .iter()
-                    .max_by(|a, b| a.cagr.partial_cmp(&b.cagr).unwrap_or(std::cmp::Ordering::Equal));
-                let best_sharpe = summaries
-                    .iter()
-                    .max_by(|a, b| a.sharpe.partial_cmp(&b.sharpe).unwrap_or(std::cmp::Ordering::Equal));
+                let best_cagr = summaries.iter().max_by(|a, b| {
+                    a.cagr
+                        .partial_cmp(&b.cagr)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let best_sharpe = summaries.iter().max_by(|a, b| {
+                    a.sharpe
+                        .partial_cmp(&b.sharpe)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
 
                 lines.push(Line::from(vec![
                     Span::styled("  Avg CAGR: ", Style::default().fg(colors::FG_DARK)),
@@ -776,7 +783,11 @@ fn draw_leaderboard_table(
 
             // Row 3: Best symbols by Sharpe
             let mut sorted_symbols: Vec<_> = entry.per_symbol_metrics.iter().collect();
-            sorted_symbols.sort_by(|a, b| b.1.sharpe.partial_cmp(&a.1.sharpe).unwrap_or(std::cmp::Ordering::Equal));
+            sorted_symbols.sort_by(|a, b| {
+                b.1.sharpe
+                    .partial_cmp(&a.1.sharpe)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
 
             let best_symbols: String = sorted_symbols
                 .iter()
@@ -815,7 +826,10 @@ fn draw_leaderboard_table(
                     .map(|(s, r)| format!("{}({:.0}%)", s, r))
                     .collect::<Vec<_>>()
                     .join(" ");
-                let sector_line = format!("\u{2514}\u{2500} Sectors Best: {} | Worst: {}", best_str, worst_str);
+                let sector_line = format!(
+                    "\u{2514}\u{2500} Sectors Best: {} | Worst: {}",
+                    best_str, worst_str
+                );
                 rows.push(detail_row(sector_line, detail_style));
             } else {
                 // Closing line without sectors
@@ -933,7 +947,11 @@ fn draw_leaderboard_details(f: &mut Frame, app: &App, area: Rect, is_active: boo
 
             // Best/Worst symbols
             let mut sorted_symbols: Vec<_> = entry.per_symbol_metrics.iter().collect();
-            sorted_symbols.sort_by(|a, b| b.1.sharpe.partial_cmp(&a.1.sharpe).unwrap_or(std::cmp::Ordering::Equal));
+            sorted_symbols.sort_by(|a, b| {
+                b.1.sharpe
+                    .partial_cmp(&a.1.sharpe)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
 
             let best_symbols = sorted_symbols
                 .iter()
@@ -1025,7 +1043,7 @@ fn draw_leaderboard_details(f: &mut Frame, app: &App, area: Rect, is_active: boo
 fn compute_sector_stats(
     per_symbol_metrics: &std::collections::HashMap<String, trendlab_core::Metrics>,
     per_symbol_sectors: &std::collections::HashMap<String, String>,
-) -> (Vec<(String, f64)>, Vec<(String, f64)>) {
+) -> (SectorStats, SectorStats) {
     use std::collections::HashMap;
 
     // Group symbols by sector and compute hit rate per sector

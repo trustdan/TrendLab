@@ -9,8 +9,8 @@ use ratatui::{
     Frame,
 };
 
-use trendlab_engine::app::App;
 use crate::ui::{colors, panel_block};
+use trendlab_engine::app::App;
 
 use super::colors::CURVE_COLORS;
 use super::empty_states::{draw_empty_chart, draw_no_multi_data};
@@ -66,28 +66,27 @@ pub fn draw_single_equity_chart(f: &mut Frame, app: &App, area: Rect, is_active:
         .data(&equity_data)];
 
     // Add drawdown overlay if enabled (also sliced to visible range)
-    let drawdown_data: Vec<(f64, f64)> = if app.chart.show_drawdown
-        && !app.chart.drawdown_curve.is_empty()
-    {
-        let dd_len = app.chart.drawdown_curve.len();
-        // Calculate safe bounds for drawdown curve
-        let dd_start = start_idx.min(dd_len);
-        let dd_end = end_idx.min(dd_len);
+    let drawdown_data: Vec<(f64, f64)> =
+        if app.chart.show_drawdown && !app.chart.drawdown_curve.is_empty() {
+            let dd_len = app.chart.drawdown_curve.len();
+            // Calculate safe bounds for drawdown curve
+            let dd_start = start_idx.min(dd_len);
+            let dd_end = end_idx.min(dd_len);
 
-        if dd_start < dd_end {
-            // Scale drawdown to fit in the same chart (inverted, as percentage)
-            let dd_scale = (y_max - y_min) / 50.0; // Max 50% drawdown fills chart
-            app.chart.drawdown_curve[dd_start..dd_end]
-                .iter()
-                .enumerate()
-                .map(|(i, dd)| (i as f64, y_max + dd * dd_scale))
-                .collect()
+            if dd_start < dd_end {
+                // Scale drawdown to fit in the same chart (inverted, as percentage)
+                let dd_scale = (y_max - y_min) / 50.0; // Max 50% drawdown fills chart
+                app.chart.drawdown_curve[dd_start..dd_end]
+                    .iter()
+                    .enumerate()
+                    .map(|(i, dd)| (i as f64, y_max + dd * dd_scale))
+                    .collect()
+            } else {
+                vec![]
+            }
         } else {
             vec![]
-        }
-    } else {
-        vec![]
-    };
+        };
 
     if app.chart.show_drawdown && !drawdown_data.is_empty() {
         datasets.push(

@@ -380,8 +380,7 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
 
         KeyCode::Char(' ') => {
             // Space to toggle selection
-            if app.active_panel == Panel::Strategy
-                && app.strategy.focus == StrategyFocus::Selection
+            if app.active_panel == Panel::Strategy && app.strategy.focus == StrategyFocus::Selection
             {
                 app.handle_strategy_space();
             } else {
@@ -1272,12 +1271,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             index,
             total,
         } => {
-            app.status_message = format!(
-                "YOLO: Fetching {} ({}/{})...",
-                symbol,
-                index + 1,
-                total
-            );
+            app.status_message = format!("YOLO: Fetching {} ({}/{})...", symbol, index + 1, total);
         }
 
         WorkerUpdate::YoloDataRefreshComplete {

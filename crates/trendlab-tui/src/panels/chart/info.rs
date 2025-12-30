@@ -8,8 +8,8 @@ use ratatui::{
     Frame,
 };
 
-use trendlab_engine::app::App;
 use crate::ui::{colors, panel_block};
+use trendlab_engine::app::App;
 
 /// Draw the chart info/statistics panel at the bottom
 pub fn draw_chart_info(f: &mut Frame, app: &App, area: Rect, is_active: bool) {

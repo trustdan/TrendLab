@@ -14,8 +14,8 @@ use ratatui::{
     Frame,
 };
 
-use trendlab_engine::app::{App, Panel, StrategyCategory, StrategyFocus, StrategyType};
 use crate::ui::{colors, panel_block};
+use trendlab_engine::app::{App, Panel, StrategyCategory, StrategyFocus, StrategyType};
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let is_active = app.active_panel == Panel::Strategy;

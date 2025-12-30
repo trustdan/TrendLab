@@ -12,8 +12,8 @@ use ratatui::{
     Frame,
 };
 
-use trendlab_engine::app::App;
 use crate::ui::colors;
+use trendlab_engine::app::App;
 
 /// Draw volume bars subplot
 pub fn draw_volume_bars(f: &mut Frame, app: &App, area: Rect) {

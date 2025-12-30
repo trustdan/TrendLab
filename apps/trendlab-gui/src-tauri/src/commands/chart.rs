@@ -185,9 +185,8 @@ pub fn get_chart_state(state: State<'_, AppState>) -> ChartState {
     let selected_index = engine.chart.selected_result_index;
 
     // Get config_id from selected result if available
-    let config_id = selected_index.and_then(|idx| {
-        engine.results.results.get(idx).map(|r| r.config_id.id())
-    });
+    let config_id =
+        selected_index.and_then(|idx| engine.results.results.get(idx).map(|r| r.config_id.id()));
     drop(engine);
 
     let mode = match view_mode {
@@ -454,7 +453,10 @@ pub fn get_multi_ticker_curves(
         for (i, (symbol, sweep_result)) in multi.symbol_results.iter().enumerate() {
             // Get best result by Sharpe for this symbol
             if let Some(best) = sweep_result.config_results.iter().max_by(|a, b| {
-                a.metrics.sharpe.partial_cmp(&b.metrics.sharpe).unwrap_or(std::cmp::Ordering::Equal)
+                a.metrics
+                    .sharpe
+                    .partial_cmp(&b.metrics.sharpe)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             }) {
                 let data: Vec<EquityPoint> = best
                     .backtest_result
@@ -512,9 +514,12 @@ pub fn get_portfolio_curve(state: State<'_, AppState>) -> Result<Vec<EquityPoint
     let mut best_results: Vec<&trendlab_core::SweepConfigResult> = Vec::new();
 
     if let Some(ref multi) = engine.results.multi_sweep_result {
-        for (_symbol, sweep_result) in &multi.symbol_results {
+        for sweep_result in multi.symbol_results.values() {
             if let Some(best) = sweep_result.config_results.iter().max_by(|a, b| {
-                a.metrics.sharpe.partial_cmp(&b.metrics.sharpe).unwrap_or(std::cmp::Ordering::Equal)
+                a.metrics
+                    .sharpe
+                    .partial_cmp(&b.metrics.sharpe)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             }) {
                 best_results.push(best);
             }
@@ -522,7 +527,10 @@ pub fn get_portfolio_curve(state: State<'_, AppState>) -> Result<Vec<EquityPoint
     } else if !engine.results.results.is_empty() {
         // Fallback: use all results as a single "portfolio"
         if let Some(best) = engine.results.results.iter().max_by(|a, b| {
-            a.metrics.sharpe.partial_cmp(&b.metrics.sharpe).unwrap_or(std::cmp::Ordering::Equal)
+            a.metrics
+                .sharpe
+                .partial_cmp(&b.metrics.sharpe)
+                .unwrap_or(std::cmp::Ordering::Equal)
         }) {
             best_results.push(best);
         }
@@ -592,13 +600,18 @@ pub fn get_strategy_curves(state: State<'_, AppState>) -> Result<Vec<NamedEquity
     // Use multi_strategy_result if available
     if let Some(ref multi) = engine.results.multi_strategy_result {
         // Collect best result per strategy type
-        let mut best_by_strategy: std::collections::HashMap<String, &trendlab_core::SweepConfigResult> =
-            std::collections::HashMap::new();
+        let mut best_by_strategy: std::collections::HashMap<
+            String,
+            &trendlab_core::SweepConfigResult,
+        > = std::collections::HashMap::new();
 
         for ((_symbol, strategy_type), sweep_result) in &multi.results {
             let strategy_name = strategy_type.name().to_string();
             if let Some(best) = sweep_result.config_results.iter().max_by(|a, b| {
-                a.metrics.sharpe.partial_cmp(&b.metrics.sharpe).unwrap_or(std::cmp::Ordering::Equal)
+                a.metrics
+                    .sharpe
+                    .partial_cmp(&b.metrics.sharpe)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             }) {
                 if let Some(existing) = best_by_strategy.get(&strategy_name) {
                     if best.metrics.sharpe > existing.metrics.sharpe {
@@ -631,7 +644,10 @@ pub fn get_strategy_curves(state: State<'_, AppState>) -> Result<Vec<NamedEquity
         // Fallback: use current results (single strategy likely)
         // Group by config pattern (since we don't have strategy name directly)
         if let Some(best) = engine.results.results.iter().max_by(|a, b| {
-            a.metrics.sharpe.partial_cmp(&b.metrics.sharpe).unwrap_or(std::cmp::Ordering::Equal)
+            a.metrics
+                .sharpe
+                .partial_cmp(&b.metrics.sharpe)
+                .unwrap_or(std::cmp::Ordering::Equal)
         }) {
             let data: Vec<EquityPoint> = best
                 .backtest_result

@@ -8,8 +8,8 @@ use ratatui::{
     Frame,
 };
 
-use trendlab_engine::app::{App, DataViewMode, OperationState, Panel};
 use crate::ui::{colors, panel_block};
+use trendlab_engine::app::{App, DataViewMode, OperationState, Panel};
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let is_active = app.active_panel == Panel::Data;

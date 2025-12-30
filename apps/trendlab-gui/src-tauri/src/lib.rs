@@ -35,10 +35,7 @@ async fn log_forwarder(
 
 /// Forward worker updates to the React frontend.
 /// This runs in an async task, polling the std::sync::mpsc receiver.
-fn worker_update_bridge(
-    update_rx: Receiver<WorkerUpdate>,
-    app_handle: tauri::AppHandle,
-) {
+fn worker_update_bridge(update_rx: Receiver<WorkerUpdate>, app_handle: tauri::AppHandle) {
     // Run in a blocking task since std::sync::mpsc::Receiver is not async
     std::thread::spawn(move || {
         while let Ok(update) = update_rx.recv() {
@@ -90,7 +87,11 @@ fn apply_worker_update(engine: &mut trendlab_engine::app::App, update: &WorkerUp
         }
 
         // Fetch progress
-        WorkerUpdate::FetchStarted { symbol, index, total } => {
+        WorkerUpdate::FetchStarted {
+            symbol,
+            index,
+            total,
+        } => {
             engine.operation = OperationState::FetchingData {
                 current_symbol: symbol.clone(),
                 completed: *index,
@@ -113,7 +114,11 @@ fn apply_worker_update(engine: &mut trendlab_engine::app::App, update: &WorkerUp
         }
 
         // Cache load
-        WorkerUpdate::CacheLoadStarted { symbol, index, total } => {
+        WorkerUpdate::CacheLoadStarted {
+            symbol,
+            index,
+            total,
+        } => {
             engine.operation = OperationState::FetchingData {
                 current_symbol: symbol.clone(),
                 completed: *index,
@@ -155,7 +160,10 @@ fn apply_worker_update(engine: &mut trendlab_engine::app::App, update: &WorkerUp
         }
 
         // Multi-sweep progress
-        WorkerUpdate::MultiSweepStarted { total_symbols, configs_per_symbol } => {
+        WorkerUpdate::MultiSweepStarted {
+            total_symbols,
+            configs_per_symbol,
+        } => {
             engine.operation = OperationState::RunningSweep {
                 completed: 0,
                 total: total_symbols * configs_per_symbol,
@@ -175,18 +183,28 @@ fn apply_worker_update(engine: &mut trendlab_engine::app::App, update: &WorkerUp
         }
 
         // Multi-strategy sweep
-        WorkerUpdate::MultiStrategySweepStarted { total_symbols, total_strategies, total_configs } => {
+        WorkerUpdate::MultiStrategySweepStarted {
+            total_symbols,
+            total_strategies,
+            total_configs,
+        } => {
             engine.operation = OperationState::RunningSweep {
                 completed: 0,
                 total: *total_configs,
             };
             tracing::info!(
-                total_symbols, total_strategies, total_configs,
+                total_symbols,
+                total_strategies,
+                total_configs,
                 "Multi-strategy sweep started"
             );
         }
         WorkerUpdate::MultiStrategySweepStrategyStarted { .. } => {}
-        WorkerUpdate::MultiStrategySweepProgress { completed_configs, total_configs, .. } => {
+        WorkerUpdate::MultiStrategySweepProgress {
+            completed_configs,
+            total_configs,
+            ..
+        } => {
             engine.operation = OperationState::RunningSweep {
                 completed: *completed_configs,
                 total: *total_configs,
@@ -203,20 +221,36 @@ fn apply_worker_update(engine: &mut trendlab_engine::app::App, update: &WorkerUp
         }
 
         // Analysis
-        WorkerUpdate::AnalysisComplete { analysis_id, analysis } => {
-            engine.results.analysis_cache.insert(analysis_id.clone(), analysis.clone());
+        WorkerUpdate::AnalysisComplete {
+            analysis_id,
+            analysis,
+        } => {
+            engine
+                .results
+                .analysis_cache
+                .insert(analysis_id.clone(), analysis.clone());
         }
         WorkerUpdate::AnalysisError { analysis_id, error } => {
             tracing::error!(analysis_id, error, "Analysis failed");
         }
 
         // YOLO mode
-        WorkerUpdate::YoloIterationComplete { iteration, per_symbol_leaderboard, cross_symbol_leaderboard, .. } => {
+        WorkerUpdate::YoloIterationComplete {
+            iteration,
+            per_symbol_leaderboard,
+            cross_symbol_leaderboard,
+            ..
+        } => {
             engine.yolo.iteration = *iteration;
             engine.yolo.session_leaderboard = per_symbol_leaderboard.clone();
             engine.yolo.session_cross_symbol_leaderboard = Some(cross_symbol_leaderboard.clone());
         }
-        WorkerUpdate::YoloStopped { per_symbol_leaderboard, cross_symbol_leaderboard, total_iterations, .. } => {
+        WorkerUpdate::YoloStopped {
+            per_symbol_leaderboard,
+            cross_symbol_leaderboard,
+            total_iterations,
+            ..
+        } => {
             engine.yolo.enabled = false;
             engine.yolo.iteration = *total_iterations;
             engine.yolo.session_leaderboard = per_symbol_leaderboard.clone();
@@ -255,64 +289,99 @@ fn emit_worker_update(app_handle: &tauri::AppHandle, update: &WorkerUpdate) {
         WorkerUpdate::SearchResults { .. } => {
             let _ = app_handle.emit("worker:search-results", ());
         }
-        WorkerUpdate::FetchStarted { symbol, index, total } => {
-            let _ = app_handle.emit("worker:fetch-started", serde_json::json!({
-                "symbol": symbol,
-                "index": index,
-                "total": total
-            }));
+        WorkerUpdate::FetchStarted {
+            symbol,
+            index,
+            total,
+        } => {
+            let _ = app_handle.emit(
+                "worker:fetch-started",
+                serde_json::json!({
+                    "symbol": symbol,
+                    "index": index,
+                    "total": total
+                }),
+            );
         }
         WorkerUpdate::FetchComplete { symbol, .. } => {
-            let _ = app_handle.emit("worker:fetch-complete", serde_json::json!({
-                "symbol": symbol
-            }));
+            let _ = app_handle.emit(
+                "worker:fetch-complete",
+                serde_json::json!({
+                    "symbol": symbol
+                }),
+            );
         }
         WorkerUpdate::FetchAllComplete { symbols_fetched } => {
-            let _ = app_handle.emit("worker:fetch-all-complete", serde_json::json!({
-                "symbolsFetched": symbols_fetched
-            }));
+            let _ = app_handle.emit(
+                "worker:fetch-all-complete",
+                serde_json::json!({
+                    "symbolsFetched": symbols_fetched
+                }),
+            );
         }
         WorkerUpdate::SweepStarted { total_configs } => {
-            let _ = app_handle.emit("worker:sweep-started", serde_json::json!({
-                "totalConfigs": total_configs
-            }));
+            let _ = app_handle.emit(
+                "worker:sweep-started",
+                serde_json::json!({
+                    "totalConfigs": total_configs
+                }),
+            );
         }
         WorkerUpdate::SweepProgress { completed, total } => {
-            let _ = app_handle.emit("worker:sweep-progress", serde_json::json!({
-                "completed": completed,
-                "total": total
-            }));
+            let _ = app_handle.emit(
+                "worker:sweep-progress",
+                serde_json::json!({
+                    "completed": completed,
+                    "total": total
+                }),
+            );
         }
         WorkerUpdate::SweepComplete { .. } => {
             let _ = app_handle.emit("worker:sweep-complete", ());
         }
         WorkerUpdate::SweepCancelled { completed } => {
-            let _ = app_handle.emit("worker:sweep-cancelled", serde_json::json!({
-                "completed": completed
-            }));
+            let _ = app_handle.emit(
+                "worker:sweep-cancelled",
+                serde_json::json!({
+                    "completed": completed
+                }),
+            );
         }
         WorkerUpdate::MultiSweepComplete { .. } => {
             let _ = app_handle.emit("worker:sweep-complete", ());
         }
         WorkerUpdate::MultiStrategySweepStarted { total_configs, .. } => {
-            let _ = app_handle.emit("worker:sweep-started", serde_json::json!({
-                "totalConfigs": total_configs
-            }));
+            let _ = app_handle.emit(
+                "worker:sweep-started",
+                serde_json::json!({
+                    "totalConfigs": total_configs
+                }),
+            );
         }
         WorkerUpdate::MultiStrategySweepStrategyStarted { .. } => {}
-        WorkerUpdate::MultiStrategySweepProgress { completed_configs, total_configs, .. } => {
-            let _ = app_handle.emit("worker:sweep-progress", serde_json::json!({
-                "completed": completed_configs,
-                "total": total_configs
-            }));
+        WorkerUpdate::MultiStrategySweepProgress {
+            completed_configs,
+            total_configs,
+            ..
+        } => {
+            let _ = app_handle.emit(
+                "worker:sweep-progress",
+                serde_json::json!({
+                    "completed": completed_configs,
+                    "total": total_configs
+                }),
+            );
         }
         WorkerUpdate::MultiStrategySweepComplete { .. } => {
             let _ = app_handle.emit("worker:sweep-complete", ());
         }
         WorkerUpdate::YoloIterationComplete { iteration, .. } => {
-            let _ = app_handle.emit("worker:yolo-iteration", serde_json::json!({
-                "iteration": iteration
-            }));
+            let _ = app_handle.emit(
+                "worker:yolo-iteration",
+                serde_json::json!({
+                    "iteration": iteration
+                }),
+            );
         }
         WorkerUpdate::YoloStopped { .. } => {
             let _ = app_handle.emit("worker:yolo-stopped", ());

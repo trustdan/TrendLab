@@ -8,8 +8,8 @@ use ratatui::{
     Frame,
 };
 
-use trendlab_engine::app::{App, ChartViewMode};
 use crate::ui::colors;
+use trendlab_engine::app::{App, ChartViewMode};
 
 use super::formatters::{format_price, format_value, format_volume, trend_symbol};
 

@@ -1882,6 +1882,13 @@ async fn handle_yolo_mode(
     // Always set the requested date range (overrides any previous range stored)
     cross_symbol_leaderboard.set_requested_range(start, end);
 
+    // Track the intended span once so we can drop short-history symbols later.
+    let requested_span_days = (end - start).num_days().abs().max(1) as f64;
+    // Allow some slack for newer listings (e.g., IPOs) without letting them
+    // collapse the whole portfolio window.
+    const YOLO_MAX_START_LAG_DAYS: i64 = 365; // 1 year after requested start
+    const YOLO_MIN_COVERAGE_RATIO: f64 = 0.60; // Require at least 60% of span
+
     let mut iteration = cross_symbol_leaderboard.total_iterations;
 
     // Create seeded RNG for reproducibility (but different each run)
@@ -2044,7 +2051,11 @@ async fn handle_yolo_mode(
             symbols_failed: failed,
         });
 
-        info!(refreshed = refreshed, failed = failed, "Data refresh complete");
+        info!(
+            refreshed = refreshed,
+            failed = failed,
+            "Data refresh complete"
+        );
     }
 
     // =============================================================================
@@ -2229,6 +2240,32 @@ async fn handle_yolo_mode(
                     }
                 }
 
+                // Drop symbols that don't have enough coverage for the requested window.
+                if !per_symbol_dates.is_empty() {
+                    let mut to_prune: Vec<String> = Vec::new();
+                    for (sym, dates) in &per_symbol_dates {
+                        if dates.is_empty() {
+                            to_prune.push(sym.clone());
+                            continue;
+                        }
+                        let sym_start = dates.first().map(|d| d.date_naive()).unwrap_or(start);
+                        let sym_end = dates.last().map(|d| d.date_naive()).unwrap_or(sym_start);
+                        let sym_span_days = (sym_end - sym_start).num_days().abs().max(1) as f64;
+                        let coverage_ratio = sym_span_days / requested_span_days;
+                        let start_lag = (sym_start - start).num_days();
+
+                        if start_lag > YOLO_MAX_START_LAG_DAYS || coverage_ratio < YOLO_MIN_COVERAGE_RATIO {
+                            to_prune.push(sym.clone());
+                        }
+                    }
+
+                    for sym in to_prune {
+                        per_symbol_metrics.remove(&sym);
+                        per_symbol_equity.remove(&sym);
+                        per_symbol_dates.remove(&sym);
+                    }
+                }
+
                 // Skip if no symbols had valid results
                 if per_symbol_metrics.is_empty() {
                     continue;
@@ -2348,7 +2385,10 @@ async fn handle_yolo_mode(
                 strategy_type: best.strategy_type,
                 config: best.config_id.clone(),
                 symbol: best.symbol.clone(),
-                sector: best.symbol.as_ref().and_then(|s| symbol_sector_ids.get(s).cloned()),
+                sector: best
+                    .symbol
+                    .as_ref()
+                    .and_then(|s| symbol_sector_ids.get(s).cloned()),
                 metrics: best.metrics.clone(),
                 equity_curve: best.equity_curve.clone(),
                 dates: vec![], // Could extract from backtest result if needed
@@ -3473,21 +3513,25 @@ fn auto_export_aggregate_artifact(
         .ok_or_else(|| "No symbols in aggregate result".to_string())?;
 
     // Load bars from Parquet with date filtering
-    let lf =
-        scan_symbol_parquet_lazy(parquet_dir, &representative_symbol, "1d", Some(start), Some(end))
-            .map_err(|e| {
-                format!(
-                    "Failed to scan parquet for {}: {}",
-                    representative_symbol, e
-                )
-            })?;
+    let lf = scan_symbol_parquet_lazy(
+        parquet_dir,
+        &representative_symbol,
+        "1d",
+        Some(start),
+        Some(end),
+    )
+    .map_err(|e| {
+        format!(
+            "Failed to scan parquet for {}: {}",
+            representative_symbol, e
+        )
+    })?;
 
     let df = lf
         .collect()
         .map_err(|e| format!("Failed to collect parquet data: {}", e))?;
 
-    let bars = dataframe_to_bars(&df)
-        .map_err(|e| format!("Failed to convert to bars: {}", e))?;
+    let bars = dataframe_to_bars(&df).map_err(|e| format!("Failed to convert to bars: {}", e))?;
 
     if bars.is_empty() {
         return Err(format!(

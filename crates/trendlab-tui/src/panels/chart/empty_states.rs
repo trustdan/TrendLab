@@ -1,11 +1,11 @@
 //! Empty and placeholder state rendering for charts
 
 use ratatui::{
+    layout::Rect,
     style::Style,
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
-    layout::Rect,
 };
 
 use crate::ui::{colors, panel_block};

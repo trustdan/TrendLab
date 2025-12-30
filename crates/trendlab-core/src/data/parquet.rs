@@ -451,7 +451,10 @@ pub fn get_parquet_date_range(
 
     // Get min and max timestamps
     let agg = lf
-        .select([col("ts").min().alias("min_ts"), col("ts").max().alias("max_ts")])
+        .select([
+            col("ts").min().alias("min_ts"),
+            col("ts").max().alias("max_ts"),
+        ])
         .collect()
         .ok()?;
 
@@ -463,14 +466,8 @@ pub fn get_parquet_date_range(
     let max_ts = agg.column("max_ts").ok()?.datetime().ok()?.get(0)?;
 
     // Convert milliseconds to NaiveDate
-    let min_date = Utc
-        .timestamp_millis_opt(min_ts)
-        .single()?
-        .date_naive();
-    let max_date = Utc
-        .timestamp_millis_opt(max_ts)
-        .single()?
-        .date_naive();
+    let min_date = Utc.timestamp_millis_opt(min_ts).single()?.date_naive();
+    let max_date = Utc.timestamp_millis_opt(max_ts).single()?.date_naive();
 
     // Suppress unused variable warnings
     let _ = (min_year, max_year);

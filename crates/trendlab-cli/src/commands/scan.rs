@@ -9,8 +9,7 @@ use polars::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use trendlab_core::{
-    create_strategy_v2, dataframe_to_bars, scan_symbol_parquet_lazy, Position, Signal,
-    StrategySpec,
+    create_strategy_v2, dataframe_to_bars, scan_symbol_parquet_lazy, Position, Signal, StrategySpec,
 };
 
 // =============================================================================
@@ -47,8 +46,9 @@ pub struct WatchlistTicker {
 impl WatchlistConfig {
     /// Load watchlist from a TOML file.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
-        let content = std::fs::read_to_string(path.as_ref())
-            .with_context(|| format!("Failed to read watchlist file: {}", path.as_ref().display()))?;
+        let content = std::fs::read_to_string(path.as_ref()).with_context(|| {
+            format!("Failed to read watchlist file: {}", path.as_ref().display())
+        })?;
         Self::from_toml(&content)
     }
 
@@ -366,9 +366,18 @@ pub async fn execute_scan(
     }
 
     // Build output
-    let entry_count = signals.iter().filter(|s| s.signal == SignalType::Entry).count();
-    let exit_count = signals.iter().filter(|s| s.signal == SignalType::Exit).count();
-    let hold_count = signals.iter().filter(|s| s.signal == SignalType::Hold).count();
+    let entry_count = signals
+        .iter()
+        .filter(|s| s.signal == SignalType::Entry)
+        .count();
+    let exit_count = signals
+        .iter()
+        .filter(|s| s.signal == SignalType::Exit)
+        .count();
+    let hold_count = signals
+        .iter()
+        .filter(|s| s.signal == SignalType::Hold)
+        .count();
 
     Ok(ScanOutput {
         scan_date: today.to_string(),
@@ -408,9 +417,7 @@ pub fn format_scan_output(output: &ScanOutput) -> String {
     };
     result.push_str(&format!(
         "Scanned {} tickers x {} strategies = {} checks\n",
-        output.summary.total_tickers,
-        strategies_per_ticker,
-        output.summary.total_checks
+        output.summary.total_tickers, strategies_per_ticker, output.summary.total_checks
     ));
     result.push_str(&format!(
         "Results: {} entries, {} exits, {} holds\n",
@@ -429,8 +436,16 @@ pub fn format_scan_output(output: &ScanOutput) -> String {
     result.push_str(&format!("{:-<60}\n", ""));
 
     // Collect actionable signals
-    let entries: Vec<_> = output.signals.iter().filter(|s| s.signal == SignalType::Entry).collect();
-    let exits: Vec<_> = output.signals.iter().filter(|s| s.signal == SignalType::Exit).collect();
+    let entries: Vec<_> = output
+        .signals
+        .iter()
+        .filter(|s| s.signal == SignalType::Entry)
+        .collect();
+    let exits: Vec<_> = output
+        .signals
+        .iter()
+        .filter(|s| s.signal == SignalType::Exit)
+        .collect();
 
     if !entries.is_empty() {
         result.push_str(&format!("\n{}\n", "ENTRY SIGNALS".green().bold()));
@@ -485,21 +500,33 @@ mod tests {
         let (spec, name, params) = parse_strategy("donchian:55,20").unwrap();
         assert_eq!(name, "donchian");
         assert_eq!(params, "55,20");
-        assert!(matches!(spec, StrategySpec::DonchianBreakout { entry_lookback: 55, exit_lookback: 20 }));
+        assert!(matches!(
+            spec,
+            StrategySpec::DonchianBreakout {
+                entry_lookback: 55,
+                exit_lookback: 20
+            }
+        ));
     }
 
     #[test]
     fn test_parse_52wk_high() {
         let (spec, name, _) = parse_strategy("52wk_high:252,0.95,0.90").unwrap();
         assert_eq!(name, "52wk_high");
-        assert!(matches!(spec, StrategySpec::FiftyTwoWeekHigh { period: 252, .. }));
+        assert!(matches!(
+            spec,
+            StrategySpec::FiftyTwoWeekHigh { period: 252, .. }
+        ));
     }
 
     #[test]
     fn test_parse_supertrend() {
         let (spec, name, _) = parse_strategy("supertrend:10,3.0").unwrap();
         assert_eq!(name, "supertrend");
-        assert!(matches!(spec, StrategySpec::Supertrend { atr_period: 10, .. }));
+        assert!(matches!(
+            spec,
+            StrategySpec::Supertrend { atr_period: 10, .. }
+        ));
     }
 
     #[test]

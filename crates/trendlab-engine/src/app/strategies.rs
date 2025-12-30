@@ -197,8 +197,8 @@ impl StrategyType {
             StrategyType::TurtleS2 => 0, // Fixed params
             StrategyType::MACrossover => 3,
             StrategyType::Tsmom => 1,
-            StrategyType::Keltner => 3,    // ema_period, atr_period, multiplier
-            StrategyType::STARC => 3,      // sma_period, atr_period, multiplier
+            StrategyType::Keltner => 3, // ema_period, atr_period, multiplier
+            StrategyType::STARC => 3,   // sma_period, atr_period, multiplier
             StrategyType::Supertrend => 2, // atr_period, multiplier
             StrategyType::ParabolicSar => 3, // af_start, af_step, af_max
             StrategyType::OpeningRange => 2, // range_bars, period
