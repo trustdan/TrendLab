@@ -2254,7 +2254,9 @@ async fn handle_yolo_mode(
                         let coverage_ratio = sym_span_days / requested_span_days;
                         let start_lag = (sym_start - start).num_days();
 
-                        if start_lag > YOLO_MAX_START_LAG_DAYS || coverage_ratio < YOLO_MIN_COVERAGE_RATIO {
+                        if start_lag > YOLO_MAX_START_LAG_DAYS
+                            || coverage_ratio < YOLO_MIN_COVERAGE_RATIO
+                        {
                             to_prune.push(sym.clone());
                         }
                     }

@@ -822,7 +822,8 @@ pub fn create_supertrend_artifact(
     // Build rules
     let rules = Rules {
         entry: Rule {
-            condition: "Supertrend flips to uptrend (close crosses above supertrend line)".to_string(),
+            condition: "Supertrend flips to uptrend (close crosses above supertrend line)"
+                .to_string(),
             pine_condition: format!(
                 "[supertrend, direction] = ta.supertrend({}, {})\nta.crossover(close, supertrend)",
                 multiplier, atr_period
