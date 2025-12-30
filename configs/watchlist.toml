@@ -18,10 +18,15 @@ description = "Full universe watchlist for signal notifications"
 #   psar:af_start,af_step,af_max - Parabolic SAR (e.g., "psar:0.02,0.02,0.2")
 #   ma_cross:fast,slow,type      - MA crossover (e.g., "ma_cross:50,200,sma")
 #   tsmom:lookback               - Time-series momentum (e.g., "tsmom:252")
+#
+# Top 3 from YOLO sweep (Dec 2025):
+#   #1 52wk_high:80,0.70,0.59  - Avg Sharpe 0.583, Hit Rate 94.1%
+#   #2 supertrend:17,3.2       - Avg Sharpe 0.413, Hit Rate 95.9%
+#   #3 psar:0.05,0.01,0.33     - Avg Sharpe 0.413, Hit Rate 96.4%
 default_strategies = [
-    "donchian:55,20",
-    "52wk_high:252,0.95,0.90",
-    "supertrend:10,3.0",
+    "52wk_high:80,0.70,0.59",
+    "supertrend:17,3.2",
+    "psar:0.05,0.01,0.33",
 ]
 
 # =============================================================================
