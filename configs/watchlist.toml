@@ -19,14 +19,14 @@ description = "Full universe watchlist for signal notifications"
 #   ma_cross:fast,slow,type      - MA crossover (e.g., "ma_cross:50,200,sma")
 #   tsmom:lookback               - Time-series momentum (e.g., "tsmom:252")
 #
-# Top 3 from YOLO sweep (Dec 2025):
-#   #1 52wk_high:80,0.70,0.59  - Avg Sharpe 0.583, Hit Rate 94.1%
-#   #2 supertrend:17,3.2       - Avg Sharpe 0.413, Hit Rate 95.9%
-#   #3 psar:0.05,0.01,0.33     - Avg Sharpe 0.413, Hit Rate 96.4%
+# Top 3 from YOLO sweep (Dec 2025, 2005-2025 backtest):
+#   #1 supertrend:5,4.2         - Avg Sharpe 0.369, OOS 0.15, Hit Rate 98.8%
+#   #2 psar:0.10,0.01,0.36      - Avg Sharpe 0.367, OOS 0.15, Hit Rate 98.8%
+#   #3 52wk_high:50,0.92,0.40   - Avg Sharpe 0.364, OOS 0.15, Hit Rate 98.8%
 default_strategies = [
-    "52wk_high:80,0.70,0.59",
-    "supertrend:17,3.2",
-    "psar:0.05,0.01,0.33",
+    "supertrend:5,4.2",
+    "psar:0.10,0.01,0.36",
+    "52wk_high:50,0.92,0.40",
 ]
 
 # =============================================================================
