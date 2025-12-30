@@ -1,0 +1,1539 @@
+# TrendLab Daily Signal Watchlist
+# Full universe for signal notifications - mirrors YOLO mode tickers.
+#
+# Usage:
+#   trendlab-cli scan --watchlist configs/watchlist.toml --output signals.json
+
+[watchlist]
+name = "Daily Alerts"
+description = "Full universe watchlist for signal notifications"
+
+# Default strategies applied to all tickers unless overridden.
+# Format: "strategy_type:param1,param2,..."
+#
+# Supported strategies:
+#   donchian:entry,exit          - Donchian breakout (e.g., "donchian:55,20")
+#   52wk_high:period,entry%,exit% - 52-week high (e.g., "52wk_high:252,0.95,0.90")
+#   supertrend:atr_period,mult   - Supertrend (e.g., "supertrend:10,3.0")
+#   psar:af_start,af_step,af_max - Parabolic SAR (e.g., "psar:0.02,0.02,0.2")
+#   ma_cross:fast,slow,type      - MA crossover (e.g., "ma_cross:50,200,sma")
+#   tsmom:lookback               - Time-series momentum (e.g., "tsmom:252")
+default_strategies = [
+    "donchian:55,20",
+    "52wk_high:252,0.95,0.90",
+    "supertrend:10,3.0",
+]
+
+# =============================================================================
+# EQUITIES BY SECTOR
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Basic Materials (20)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "LIN"
+
+[[tickers]]
+symbol = "NEM"
+
+[[tickers]]
+symbol = "CRH"
+
+[[tickers]]
+symbol = "SHW"
+
+[[tickers]]
+symbol = "ECL"
+
+[[tickers]]
+symbol = "FCX"
+
+[[tickers]]
+symbol = "APD"
+
+[[tickers]]
+symbol = "CTVA"
+
+[[tickers]]
+symbol = "NUE"
+
+[[tickers]]
+symbol = "PPG"
+
+[[tickers]]
+symbol = "IFF"
+
+[[tickers]]
+symbol = "DD"
+
+[[tickers]]
+symbol = "ALB"
+
+[[tickers]]
+symbol = "DOW"
+
+[[tickers]]
+symbol = "LYB"
+
+[[tickers]]
+symbol = "HL"
+
+[[tickers]]
+symbol = "CF"
+
+[[tickers]]
+symbol = "CDE"
+
+[[tickers]]
+symbol = "MOS"
+
+[[tickers]]
+symbol = "SSRM"
+
+# -----------------------------------------------------------------------------
+# Communication Services (20)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "GOOGL"
+
+[[tickers]]
+symbol = "GOOG"
+
+[[tickers]]
+symbol = "META"
+
+[[tickers]]
+symbol = "NFLX"
+
+[[tickers]]
+symbol = "APP"
+
+[[tickers]]
+symbol = "TMUS"
+
+[[tickers]]
+symbol = "DIS"
+
+[[tickers]]
+symbol = "T"
+
+[[tickers]]
+symbol = "VZ"
+
+[[tickers]]
+symbol = "CMCSA"
+
+[[tickers]]
+symbol = "WBD"
+
+[[tickers]]
+symbol = "EA"
+
+[[tickers]]
+symbol = "TTWO"
+
+[[tickers]]
+symbol = "LYV"
+
+[[tickers]]
+symbol = "SATS"
+
+[[tickers]]
+symbol = "FOXA"
+
+[[tickers]]
+symbol = "CHTR"
+
+[[tickers]]
+symbol = "OMC"
+
+[[tickers]]
+symbol = "TTD"
+
+[[tickers]]
+symbol = "NWSA"
+
+# -----------------------------------------------------------------------------
+# Consumer Cyclical (30)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "AMZN"
+
+[[tickers]]
+symbol = "TSLA"
+
+[[tickers]]
+symbol = "HD"
+
+[[tickers]]
+symbol = "MCD"
+
+[[tickers]]
+symbol = "TJX"
+
+[[tickers]]
+symbol = "PDD"
+
+[[tickers]]
+symbol = "LOW"
+
+[[tickers]]
+symbol = "DASH"
+
+[[tickers]]
+symbol = "SBUX"
+
+[[tickers]]
+symbol = "CVNA"
+
+[[tickers]]
+symbol = "NKE"
+
+[[tickers]]
+symbol = "ABNB"
+
+[[tickers]]
+symbol = "ORLY"
+
+[[tickers]]
+symbol = "GM"
+
+[[tickers]]
+symbol = "RCL"
+
+[[tickers]]
+symbol = "ROST"
+
+[[tickers]]
+symbol = "F"
+
+[[tickers]]
+symbol = "CMG"
+
+[[tickers]]
+symbol = "LVS"
+
+[[tickers]]
+symbol = "DHI"
+
+[[tickers]]
+symbol = "YUM"
+
+[[tickers]]
+symbol = "CCL"
+
+[[tickers]]
+symbol = "EBAY"
+
+[[tickers]]
+symbol = "ROL"
+
+[[tickers]]
+symbol = "TSCO"
+
+[[tickers]]
+symbol = "TPR"
+
+[[tickers]]
+symbol = "LEN"
+
+[[tickers]]
+symbol = "LULU"
+
+[[tickers]]
+symbol = "PHM"
+
+[[tickers]]
+symbol = "DRI"
+
+# -----------------------------------------------------------------------------
+# Consumer Defensive (35)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "WMT"
+
+[[tickers]]
+symbol = "COST"
+
+[[tickers]]
+symbol = "PG"
+
+[[tickers]]
+symbol = "KO"
+
+[[tickers]]
+symbol = "PM"
+
+[[tickers]]
+symbol = "PEP"
+
+[[tickers]]
+symbol = "MO"
+
+[[tickers]]
+symbol = "MNST"
+
+[[tickers]]
+symbol = "MDLZ"
+
+[[tickers]]
+symbol = "CL"
+
+[[tickers]]
+symbol = "TGT"
+
+[[tickers]]
+symbol = "KR"
+
+[[tickers]]
+symbol = "EL"
+
+[[tickers]]
+symbol = "KDP"
+
+[[tickers]]
+symbol = "HSY"
+
+[[tickers]]
+symbol = "SYY"
+
+[[tickers]]
+symbol = "KMB"
+
+[[tickers]]
+symbol = "KVUE"
+
+[[tickers]]
+symbol = "DG"
+
+[[tickers]]
+symbol = "KHC"
+
+[[tickers]]
+symbol = "ADM"
+
+[[tickers]]
+symbol = "GIS"
+
+[[tickers]]
+symbol = "DLTR"
+
+[[tickers]]
+symbol = "STZ"
+
+[[tickers]]
+symbol = "CHD"
+
+[[tickers]]
+symbol = "TSN"
+
+[[tickers]]
+symbol = "MKC"
+
+[[tickers]]
+symbol = "BG"
+
+[[tickers]]
+symbol = "HRL"
+
+[[tickers]]
+symbol = "CLX"
+
+[[tickers]]
+symbol = "BF-B"
+
+[[tickers]]
+symbol = "SJM"
+
+[[tickers]]
+symbol = "TAP"
+
+[[tickers]]
+symbol = "CPB"
+
+[[tickers]]
+symbol = "CAG"
+
+# -----------------------------------------------------------------------------
+# Energy (30)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "XOM"
+
+[[tickers]]
+symbol = "CVX"
+
+[[tickers]]
+symbol = "COP"
+
+[[tickers]]
+symbol = "WMB"
+
+[[tickers]]
+symbol = "KMI"
+
+[[tickers]]
+symbol = "EOG"
+
+[[tickers]]
+symbol = "SLB"
+
+[[tickers]]
+symbol = "PSX"
+
+[[tickers]]
+symbol = "VLO"
+
+[[tickers]]
+symbol = "MPC"
+
+[[tickers]]
+symbol = "OKE"
+
+[[tickers]]
+symbol = "BKR"
+
+[[tickers]]
+symbol = "FANG"
+
+[[tickers]]
+symbol = "OXY"
+
+[[tickers]]
+symbol = "EQT"
+
+[[tickers]]
+symbol = "EXE"
+
+[[tickers]]
+symbol = "HAL"
+
+[[tickers]]
+symbol = "DVN"
+
+[[tickers]]
+symbol = "CTRA"
+
+[[tickers]]
+symbol = "APA"
+
+[[tickers]]
+symbol = "CRK"
+
+[[tickers]]
+symbol = "UEC"
+
+[[tickers]]
+symbol = "CNX"
+
+[[tickers]]
+symbol = "AROC"
+
+[[tickers]]
+symbol = "MUR"
+
+[[tickers]]
+symbol = "NE"
+
+[[tickers]]
+symbol = "RIG"
+
+[[tickers]]
+symbol = "MGY"
+
+[[tickers]]
+symbol = "BTU"
+
+[[tickers]]
+symbol = "UUUU"
+
+# -----------------------------------------------------------------------------
+# Financial (40)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "BRK-B"
+
+[[tickers]]
+symbol = "JPM"
+
+[[tickers]]
+symbol = "V"
+
+[[tickers]]
+symbol = "MA"
+
+[[tickers]]
+symbol = "BAC"
+
+[[tickers]]
+symbol = "WFC"
+
+[[tickers]]
+symbol = "MS"
+
+[[tickers]]
+symbol = "GS"
+
+[[tickers]]
+symbol = "AXP"
+
+[[tickers]]
+symbol = "C"
+
+[[tickers]]
+symbol = "BX"
+
+[[tickers]]
+symbol = "SCHW"
+
+[[tickers]]
+symbol = "SPGI"
+
+[[tickers]]
+symbol = "COF"
+
+[[tickers]]
+symbol = "PGR"
+
+[[tickers]]
+symbol = "KKR"
+
+[[tickers]]
+symbol = "HOOD"
+
+[[tickers]]
+symbol = "ICE"
+
+[[tickers]]
+symbol = "MMC"
+
+[[tickers]]
+symbol = "APO"
+
+[[tickers]]
+symbol = "USB"
+
+[[tickers]]
+symbol = "PNC"
+
+[[tickers]]
+symbol = "BK"
+
+[[tickers]]
+symbol = "AJG"
+
+[[tickers]]
+symbol = "TFC"
+
+[[tickers]]
+symbol = "COIN"
+
+[[tickers]]
+symbol = "AFL"
+
+[[tickers]]
+symbol = "NDAQ"
+
+[[tickers]]
+symbol = "PYPL"
+
+[[tickers]]
+symbol = "ARES"
+
+[[tickers]]
+symbol = "MET"
+
+[[tickers]]
+symbol = "AIG"
+
+[[tickers]]
+symbol = "PRU"
+
+[[tickers]]
+symbol = "STT"
+
+[[tickers]]
+symbol = "ACGL"
+
+[[tickers]]
+symbol = "FITB"
+
+[[tickers]]
+symbol = "SYF"
+
+[[tickers]]
+symbol = "IBKR"
+
+[[tickers]]
+symbol = "HBAN"
+
+[[tickers]]
+symbol = "BRO"
+
+# -----------------------------------------------------------------------------
+# Healthcare (35)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "LLY"
+
+[[tickers]]
+symbol = "JNJ"
+
+[[tickers]]
+symbol = "ABBV"
+
+[[tickers]]
+symbol = "UNH"
+
+[[tickers]]
+symbol = "AZN"
+
+[[tickers]]
+symbol = "MRK"
+
+[[tickers]]
+symbol = "TMO"
+
+[[tickers]]
+symbol = "ABT"
+
+[[tickers]]
+symbol = "AMGN"
+
+[[tickers]]
+symbol = "DHR"
+
+[[tickers]]
+symbol = "GILD"
+
+[[tickers]]
+symbol = "PFE"
+
+[[tickers]]
+symbol = "BSX"
+
+[[tickers]]
+symbol = "SYK"
+
+[[tickers]]
+symbol = "MDT"
+
+[[tickers]]
+symbol = "BMY"
+
+[[tickers]]
+symbol = "CVS"
+
+[[tickers]]
+symbol = "ELV"
+
+[[tickers]]
+symbol = "BDX"
+
+[[tickers]]
+symbol = "ZTS"
+
+[[tickers]]
+symbol = "EW"
+
+[[tickers]]
+symbol = "A"
+
+[[tickers]]
+symbol = "GEHC"
+
+[[tickers]]
+symbol = "INSM"
+
+[[tickers]]
+symbol = "DXCM"
+
+[[tickers]]
+symbol = "CNC"
+
+[[tickers]]
+symbol = "INCY"
+
+[[tickers]]
+symbol = "HOLX"
+
+[[tickers]]
+symbol = "COO"
+
+[[tickers]]
+symbol = "BBIO"
+
+[[tickers]]
+symbol = "VTRS"
+
+[[tickers]]
+symbol = "MRNA"
+
+[[tickers]]
+symbol = "BAX"
+
+[[tickers]]
+symbol = "HIMS"
+
+[[tickers]]
+symbol = "PRAX"
+
+# -----------------------------------------------------------------------------
+# Industrials (65)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "GE"
+
+[[tickers]]
+symbol = "RTX"
+
+[[tickers]]
+symbol = "BA"
+
+[[tickers]]
+symbol = "ETN"
+
+[[tickers]]
+symbol = "MMM"
+
+[[tickers]]
+symbol = "CAT"
+
+[[tickers]]
+symbol = "HON"
+
+[[tickers]]
+symbol = "UNP"
+
+[[tickers]]
+symbol = "DE"
+
+[[tickers]]
+symbol = "LMT"
+
+[[tickers]]
+symbol = "UPS"
+
+[[tickers]]
+symbol = "NOC"
+
+[[tickers]]
+symbol = "GD"
+
+[[tickers]]
+symbol = "WM"
+
+[[tickers]]
+symbol = "FDX"
+
+[[tickers]]
+symbol = "EMR"
+
+[[tickers]]
+symbol = "GEV"
+
+[[tickers]]
+symbol = "HWM"
+
+[[tickers]]
+symbol = "JCI"
+
+[[tickers]]
+symbol = "ITW"
+
+[[tickers]]
+symbol = "CSX"
+
+[[tickers]]
+symbol = "PCAR"
+
+[[tickers]]
+symbol = "AME"
+
+[[tickers]]
+symbol = "FAST"
+
+[[tickers]]
+symbol = "FER"
+
+[[tickers]]
+symbol = "DAL"
+
+[[tickers]]
+symbol = "CARR"
+
+[[tickers]]
+symbol = "CPRT"
+
+[[tickers]]
+symbol = "UAL"
+
+[[tickers]]
+symbol = "OTIS"
+
+[[tickers]]
+symbol = "ODFL"
+
+[[tickers]]
+symbol = "IR"
+
+[[tickers]]
+symbol = "VRSK"
+
+[[tickers]]
+symbol = "VLTO"
+
+[[tickers]]
+symbol = "LUV"
+
+[[tickers]]
+symbol = "BE"
+
+[[tickers]]
+symbol = "MAS"
+
+[[tickers]]
+symbol = "KTOS"
+
+[[tickers]]
+symbol = "JOBY"
+
+[[tickers]]
+symbol = "BLDR"
+
+[[tickers]]
+symbol = "GTLS"
+
+[[tickers]]
+symbol = "AOS"
+
+[[tickers]]
+symbol = "FLR"
+
+[[tickers]]
+symbol = "CWST"
+
+[[tickers]]
+symbol = "PL"
+
+[[tickers]]
+symbol = "MIR"
+
+[[tickers]]
+symbol = "ACHR"
+
+[[tickers]]
+symbol = "LGN"
+
+[[tickers]]
+symbol = "SMR"
+
+[[tickers]]
+symbol = "FLY"
+
+[[tickers]]
+symbol = "EOSE"
+
+[[tickers]]
+symbol = "LUNR"
+
+[[tickers]]
+symbol = "PLUG"
+
+[[tickers]]
+symbol = "DNOW"
+
+# -----------------------------------------------------------------------------
+# Real Estate (32)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "PLD"
+
+[[tickers]]
+symbol = "AMT"
+
+[[tickers]]
+symbol = "O"
+
+[[tickers]]
+symbol = "EQIX"
+
+[[tickers]]
+symbol = "CCI"
+
+[[tickers]]
+symbol = "SPG"
+
+[[tickers]]
+symbol = "PSA"
+
+[[tickers]]
+symbol = "WELL"
+
+[[tickers]]
+symbol = "DLR"
+
+[[tickers]]
+symbol = "AVB"
+
+[[tickers]]
+symbol = "EQR"
+
+[[tickers]]
+symbol = "SBAC"
+
+[[tickers]]
+symbol = "VTR"
+
+[[tickers]]
+symbol = "VICI"
+
+[[tickers]]
+symbol = "CSGP"
+
+[[tickers]]
+symbol = "IRM"
+
+[[tickers]]
+symbol = "UDR"
+
+[[tickers]]
+symbol = "WY"
+
+[[tickers]]
+symbol = "INVH"
+
+[[tickers]]
+symbol = "KIM"
+
+[[tickers]]
+symbol = "HST"
+
+[[tickers]]
+symbol = "DOC"
+
+[[tickers]]
+symbol = "ARE"
+
+[[tickers]]
+symbol = "CTRE"
+
+[[tickers]]
+symbol = "COMP"
+
+# -----------------------------------------------------------------------------
+# Technology (104)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "NVDA"
+
+[[tickers]]
+symbol = "AAPL"
+
+[[tickers]]
+symbol = "PLTR"
+
+[[tickers]]
+symbol = "CSCO"
+
+[[tickers]]
+symbol = "MSFT"
+
+[[tickers]]
+symbol = "AMD"
+
+[[tickers]]
+symbol = "AVGO"
+
+[[tickers]]
+symbol = "CRM"
+
+[[tickers]]
+symbol = "ORCL"
+
+[[tickers]]
+symbol = "ADBE"
+
+[[tickers]]
+symbol = "INTC"
+
+[[tickers]]
+symbol = "QCOM"
+
+[[tickers]]
+symbol = "TXN"
+
+[[tickers]]
+symbol = "NOW"
+
+[[tickers]]
+symbol = "MU"
+
+[[tickers]]
+symbol = "AMAT"
+
+[[tickers]]
+symbol = "IBM"
+
+[[tickers]]
+symbol = "LRCX"
+
+[[tickers]]
+symbol = "SHOP"
+
+[[tickers]]
+symbol = "UBER"
+
+[[tickers]]
+symbol = "ANET"
+
+[[tickers]]
+symbol = "APH"
+
+[[tickers]]
+symbol = "ACN"
+
+[[tickers]]
+symbol = "ADI"
+
+[[tickers]]
+symbol = "PANW"
+
+[[tickers]]
+symbol = "CRWD"
+
+[[tickers]]
+symbol = "ARM"
+
+[[tickers]]
+symbol = "ADP"
+
+[[tickers]]
+symbol = "SNPS"
+
+[[tickers]]
+symbol = "DELL"
+
+[[tickers]]
+symbol = "GLW"
+
+[[tickers]]
+symbol = "MRVL"
+
+[[tickers]]
+symbol = "WDC"
+
+[[tickers]]
+symbol = "FTNT"
+
+[[tickers]]
+symbol = "STX"
+
+[[tickers]]
+symbol = "WDAY"
+
+[[tickers]]
+symbol = "NXPI"
+
+[[tickers]]
+symbol = "DDOG"
+
+[[tickers]]
+symbol = "MSTR"
+
+[[tickers]]
+symbol = "TEAM"
+
+[[tickers]]
+symbol = "CTSH"
+
+[[tickers]]
+symbol = "PAYX"
+
+[[tickers]]
+symbol = "XYZ"
+
+[[tickers]]
+symbol = "FISV"
+
+[[tickers]]
+symbol = "SNDK"
+
+[[tickers]]
+symbol = "MCHP"
+
+[[tickers]]
+symbol = "FIS"
+
+[[tickers]]
+symbol = "HPE"
+
+[[tickers]]
+symbol = "TER"
+
+[[tickers]]
+symbol = "FSLR"
+
+[[tickers]]
+symbol = "CRDO"
+
+[[tickers]]
+symbol = "ON"
+
+[[tickers]]
+symbol = "NTAP"
+
+[[tickers]]
+symbol = "HPQ"
+
+[[tickers]]
+symbol = "GPN"
+
+[[tickers]]
+symbol = "CDW"
+
+[[tickers]]
+symbol = "SMCI"
+
+[[tickers]]
+symbol = "FTV"
+
+[[tickers]]
+symbol = "Q"
+
+[[tickers]]
+symbol = "GEN"
+
+[[tickers]]
+symbol = "IONQ"
+
+[[tickers]]
+symbol = "AKAM"
+
+[[tickers]]
+symbol = "DAY"
+
+[[tickers]]
+symbol = "SWKS"
+
+[[tickers]]
+symbol = "QBTS"
+
+[[tickers]]
+symbol = "RGTI"
+
+[[tickers]]
+symbol = "CWAN"
+
+[[tickers]]
+symbol = "APLD"
+
+[[tickers]]
+symbol = "ZETA"
+
+[[tickers]]
+symbol = "CORZ"
+
+[[tickers]]
+symbol = "RUN"
+
+[[tickers]]
+symbol = "DOCN"
+
+[[tickers]]
+symbol = "BOX"
+
+[[tickers]]
+symbol = "SOUN"
+
+[[tickers]]
+symbol = "NAVN"
+
+[[tickers]]
+symbol = "BULL"
+
+[[tickers]]
+symbol = "VIAV"
+
+[[tickers]]
+symbol = "STNE"
+
+[[tickers]]
+symbol = "COMM"
+
+[[tickers]]
+symbol = "BRZE"
+
+[[tickers]]
+symbol = "VRNS"
+
+[[tickers]]
+symbol = "FRSH"
+
+[[tickers]]
+symbol = "ASAN"
+
+[[tickers]]
+symbol = "PAGS"
+
+[[tickers]]
+symbol = "AVPT"
+
+[[tickers]]
+symbol = "RELY"
+
+[[tickers]]
+symbol = "TENB"
+
+[[tickers]]
+symbol = "BTDR"
+
+[[tickers]]
+symbol = "AAOI"
+
+[[tickers]]
+symbol = "BBAI"
+
+[[tickers]]
+symbol = "QUBT"
+
+[[tickers]]
+symbol = "MQ"
+
+[[tickers]]
+symbol = "SONO"
+
+[[tickers]]
+symbol = "PAYO"
+
+[[tickers]]
+symbol = "POWI"
+
+[[tickers]]
+symbol = "AI"
+
+[[tickers]]
+symbol = "CXM"
+
+[[tickers]]
+symbol = "ADEA"
+
+[[tickers]]
+symbol = "SEMR"
+
+# -----------------------------------------------------------------------------
+# Utilities (34)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "EIX"
+
+[[tickers]]
+symbol = "NEE"
+
+[[tickers]]
+symbol = "DUK"
+
+[[tickers]]
+symbol = "AEP"
+
+[[tickers]]
+symbol = "SO"
+
+[[tickers]]
+symbol = "D"
+
+[[tickers]]
+symbol = "SRE"
+
+[[tickers]]
+symbol = "XEL"
+
+[[tickers]]
+symbol = "ED"
+
+[[tickers]]
+symbol = "EXC"
+
+[[tickers]]
+symbol = "WEC"
+
+[[tickers]]
+symbol = "CEG"
+
+[[tickers]]
+symbol = "PEG"
+
+[[tickers]]
+symbol = "AWK"
+
+[[tickers]]
+symbol = "ES"
+
+[[tickers]]
+symbol = "VST"
+
+[[tickers]]
+symbol = "ETR"
+
+[[tickers]]
+symbol = "PCG"
+
+[[tickers]]
+symbol = "NRG"
+
+[[tickers]]
+symbol = "DTE"
+
+[[tickers]]
+symbol = "PPL"
+
+[[tickers]]
+symbol = "FE"
+
+[[tickers]]
+symbol = "CNP"
+
+[[tickers]]
+symbol = "CMS"
+
+[[tickers]]
+symbol = "NI"
+
+[[tickers]]
+symbol = "EVRG"
+
+[[tickers]]
+symbol = "LNT"
+
+[[tickers]]
+symbol = "OKLO"
+
+[[tickers]]
+symbol = "PNW"
+
+[[tickers]]
+symbol = "AES"
+
+[[tickers]]
+symbol = "FLNC"
+
+[[tickers]]
+symbol = "CTRI"
+
+[[tickers]]
+symbol = "HE"
+
+[[tickers]]
+symbol = "NXXT"
+
+[[tickers]]
+symbol = "SAFX"
+
+# =============================================================================
+# ETFs
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Broad Market US Equity (10)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "SPY"
+
+[[tickers]]
+symbol = "VOO"
+
+[[tickers]]
+symbol = "IVV"
+
+[[tickers]]
+symbol = "QQQ"
+
+[[tickers]]
+symbol = "VTI"
+
+[[tickers]]
+symbol = "IWM"
+
+[[tickers]]
+symbol = "DIA"
+
+[[tickers]]
+symbol = "RSP"
+
+[[tickers]]
+symbol = "VXF"
+
+[[tickers]]
+symbol = "SPLG"
+
+# -----------------------------------------------------------------------------
+# Technology ETFs (7)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "XLK"
+
+[[tickers]]
+symbol = "VGT"
+
+[[tickers]]
+symbol = "SMH"
+
+[[tickers]]
+symbol = "SOXX"
+
+[[tickers]]
+symbol = "IGV"
+
+[[tickers]]
+symbol = "FTEC"
+
+[[tickers]]
+symbol = "FDN"
+
+# -----------------------------------------------------------------------------
+# Financials ETFs (5)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "XLF"
+
+[[tickers]]
+symbol = "VFH"
+
+[[tickers]]
+symbol = "KRE"
+
+[[tickers]]
+symbol = "KBE"
+
+[[tickers]]
+symbol = "IAI"
+
+# -----------------------------------------------------------------------------
+# Healthcare ETFs (5)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "XLV"
+
+[[tickers]]
+symbol = "VHT"
+
+[[tickers]]
+symbol = "IBB"
+
+[[tickers]]
+symbol = "XBI"
+
+[[tickers]]
+symbol = "ARKG"
+
+# -----------------------------------------------------------------------------
+# Energy ETFs (5)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "XLE"
+
+[[tickers]]
+symbol = "VDE"
+
+[[tickers]]
+symbol = "XOP"
+
+[[tickers]]
+symbol = "OIH"
+
+[[tickers]]
+symbol = "AMLP"
+
+# -----------------------------------------------------------------------------
+# Industrials ETFs (4)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "XLI"
+
+[[tickers]]
+symbol = "VIS"
+
+[[tickers]]
+symbol = "ITA"
+
+[[tickers]]
+symbol = "PPA"
+
+# -----------------------------------------------------------------------------
+# Consumer Discretionary ETFs (3)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "XLY"
+
+[[tickers]]
+symbol = "VCR"
+
+[[tickers]]
+symbol = "BITO"
+
+# -----------------------------------------------------------------------------
+# Consumer Staples ETFs (3)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "XLP"
+
+[[tickers]]
+symbol = "VDC"
+
+[[tickers]]
+symbol = "KXI"
+
+# -----------------------------------------------------------------------------
+# Utilities ETFs (2)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "XLU"
+
+[[tickers]]
+symbol = "VPU"
+
+# -----------------------------------------------------------------------------
+# Materials ETFs (6)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "XLB"
+
+[[tickers]]
+symbol = "VAW"
+
+[[tickers]]
+symbol = "GDX"
+
+[[tickers]]
+symbol = "GDXJ"
+
+[[tickers]]
+symbol = "SLV"
+
+[[tickers]]
+symbol = "GLD"
+
+# -----------------------------------------------------------------------------
+# Real Estate ETFs (4)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "VNQ"
+
+[[tickers]]
+symbol = "XLRE"
+
+[[tickers]]
+symbol = "IYR"
+
+[[tickers]]
+symbol = "MORT"
+
+# -----------------------------------------------------------------------------
+# Communications ETFs (2)
+# -----------------------------------------------------------------------------
+[[tickers]]
+symbol = "XLC"
+
+[[tickers]]
+symbol = "VOX"

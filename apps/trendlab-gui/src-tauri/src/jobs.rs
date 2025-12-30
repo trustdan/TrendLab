@@ -1,6 +1,9 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use serde::Serialize;
@@ -57,11 +60,22 @@ pub struct Jobs {
     inner: Arc<Mutex<HashMap<String, (JobStatus, JobHandle)>>>,
 }
 
+// Simple, process-local job ID generator (atomic counter).
+static JOB_COUNTER: AtomicU64 = AtomicU64::new(1);
+
 impl Jobs {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Create and register a new job with an auto-generated ID.
+    pub fn create_new(&self, prefix: &str) -> (String, CancellationToken) {
+        let id_num = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let job_id = format!("{}-{}", prefix, id_num);
+        let token = self.create(job_id.clone());
+        (job_id, token)
     }
 
     pub fn create(&self, job_id: String) -> CancellationToken {

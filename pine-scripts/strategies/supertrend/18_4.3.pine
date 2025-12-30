@@ -1,0 +1,50 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © TrendLab - Generated from Strategy Artifact
+
+//@version=6
+strategy("Supertrend 18/4.3", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=100, initial_capital=100000, commission_type=strategy.commission.percent, commission_value=0.1, slippage=1)
+
+// =============================================================================
+// INPUTS
+// =============================================================================
+atrPeriod = input.int(18, "ATR Period", minval=1)
+multiplier = input.float(4.3, "Multiplier", minval=0.1, step=0.1)
+
+// =============================================================================
+// INDICATOR CALCULATION
+// =============================================================================
+[supertrend, direction] = ta.supertrend(multiplier, atrPeriod)
+
+// Direction: -1 = uptrend (price above supertrend), 1 = downtrend (price below supertrend)
+isUptrend = direction < 0
+isDowntrend = direction > 0
+
+// Detect trend changes
+trendChangeUp = ta.crossunder(direction, 0)    // Direction crosses from positive to negative
+trendChangeDown = ta.crossover(direction, 0)   // Direction crosses from negative to positive
+
+// =============================================================================
+// STRATEGY LOGIC
+// =============================================================================
+// Entry: Supertrend flips to uptrend (direction changes from 1 to -1)
+// Exit: Supertrend flips to downtrend (direction changes from -1 to 1)
+
+if trendChangeUp
+    strategy.entry("Long", strategy.long)
+
+if trendChangeDown
+    strategy.close("Long")
+
+// =============================================================================
+// PLOTTING
+// =============================================================================
+// Plot supertrend line with color based on direction
+supertrendColor = isUptrend ? color.green : color.red
+plot(supertrend, "Supertrend", color=supertrendColor, linewidth=2)
+
+// Plot entry/exit signals
+plotshape(trendChangeUp, "Entry Signal", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(trendChangeDown, "Exit Signal", shape.triangledown, location.abovebar, color.red, size=size.small)
+
+// Background color for trend direction
+bgcolor(isUptrend ? color.new(color.green, 95) : color.new(color.red, 95))

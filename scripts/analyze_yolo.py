@@ -32,8 +32,12 @@ if sys.platform == 'win32':
 import polars as pl
 pl.Config.set_fmt_str_lengths(50)
 
-# Skip matplotlib to avoid numpy crashes on Windows Python 3.13
-MATPLOTLIB_AVAILABLE = False
+# Try to import matplotlib
+try:
+    import matplotlib.pyplot as plt
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
 
 
 # =============================================================================
@@ -394,7 +398,7 @@ def print_dataframe(df: pl.DataFrame, title: str = "", max_rows: int = 20):
 
 
 def create_charts(strategy_comparison: pl.DataFrame, sector_perf: pl.DataFrame,
-                  robustness: pl.DataFrame, output_dir: Path):
+                  robustness: pl.DataFrame, combo_perf: pl.DataFrame, output_dir: Path):
     """Create and save analysis charts."""
     if not MATPLOTLIB_AVAILABLE:
         print("Matplotlib not available - skipping charts")
@@ -420,14 +424,55 @@ def create_charts(strategy_comparison: pl.DataFrame, sector_perf: pl.DataFrame,
     plt.savefig(output_dir / 'strategy_comparison.png', dpi=150)
     plt.close()
 
-    # 2. Sector performance
+    # 2. Best strategy per sector (actionable chart)
+    # Get the best strategy for each sector
+    best_per_sector = combo_perf.group_by('sector').agg([
+        pl.col('strategy_type').first().alias('best_strategy'),
+        pl.col('median_sharpe').first().alias('best_sharpe'),
+    ]).sort('best_sharpe', descending=True)
+
+    fig, ax = plt.subplots(figsize=(14, 8))
+    sectors = best_per_sector['sector'].to_list()
+    sector_sharpes = best_per_sector['best_sharpe'].to_list()
+    best_strategies = best_per_sector['best_strategy'].to_list()
+
+    # Color bars by strategy type
+    strategy_colors = {
+        'Supertrend': '#2E86AB',
+        'ParabolicSar': '#A23B72',
+        'FiftyTwoWeekHigh': '#F18F01',
+        'LarryWilliams': '#C73E1D',
+        'STARC': '#3B1F2B',
+        'MACrossover': '#95190C',
+        'Tsmom': '#610345',
+        'Aroon': '#044B7F',
+        'Ensemble': '#107E7D',
+        'Donchian': '#B4A0E5',
+    }
+    colors = [strategy_colors.get(s, '#888888') for s in best_strategies]
+
+    bars = ax.barh(sectors, sector_sharpes, color=colors)
+    ax.set_xlabel('Median Sharpe Ratio')
+    ax.set_title('Best Strategy per Sector')
+    ax.axvline(x=0, color='red', linestyle='--', alpha=0.5)
+
+    # Add strategy name labels on bars
+    for bar, strategy, sharpe in zip(bars, best_strategies, sector_sharpes):
+        ax.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height()/2,
+                f'{strategy} ({sharpe:.2f})', va='center', fontsize=8)
+
+    plt.tight_layout()
+    plt.savefig(output_dir / 'best_strategy_per_sector.png', dpi=150)
+    plt.close()
+
+    # 3. Original sector performance (for reference)
     fig, ax = plt.subplots(figsize=(12, 6))
     sectors = sector_perf['sector'].to_list()
     sector_sharpes = sector_perf['median_sharpe'].to_list()
 
     bars = ax.barh(sectors, sector_sharpes, color='forestgreen')
     ax.set_xlabel('Median Sharpe Ratio')
-    ax.set_title('Sector Performance - Median Sharpe')
+    ax.set_title('Sector Performance - Median Sharpe (All Strategies)')
     ax.axvline(x=0, color='red', linestyle='--', alpha=0.5)
 
     plt.tight_layout()
@@ -596,7 +641,7 @@ def main():
     if args.charts:
         print_section("Generating Charts")
         if robustness is not None:
-            create_charts(strategy_comparison, sector_perf, robustness, args.output_dir)
+            create_charts(strategy_comparison, sector_perf, robustness, combo_perf, args.output_dir)
 
     # =================================
     # SUMMARY INSIGHTS

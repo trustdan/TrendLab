@@ -132,6 +132,18 @@ Opens configuration modal for custom date ranges, randomization percentage,
 and sweep depth. Useful for stress-testing strategies across different
 time periods.
 
+YOLO Auto-Fetch:
+When you select a date range (e.g., 30 years), YOLO mode automatically:
+- Checks each symbol's cached data coverage
+- Fetches missing data from Yahoo Finance if needed
+- Shows progress during data refresh phase
+This ensures backtests use the full requested date range.
+
+Artifact Auto-Export:
+When YOLO discovers a new top cross-symbol config, it auto-exports a
+StrategyArtifact JSON to artifacts/exports/{session}/. These artifacts
+contain everything needed to generate Pine Scripts via /pine:generate.
+
 Results are automatically sorted by Sharpe ratio and displayed in the
 Results panel when the sweep completes.
 "#,
@@ -236,9 +248,11 @@ Apply weighted scoring to rank results by your trading style:
 
 YOLO MODE
 Stress-test strategies with custom parameters:
-- Set specific date ranges for backtesting
+- Set specific date ranges for backtesting (e.g., 30 years)
+- Auto-fetches missing data from Yahoo Finance to cover full date range
 - Add randomization (±X%) to date boundaries
 - Choose sweep depth independently
+- Auto-exports StrategyArtifact JSON for top cross-symbol performers
 
 STATISTICAL ANALYSIS
 Deep analysis of backtest results:

@@ -4,7 +4,7 @@ use crate::bar::Bar;
 use crate::indicators::{
     aroon, atr, bollinger_bands, cci, darvas_boxes, dmi, donchian_channel, ema_close, heikin_ashi,
     ichimoku, keltner_channel, macd, opening_range, parabolic_sar, range_breakout_levels, roc,
-    rolling_max_close, rsi, sma_close, starc_bands, stochastic, supertrend, williams_r,
+    rolling_max_close, rsi, sma_close, sma_volume, starc_bands, stochastic, supertrend, williams_r,
     BollingerBands, DarvasBox, HABar, MACDEntryMode, MAType, OpeningPeriod,
 };
 
@@ -839,6 +839,403 @@ impl Strategy for SupertrendStrategy {
 }
 
 // =============================================================================
+// Supertrend Variants
+// =============================================================================
+
+/// Supertrend with Volume Filter strategy.
+///
+/// Only enters when volume exceeds a threshold percentage of the average volume.
+/// This filters out weak breakouts that lack conviction.
+///
+/// Entry: Supertrend flips to uptrend AND volume > threshold * avg_volume
+/// Exit: Supertrend flips to downtrend (no volume filter on exits)
+#[derive(Debug, Clone)]
+pub struct SupertrendVolumeStrategy {
+    atr_period: usize,
+    multiplier: f64,
+    volume_lookback: usize,
+    volume_threshold_pct: f64,
+}
+
+impl SupertrendVolumeStrategy {
+    pub fn new(
+        atr_period: usize,
+        multiplier: f64,
+        volume_lookback: usize,
+        volume_threshold_pct: f64,
+    ) -> Self {
+        assert!(atr_period > 0, "ATR period must be at least 1");
+        assert!(multiplier > 0.0, "Multiplier must be positive");
+        assert!(volume_lookback > 0, "Volume lookback must be at least 1");
+        assert!(
+            volume_threshold_pct > 0.0,
+            "Volume threshold must be positive"
+        );
+
+        Self {
+            atr_period,
+            multiplier,
+            volume_lookback,
+            volume_threshold_pct,
+        }
+    }
+}
+
+impl Strategy for SupertrendVolumeStrategy {
+    fn id(&self) -> &str {
+        "supertrend_volume"
+    }
+
+    fn warmup_period(&self) -> usize {
+        self.atr_period.max(self.volume_lookback)
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let st_values = supertrend(bars, self.atr_period, self.multiplier);
+        let vol_sma = sma_volume(bars, self.volume_lookback);
+
+        let current_st = match st_values[current_idx] {
+            Some(st) => st,
+            None => return Signal::Hold,
+        };
+
+        if current_idx == 0 {
+            return Signal::Hold;
+        }
+
+        let prev_st = match st_values[current_idx - 1] {
+            Some(st) => st,
+            None => return Signal::Hold,
+        };
+
+        match current_position {
+            Position::Flat => {
+                // Entry: Trend flips to uptrend AND volume exceeds threshold
+                if current_st.is_uptrend && !prev_st.is_uptrend {
+                    // Check volume filter
+                    if let Some(avg_vol) = vol_sma[current_idx] {
+                        let current_vol = bars[current_idx].volume;
+                        if current_vol >= avg_vol * self.volume_threshold_pct {
+                            return Signal::EnterLong;
+                        }
+                    }
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: Trend flips to downtrend (no volume filter)
+                if !current_st.is_uptrend && prev_st.is_uptrend {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// Supertrend with Confirmation Bars strategy.
+///
+/// Requires N consecutive bars in the new trend before entering.
+/// This filters out brief whipsaws and false breakouts.
+///
+/// Entry: Supertrend has been in uptrend for N bars (first flip counted)
+/// Exit: Supertrend flips to downtrend
+#[derive(Debug, Clone)]
+pub struct SupertrendConfirmedStrategy {
+    atr_period: usize,
+    multiplier: f64,
+    confirmation_bars: usize,
+    /// Tracks consecutive uptrend bars since last entry
+    uptrend_count: usize,
+}
+
+impl SupertrendConfirmedStrategy {
+    pub fn new(atr_period: usize, multiplier: f64, confirmation_bars: usize) -> Self {
+        assert!(atr_period > 0, "ATR period must be at least 1");
+        assert!(multiplier > 0.0, "Multiplier must be positive");
+        assert!(confirmation_bars > 0, "Confirmation bars must be at least 1");
+
+        Self {
+            atr_period,
+            multiplier,
+            confirmation_bars,
+            uptrend_count: 0,
+        }
+    }
+}
+
+impl Strategy for SupertrendConfirmedStrategy {
+    fn id(&self) -> &str {
+        "supertrend_confirmed"
+    }
+
+    fn warmup_period(&self) -> usize {
+        self.atr_period + self.confirmation_bars
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        if current_idx < self.atr_period {
+            return Signal::Hold;
+        }
+
+        let st_values = supertrend(bars, self.atr_period, self.multiplier);
+
+        let current_st = match st_values[current_idx] {
+            Some(st) => st,
+            None => return Signal::Hold,
+        };
+
+        // Count consecutive uptrend bars looking backwards
+        let mut uptrend_count = 0;
+        for i in (0..=current_idx).rev() {
+            match st_values[i] {
+                Some(st) if st.is_uptrend => uptrend_count += 1,
+                _ => break,
+            }
+        }
+
+        match current_position {
+            Position::Flat => {
+                // Entry: Uptrend confirmed for N bars
+                if current_st.is_uptrend && uptrend_count >= self.confirmation_bars {
+                    // Only enter on the exact bar where confirmation is reached
+                    if uptrend_count == self.confirmation_bars {
+                        return Signal::EnterLong;
+                    }
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: Trend flips to downtrend
+                if !current_st.is_uptrend {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.uptrend_count = 0;
+    }
+}
+
+/// Supertrend with Asymmetric Entry/Exit multipliers.
+///
+/// Uses different ATR multipliers for entries vs exits, allowing
+/// the position more room to breathe once entered.
+///
+/// Entry: Price crosses above upper band (entry_multiplier)
+/// Exit: Price crosses below lower band (exit_multiplier, typically larger)
+#[derive(Debug, Clone)]
+pub struct SupertrendAsymmetricStrategy {
+    atr_period: usize,
+    entry_multiplier: f64,
+    exit_multiplier: f64,
+}
+
+impl SupertrendAsymmetricStrategy {
+    pub fn new(atr_period: usize, entry_multiplier: f64, exit_multiplier: f64) -> Self {
+        assert!(atr_period > 0, "ATR period must be at least 1");
+        assert!(entry_multiplier > 0.0, "Entry multiplier must be positive");
+        assert!(exit_multiplier > 0.0, "Exit multiplier must be positive");
+        assert!(
+            exit_multiplier >= entry_multiplier,
+            "Exit multiplier should be >= entry multiplier"
+        );
+
+        Self {
+            atr_period,
+            entry_multiplier,
+            exit_multiplier,
+        }
+    }
+}
+
+impl Strategy for SupertrendAsymmetricStrategy {
+    fn id(&self) -> &str {
+        "supertrend_asymmetric"
+    }
+
+    fn warmup_period(&self) -> usize {
+        self.atr_period
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        // Calculate both entry and exit supertrend indicators
+        let entry_st = supertrend(bars, self.atr_period, self.entry_multiplier);
+        let exit_st = supertrend(bars, self.atr_period, self.exit_multiplier);
+
+        let current_entry_st = match entry_st[current_idx] {
+            Some(st) => st,
+            None => return Signal::Hold,
+        };
+
+        let current_exit_st = match exit_st[current_idx] {
+            Some(st) => st,
+            None => return Signal::Hold,
+        };
+
+        if current_idx == 0 {
+            return Signal::Hold;
+        }
+
+        let prev_entry_st = match entry_st[current_idx - 1] {
+            Some(st) => st,
+            None => return Signal::Hold,
+        };
+
+        let prev_exit_st = match exit_st[current_idx - 1] {
+            Some(st) => st,
+            None => return Signal::Hold,
+        };
+
+        match current_position {
+            Position::Flat => {
+                // Entry: Entry indicator flips to uptrend
+                if current_entry_st.is_uptrend && !prev_entry_st.is_uptrend {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: Exit indicator flips to downtrend
+                if !current_exit_st.is_uptrend && prev_exit_st.is_uptrend {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// Supertrend with Cooldown strategy.
+///
+/// Enforces a minimum number of bars between trades to prevent
+/// whipsawing in choppy markets.
+///
+/// Entry: Supertrend flips to uptrend AND cooldown period has passed
+/// Exit: Supertrend flips to downtrend
+#[derive(Debug, Clone)]
+pub struct SupertrendCooldownStrategy {
+    atr_period: usize,
+    multiplier: f64,
+    cooldown_bars: usize,
+    /// Bars since last exit
+    bars_since_exit: usize,
+}
+
+impl SupertrendCooldownStrategy {
+    pub fn new(atr_period: usize, multiplier: f64, cooldown_bars: usize) -> Self {
+        assert!(atr_period > 0, "ATR period must be at least 1");
+        assert!(multiplier > 0.0, "Multiplier must be positive");
+        assert!(cooldown_bars > 0, "Cooldown bars must be at least 1");
+
+        Self {
+            atr_period,
+            multiplier,
+            cooldown_bars,
+            bars_since_exit: usize::MAX, // Start with cooldown satisfied
+        }
+    }
+}
+
+impl Strategy for SupertrendCooldownStrategy {
+    fn id(&self) -> &str {
+        "supertrend_cooldown"
+    }
+
+    fn warmup_period(&self) -> usize {
+        self.atr_period
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let st_values = supertrend(bars, self.atr_period, self.multiplier);
+
+        let current_st = match st_values[current_idx] {
+            Some(st) => st,
+            None => return Signal::Hold,
+        };
+
+        if current_idx == 0 {
+            return Signal::Hold;
+        }
+
+        let prev_st = match st_values[current_idx - 1] {
+            Some(st) => st,
+            None => return Signal::Hold,
+        };
+
+        match current_position {
+            Position::Flat => {
+                // Entry: Trend flips to uptrend AND cooldown satisfied
+                if current_st.is_uptrend && !prev_st.is_uptrend {
+                    if self.bars_since_exit >= self.cooldown_bars {
+                        return Signal::EnterLong;
+                    }
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: Trend flips to downtrend
+                if !current_st.is_uptrend && prev_st.is_uptrend {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.bars_since_exit = usize::MAX;
+    }
+}
+
+// =============================================================================
 // Phase 2: Momentum & Direction Strategies
 // =============================================================================
 
@@ -1348,6 +1745,229 @@ impl Strategy for FiftyTwoWeekHighStrategy {
     fn reset(&mut self) {}
 }
 
+// =============================================================================
+// FiftyTwoWeekHigh Variants
+// =============================================================================
+
+/// 52-Week High with Momentum Filter strategy.
+///
+/// Only enters near 52-week highs when price is accelerating (positive ROC).
+/// This filters out choppy consolidation near highs.
+///
+/// Entry: close >= entry_pct * period_high AND ROC > momentum_threshold
+/// Exit: close < exit_pct * period_high
+#[derive(Debug, Clone)]
+pub struct FiftyTwoWeekHighMomentumStrategy {
+    period: usize,
+    entry_pct: f64,
+    exit_pct: f64,
+    momentum_period: usize,
+    momentum_threshold: f64,
+}
+
+impl FiftyTwoWeekHighMomentumStrategy {
+    pub fn new(
+        period: usize,
+        entry_pct: f64,
+        exit_pct: f64,
+        momentum_period: usize,
+        momentum_threshold: f64,
+    ) -> Self {
+        assert!(period > 0, "Period must be at least 1");
+        assert!(
+            entry_pct > 0.0 && entry_pct <= 1.0,
+            "Entry percentage must be between 0 and 1"
+        );
+        assert!(
+            exit_pct > 0.0 && exit_pct <= 1.0,
+            "Exit percentage must be between 0 and 1"
+        );
+        assert!(
+            exit_pct < entry_pct,
+            "Exit percentage must be less than entry percentage"
+        );
+        assert!(momentum_period > 0, "Momentum period must be at least 1");
+
+        Self {
+            period,
+            entry_pct,
+            exit_pct,
+            momentum_period,
+            momentum_threshold,
+        }
+    }
+}
+
+impl Strategy for FiftyTwoWeekHighMomentumStrategy {
+    fn id(&self) -> &str {
+        "52wk_high_momentum"
+    }
+
+    fn warmup_period(&self) -> usize {
+        self.period.max(self.momentum_period)
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let rolling_max = rolling_max_close(bars, self.period);
+        let roc_values = roc(bars, self.momentum_period);
+
+        let period_high = match rolling_max[current_idx] {
+            Some(h) => h,
+            None => return Signal::Hold,
+        };
+
+        let current_roc = match roc_values[current_idx] {
+            Some(r) => r,
+            None => return Signal::Hold,
+        };
+
+        let current_close = bars[current_idx].close;
+        let proximity = current_close / period_high;
+
+        match current_position {
+            Position::Flat => {
+                // Entry: near high AND positive momentum
+                if proximity >= self.entry_pct && current_roc.roc >= self.momentum_threshold {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: falls below exit threshold (momentum not checked on exit)
+                if proximity < self.exit_pct {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// 52-Week High with Trailing Stop strategy.
+///
+/// Uses a trailing stop from the entry price instead of a fixed exit threshold.
+/// This locks in gains on strong moves.
+///
+/// Entry: close >= entry_pct * period_high
+/// Exit: close falls trailing_stop_pct below the highest close since entry
+#[derive(Debug, Clone)]
+pub struct FiftyTwoWeekHighTrailingStrategy {
+    period: usize,
+    entry_pct: f64,
+    trailing_stop_pct: f64,
+    /// Highest close since entry (for trailing stop)
+    high_since_entry: Option<f64>,
+}
+
+impl FiftyTwoWeekHighTrailingStrategy {
+    pub fn new(period: usize, entry_pct: f64, trailing_stop_pct: f64) -> Self {
+        assert!(period > 0, "Period must be at least 1");
+        assert!(
+            entry_pct > 0.0 && entry_pct <= 1.0,
+            "Entry percentage must be between 0 and 1"
+        );
+        assert!(
+            trailing_stop_pct > 0.0 && trailing_stop_pct < 1.0,
+            "Trailing stop percentage must be between 0 and 1"
+        );
+
+        Self {
+            period,
+            entry_pct,
+            trailing_stop_pct,
+            high_since_entry: None,
+        }
+    }
+}
+
+impl Strategy for FiftyTwoWeekHighTrailingStrategy {
+    fn id(&self) -> &str {
+        "52wk_high_trailing"
+    }
+
+    fn warmup_period(&self) -> usize {
+        self.period
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let rolling_max = rolling_max_close(bars, self.period);
+
+        let period_high = match rolling_max[current_idx] {
+            Some(h) => h,
+            None => return Signal::Hold,
+        };
+
+        let current_close = bars[current_idx].close;
+        let proximity = current_close / period_high;
+
+        match current_position {
+            Position::Flat => {
+                // Entry: close >= entry_pct * period_high
+                if proximity >= self.entry_pct {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Track high since entry for trailing stop calculation
+                // Since strategy is stateless per signal call, we calculate trailing high from bars
+                // Look for the entry point by finding last time we crossed entry threshold from below
+                let mut entry_idx = current_idx;
+                for i in (0..current_idx).rev() {
+                    if let Some(prev_high) = rolling_max[i] {
+                        let prev_proximity = bars[i].close / prev_high;
+                        if prev_proximity < self.entry_pct {
+                            entry_idx = i + 1;
+                            break;
+                        }
+                    }
+                }
+
+                // Find highest close since entry
+                let high_since_entry = bars[entry_idx..=current_idx]
+                    .iter()
+                    .map(|b| b.close)
+                    .fold(f64::NEG_INFINITY, f64::max);
+
+                // Exit if current close is trailing_stop_pct below high since entry
+                let stop_level = high_since_entry * (1.0 - self.trailing_stop_pct);
+                if current_close < stop_level {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.high_since_entry = None;
+    }
+}
+
 /// Darvas Box Breakout strategy.
 ///
 /// Entry: When close breaks above a confirmed box top
@@ -1806,6 +2426,202 @@ impl Strategy for ParabolicSARStrategy {
             }
             Position::Long => {
                 // Exit: SAR flips to downtrend (was uptrend, now downtrend)
+                if current_sar.just_flipped_bearish(prev_sar) {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+// =============================================================================
+// ParabolicSAR Variants
+// =============================================================================
+
+/// Parabolic SAR with MA Trend Filter strategy.
+///
+/// Only enters on SAR flip when price is above a long-term moving average,
+/// filtering out ranging-market whipsaws.
+///
+/// Entry: SAR flips bullish AND close > MA(trend_ma_period)
+/// Exit: SAR flips bearish
+#[derive(Debug, Clone)]
+pub struct ParabolicSarFilteredStrategy {
+    af_start: f64,
+    af_step: f64,
+    af_max: f64,
+    trend_ma_period: usize,
+}
+
+impl ParabolicSarFilteredStrategy {
+    pub fn new(af_start: f64, af_step: f64, af_max: f64, trend_ma_period: usize) -> Self {
+        assert!(af_start > 0.0, "AF start must be positive");
+        assert!(af_step > 0.0, "AF step must be positive");
+        assert!(af_max >= af_start, "AF max must be >= AF start");
+        assert!(trend_ma_period > 0, "Trend MA period must be at least 1");
+
+        Self {
+            af_start,
+            af_step,
+            af_max,
+            trend_ma_period,
+        }
+    }
+}
+
+impl Strategy for ParabolicSarFilteredStrategy {
+    fn id(&self) -> &str {
+        "parabolic_sar_filtered"
+    }
+
+    fn warmup_period(&self) -> usize {
+        5.max(self.trend_ma_period)
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let sar_values = parabolic_sar(bars, self.af_start, self.af_step, self.af_max);
+        let ma_values = sma_close(bars, self.trend_ma_period);
+
+        let current_sar = match sar_values[current_idx] {
+            Some(ref s) => s,
+            None => return Signal::Hold,
+        };
+
+        let trend_ma = match ma_values[current_idx] {
+            Some(m) => m,
+            None => return Signal::Hold,
+        };
+
+        if current_idx == 0 {
+            return Signal::Hold;
+        }
+
+        let prev_sar = sar_values[current_idx - 1].as_ref();
+
+        match current_position {
+            Position::Flat => {
+                // Entry: SAR flips bullish AND price above MA
+                let current_close = bars[current_idx].close;
+                if current_sar.just_flipped_bullish(prev_sar) && current_close > trend_ma {
+                    return Signal::EnterLong;
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: SAR flips bearish (no MA filter on exits)
+                if current_sar.just_flipped_bearish(prev_sar) {
+                    return Signal::ExitLong;
+                }
+                Signal::Hold
+            }
+            Position::Short => Signal::Hold,
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// Parabolic SAR with Entry Delay strategy.
+///
+/// Waits N bars after SAR flip before entering, confirming the flip isn't a false signal.
+///
+/// Entry: SAR flipped bullish N bars ago and still bullish
+/// Exit: SAR flips bearish
+#[derive(Debug, Clone)]
+pub struct ParabolicSarDelayedStrategy {
+    af_start: f64,
+    af_step: f64,
+    af_max: f64,
+    delay_bars: usize,
+}
+
+impl ParabolicSarDelayedStrategy {
+    pub fn new(af_start: f64, af_step: f64, af_max: f64, delay_bars: usize) -> Self {
+        assert!(af_start > 0.0, "AF start must be positive");
+        assert!(af_step > 0.0, "AF step must be positive");
+        assert!(af_max >= af_start, "AF max must be >= AF start");
+        assert!(delay_bars > 0, "Delay bars must be at least 1");
+
+        Self {
+            af_start,
+            af_step,
+            af_max,
+            delay_bars,
+        }
+    }
+}
+
+impl Strategy for ParabolicSarDelayedStrategy {
+    fn id(&self) -> &str {
+        "parabolic_sar_delayed"
+    }
+
+    fn warmup_period(&self) -> usize {
+        5 + self.delay_bars
+    }
+
+    fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
+        if bars.is_empty() {
+            return Signal::Hold;
+        }
+
+        let current_idx = bars.len() - 1;
+
+        if current_idx < self.warmup_period() {
+            return Signal::Hold;
+        }
+
+        let sar_values = parabolic_sar(bars, self.af_start, self.af_step, self.af_max);
+
+        let current_sar = match sar_values[current_idx] {
+            Some(ref s) => s,
+            None => return Signal::Hold,
+        };
+
+        if current_idx == 0 {
+            return Signal::Hold;
+        }
+
+        let prev_sar = sar_values[current_idx - 1].as_ref();
+
+        match current_position {
+            Position::Flat => {
+                // Check if SAR flipped bullish exactly delay_bars ago
+                if current_idx >= self.delay_bars {
+                    let flip_idx = current_idx - self.delay_bars;
+                    if flip_idx > 0 {
+                        let flip_sar = sar_values[flip_idx].as_ref();
+                        let pre_flip_sar = sar_values[flip_idx - 1].as_ref();
+
+                        if let Some(fs) = flip_sar {
+                            // Check if flip occurred at flip_idx
+                            if fs.just_flipped_bullish(pre_flip_sar) {
+                                // Verify still in uptrend
+                                if current_sar.is_uptrend {
+                                    return Signal::EnterLong;
+                                }
+                            }
+                        }
+                    }
+                }
+                Signal::Hold
+            }
+            Position::Long => {
+                // Exit: SAR flips bearish (no delay on exits)
                 if current_sar.just_flipped_bearish(prev_sar) {
                     return Signal::ExitLong;
                 }

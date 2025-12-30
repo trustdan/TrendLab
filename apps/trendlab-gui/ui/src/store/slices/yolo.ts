@@ -6,6 +6,7 @@ import type {
   CrossSymbolLeaderboard,
   LeaderboardScope,
 } from '../../types/yolo';
+import type { DateRange } from '../../types';
 import type {
   YoloStartedPayload,
   YoloProgressPayload,
@@ -150,8 +151,15 @@ export const createYoloSlice: SliceCreator<YoloSlice> = (set, get) => ({
   // YOLO control
   startYolo: async (randomizationPct) => {
     const pct = randomizationPct ?? get().yoloRandomizationPct;
+    const dateRange = get().dateRange as DateRange;
     set({ yoloLoading: true, yoloError: null });
+
     try {
+      // Ensure the backend uses the same date range the user selected in the UI
+      if (dateRange?.start && dateRange?.end) {
+        await invoke('set_date_range', { dateRange });
+      }
+
       const response = await invoke<StartYoloResponse>('start_yolo_mode', {
         randomizationPct: pct,
       });

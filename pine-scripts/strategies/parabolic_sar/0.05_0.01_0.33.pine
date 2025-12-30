@@ -1,0 +1,51 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © TrendLab - Generated from Strategy Artifact
+
+//@version=6
+strategy("Parabolic SAR 0.05/0.01/0.33", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=100, initial_capital=100000, commission_type=strategy.commission.percent, commission_value=0.1, slippage=1)
+
+// =============================================================================
+// INPUTS
+// =============================================================================
+afStart = input.float(0.05, "AF Start", minval=0.01, step=0.01)
+afStep = input.float(0.01, "AF Step", minval=0.001, step=0.001)
+afMax = input.float(0.33, "AF Max", minval=0.01, step=0.01)
+
+// =============================================================================
+// INDICATOR CALCULATION
+// =============================================================================
+sar = ta.sar(afStart, afStep, afMax)
+
+// SAR position relative to price
+sarBelowPrice = sar < close
+sarAbovePrice = sar > close
+
+// Detect SAR flips using crossover/crossunder
+sarFlipsBelow = ta.crossover(close, sar)   // SAR flips below price (uptrend begins)
+sarFlipsAbove = ta.crossunder(close, sar)  // SAR flips above price (downtrend begins)
+
+// =============================================================================
+// STRATEGY LOGIC
+// =============================================================================
+// Entry: SAR flips below price (uptrend begins) - close crosses above SAR
+// Exit: SAR flips above price (downtrend begins) - close crosses below SAR
+
+if sarFlipsBelow
+    strategy.entry("Long", strategy.long)
+
+if sarFlipsAbove
+    strategy.close("Long")
+
+// =============================================================================
+// PLOTTING
+// =============================================================================
+// Plot SAR dots with color based on position
+sarColor = sarBelowPrice ? color.green : color.red
+plot(sar, "Parabolic SAR", color=sarColor, style=plot.style_circles, linewidth=2)
+
+// Plot entry/exit signals
+plotshape(sarFlipsBelow, "Entry Signal", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(sarFlipsAbove, "Exit Signal", shape.triangledown, location.abovebar, color.red, size=size.small)
+
+// Background color for trend direction
+bgcolor(sarBelowPrice ? color.new(color.green, 95) : color.new(color.red, 95))

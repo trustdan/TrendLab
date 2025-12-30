@@ -80,6 +80,33 @@ pub fn sma_close(bars: &[Bar], window: usize) -> Vec<Option<f64>> {
     out
 }
 
+/// Simple moving average of `volume` over a fixed window.
+///
+/// Returns a vector of length `bars.len()`, where values are `None` until there
+/// are enough bars to fill the window.
+pub fn sma_volume(bars: &[Bar], window: usize) -> Vec<Option<f64>> {
+    if window == 0 {
+        return vec![None; bars.len()];
+    }
+
+    let mut out = vec![None; bars.len()];
+    let mut sum = 0.0;
+
+    for i in 0..bars.len() {
+        sum += bars[i].volume;
+
+        if i >= window {
+            sum -= bars[i - window].volume;
+        }
+
+        if i + 1 >= window {
+            out[i] = Some(sum / window as f64);
+        }
+    }
+
+    out
+}
+
 /// Exponential moving average of `close` over a fixed window.
 ///
 /// Uses the standard EMA formula:

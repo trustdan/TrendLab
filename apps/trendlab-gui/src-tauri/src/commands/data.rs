@@ -8,8 +8,14 @@ use trendlab_engine::worker::WorkerCommand;
 
 use crate::{
     error::GuiError,
+    jobs::JobStatus,
     state::{AppState, UniverseInfo},
 };
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StartJobResponse {
+    pub job_id: String,
+}
 
 /// Search result from Yahoo Finance.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -86,7 +92,7 @@ pub fn fetch_data(
     start: String,
     end: String,
     force: bool,
-) -> Result<(), GuiError> {
+) -> Result<StartJobResponse, GuiError> {
     if symbols.is_empty() {
         return Err(GuiError::InvalidInput {
             message: "No symbols provided".to_string(),
@@ -95,6 +101,10 @@ pub fn fetch_data(
 
     let start_date = parse_date(&start)?;
     let end_date = parse_date(&end)?;
+
+    // Register job ID (tracks cancellation in GUI state)
+    let (job_id, _token) = state.jobs.create_new("fetch");
+    state.jobs.set_status(&job_id, JobStatus::Running);
 
     // Clear any previous cancellation
     state.clear_cancel();
@@ -107,7 +117,9 @@ pub fn fetch_data(
             end: end_date,
             force,
         })
-        .map_err(|e| GuiError::Internal(format!("Failed to send fetch command: {}", e)))
+        .map_err(|e| GuiError::Internal(format!("Failed to send fetch command: {}", e)))?;
+
+    Ok(StartJobResponse { job_id })
 }
 
 /// Cancel any in-progress data operations.

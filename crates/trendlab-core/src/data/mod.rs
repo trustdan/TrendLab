@@ -12,9 +12,9 @@ mod quality;
 mod yahoo;
 
 pub use parquet::{
-    bars_to_dataframe, dataframe_to_bars, parquet_path, partition_by_year, read_parquet,
-    scan_multiple_parquet_lazy, scan_parquet_lazy, scan_symbol_parquet_lazy, write_parquet,
-    write_partitioned_parquet,
+    bars_to_dataframe, dataframe_to_bars, get_parquet_date_range, parquet_path, partition_by_year,
+    read_parquet, scan_multiple_parquet_lazy, scan_parquet_lazy, scan_symbol_parquet_lazy,
+    write_parquet, write_partitioned_parquet,
 };
 pub use provider::{CacheMetadata, DataSource, FetchRequest, FetchResult, ProviderError};
 pub use quality::{DataQualityChecker, DataQualityReport, QualityIssue};

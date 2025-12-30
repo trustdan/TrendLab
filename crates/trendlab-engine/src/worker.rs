@@ -15,15 +15,18 @@ use chrono::{NaiveDate, Utc};
 use std::collections::HashMap;
 use tracing::{debug, info, trace};
 use trendlab_core::{
-    bars_to_dataframe, combine_equity_curves_simple, compute_analysis, one_sided_mean_pvalue,
+    bars_to_dataframe, build_yahoo_chart_url, combine_equity_curves_simple, compute_analysis,
+    create_artifact_from_config, dataframe_to_bars, export_artifact_to_file,
+    get_parquet_date_range, one_sided_mean_pvalue, parse_yahoo_chart_json,
     run_donchian_sweep_polars, run_strategy_sweep_polars_parallel, scan_symbol_parquet_lazy,
-    AggregatedConfigResult, AggregatedMetrics, AggregatedPortfolioResult, AnalysisConfig,
-    BacktestConfig, BacktestResult, Bar, CostModel, CrossSymbolLeaderboard, CrossSymbolRankMetric,
-    DataQualityChecker, DataQualityReport, DonchianBacktestConfig, IntoLazy, Leaderboard,
-    LeaderboardEntry, Metrics, MultiStrategyGrid, MultiStrategySweepResult, MultiSweepResult,
-    OpeningPeriod, PolarsBacktestConfig, RankMetric, StatisticalAnalysis, StrategyBestResult,
-    StrategyConfigId, StrategyGridConfig, StrategyParams, StrategyTypeId, SweepConfigResult,
-    SweepGrid, SweepResult, VotingMethod, WalkForwardConfig, WalkForwardResult,
+    write_partitioned_parquet, AggregatedConfigResult, AggregatedMetrics,
+    AggregatedPortfolioResult, AnalysisConfig, BacktestConfig, BacktestResult, Bar, CostModel,
+    CrossSymbolLeaderboard, CrossSymbolRankMetric, DataQualityChecker, DataQualityReport,
+    DonchianBacktestConfig, IntoLazy, Leaderboard, LeaderboardEntry, Metrics, MultiStrategyGrid,
+    MultiStrategySweepResult, MultiSweepResult, OpeningPeriod, PolarsBacktestConfig, RankMetric,
+    StatisticalAnalysis, StrategyBestResult, StrategyConfigId, StrategyGridConfig, StrategyParams,
+    StrategyTypeId, SweepConfigResult, SweepGrid, SweepResult, VotingMethod, WalkForwardConfig,
+    WalkForwardResult,
 };
 
 /// Commands sent from TUI thread to worker thread.
@@ -278,6 +281,33 @@ pub enum WorkerUpdate {
         total_symbols: usize,
         total_strategies: usize,
     },
+    /// Sent when YOLO mode needs to fetch/refresh data before starting sweeps.
+    YoloDataRefresh {
+        /// Symbols that need data refresh
+        symbols_needing_refresh: Vec<String>,
+        /// Total symbols in the sweep
+        total_symbols: usize,
+        /// Requested date range start
+        requested_start: NaiveDate,
+        /// Requested date range end
+        requested_end: NaiveDate,
+    },
+    /// Progress update during YOLO data refresh phase.
+    YoloDataRefreshProgress {
+        /// Symbol currently being fetched
+        symbol: String,
+        /// Index in the refresh list (0-based)
+        index: usize,
+        /// Total symbols needing refresh
+        total: usize,
+    },
+    /// YOLO data refresh completed.
+    YoloDataRefreshComplete {
+        /// Number of symbols successfully refreshed
+        symbols_refreshed: usize,
+        /// Number of symbols that failed to refresh
+        symbols_failed: usize,
+    },
     YoloIterationComplete {
         iteration: u32,
         /// Best cross-symbol aggregated result this round (primary)
@@ -484,7 +514,7 @@ fn worker_loop(
                 existing_cross_symbol_leaderboard,
                 session_id,
             } => {
-                handle_yolo_mode(
+                rt.block_on(handle_yolo_mode(
                     &symbols,
                     &symbol_sector_ids,
                     start,
@@ -497,7 +527,7 @@ fn worker_loop(
                     session_id,
                     &update_tx,
                     &cancel_flag,
-                );
+                ));
             }
 
             WorkerCommand::Cancel => {
@@ -1808,8 +1838,11 @@ fn compute_sharpe_from_returns(returns: &[f64]) -> f64 {
 /// Maintains two leaderboards:
 /// - CrossSymbolLeaderboard: configs ranked by aggregate performance across symbols (primary)
 /// - Leaderboard: per-symbol best configs (secondary)
+///
+/// Now async to support fetching missing data from Yahoo when cached data doesn't cover
+/// the requested date range.
 #[allow(clippy::too_many_arguments)]
-fn handle_yolo_mode(
+async fn handle_yolo_mode(
     symbols: &[String],
     symbol_sector_ids: &HashMap<String, String>,
     start: NaiveDate,
@@ -1846,6 +1879,9 @@ fn handle_yolo_mode(
     let mut cross_symbol_leaderboard = existing_cross_symbol_leaderboard
         .unwrap_or_else(|| CrossSymbolLeaderboard::new(4, CrossSymbolRankMetric::AvgSharpe));
 
+    // Always set the requested date range (overrides any previous range stored)
+    cross_symbol_leaderboard.set_requested_range(start, end);
+
     let mut iteration = cross_symbol_leaderboard.total_iterations;
 
     // Create seeded RNG for reproducibility (but different each run)
@@ -1874,6 +1910,146 @@ fn handle_yolo_mode(
         total_symbols,
         total_strategies,
     });
+
+    // =============================================================================
+    // DATA COVERAGE CHECK AND REFRESH
+    // =============================================================================
+    // Check if cached data covers the requested date range for each symbol.
+    // If not, fetch the data from Yahoo Finance before starting the sweeps.
+
+    let mut symbols_needing_refresh: Vec<String> = Vec::new();
+
+    for symbol in symbols {
+        let cached_range = get_parquet_date_range(parquet_dir, symbol, "1d");
+
+        let needs_refresh = match cached_range {
+            None => {
+                // No cached data at all
+                info!(symbol = %symbol, "No cached data, needs fetch");
+                true
+            }
+            Some((cached_start, cached_end)) => {
+                // Check if cached range covers the requested range
+                // We need data from `start` to `end`
+                // Cached data should start at or before `start` and end at or after `end`
+                let needs_earlier = cached_start > start;
+                let needs_later = cached_end < end;
+
+                if needs_earlier || needs_later {
+                    info!(
+                        symbol = %symbol,
+                        cached_start = %cached_start,
+                        cached_end = %cached_end,
+                        requested_start = %start,
+                        requested_end = %end,
+                        "Cached data doesn't cover requested range, needs refresh"
+                    );
+                    true
+                } else {
+                    false
+                }
+            }
+        };
+
+        if needs_refresh {
+            symbols_needing_refresh.push(symbol.clone());
+        }
+    }
+
+    // Fetch data for symbols that need it
+    if !symbols_needing_refresh.is_empty() {
+        info!(
+            count = symbols_needing_refresh.len(),
+            "Fetching data for symbols missing coverage"
+        );
+
+        let _ = update_tx.send(WorkerUpdate::YoloDataRefresh {
+            symbols_needing_refresh: symbols_needing_refresh.clone(),
+            total_symbols,
+            requested_start: start,
+            requested_end: end,
+        });
+
+        let client = reqwest::Client::builder()
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            .build()
+            .unwrap_or_default();
+
+        let mut refreshed = 0;
+        let mut failed = 0;
+        let refresh_total = symbols_needing_refresh.len();
+
+        for (index, symbol) in symbols_needing_refresh.iter().enumerate() {
+            // Check cancellation
+            if cancel_flag.load(Ordering::SeqCst) {
+                info!("YOLO data refresh cancelled");
+                let _ = update_tx.send(WorkerUpdate::YoloStopped {
+                    cross_symbol_leaderboard,
+                    per_symbol_leaderboard,
+                    total_iterations: iteration,
+                    total_configs_tested: 0,
+                });
+                return;
+            }
+
+            let _ = update_tx.send(WorkerUpdate::YoloDataRefreshProgress {
+                symbol: symbol.clone(),
+                index,
+                total: refresh_total,
+            });
+
+            // Fetch from Yahoo
+            let url = build_yahoo_chart_url(symbol, start, end);
+
+            match client.get(&url).send().await {
+                Ok(response) => {
+                    if !response.status().is_success() {
+                        info!(symbol = %symbol, status = %response.status(), "Yahoo fetch failed");
+                        failed += 1;
+                        continue;
+                    }
+
+                    match response.text().await {
+                        Ok(json_text) => match parse_yahoo_chart_json(&json_text, symbol, "1d") {
+                            Ok(bars) => {
+                                // Write to parquet cache
+                                if let Err(e) = write_partitioned_parquet(&bars, parquet_dir) {
+                                    info!(symbol = %symbol, error = %e, "Failed to write parquet");
+                                    failed += 1;
+                                } else {
+                                    info!(symbol = %symbol, bars = bars.len(), "Fetched and cached");
+                                    refreshed += 1;
+                                }
+                            }
+                            Err(e) => {
+                                info!(symbol = %symbol, error = %e, "Failed to parse Yahoo JSON");
+                                failed += 1;
+                            }
+                        },
+                        Err(e) => {
+                            info!(symbol = %symbol, error = %e, "Failed to read response");
+                            failed += 1;
+                        }
+                    }
+                }
+                Err(e) => {
+                    info!(symbol = %symbol, error = %e, "HTTP request failed");
+                    failed += 1;
+                }
+            }
+        }
+
+        let _ = update_tx.send(WorkerUpdate::YoloDataRefreshComplete {
+            symbols_refreshed: refreshed,
+            symbols_failed: failed,
+        });
+
+        info!(refreshed = refreshed, failed = failed, "Data refresh complete");
+    }
+
+    // =============================================================================
+    // LOAD DATA AND START SWEEPS
+    // =============================================================================
 
     // Polars backtest config
     let polars_config =
@@ -2210,7 +2386,31 @@ fn handle_yolo_mode(
         let _ = per_symbol_leaderboard.save(per_symbol_path);
         let _ = cross_symbol_leaderboard.save(cross_symbol_path);
 
-        // 7. Send iteration complete update
+        // 7. Auto-export artifact for new cross-symbol aggregate best
+        // This exports artifacts for strategies that work well across multiple symbols,
+        // which is more valuable than per-symbol winners.
+        if let Some(ref best) = best_aggregate_this_round {
+            let sid = session_id.clone().unwrap_or_else(|| "default".to_string());
+            let cost_model = CostModel {
+                fees_bps_per_side: config.cost_model.fees_bps_per_side,
+                slippage_bps: config.cost_model.slippage_bps,
+            };
+            match auto_export_aggregate_artifact(best, &sid, parquet_dir, start, end, cost_model) {
+                Ok(path) => {
+                    info!(
+                        path = %path.display(),
+                        strategy = %best.strategy_type.id(),
+                        symbols = best.symbols.len(),
+                        "Auto-exported aggregate strategy artifact"
+                    );
+                }
+                Err(e) => {
+                    trace!(error = %e, "Failed to auto-export aggregate artifact (non-fatal)");
+                }
+            }
+        }
+
+        // 8. Send iteration complete update
         let _ = update_tx.send(WorkerUpdate::YoloIterationComplete {
             iteration,
             best_aggregate: best_aggregate_this_round,
@@ -3226,8 +3426,7 @@ fn jitter_f64_edge_aware(
         // Use absolute jitter across the full range when near bounds
         // This ensures values at the floor can go down AND up meaningfully
         let jitter_range = range * pct;
-        let new_val = value + rng.gen_range(-jitter_range..=jitter_range);
-        new_val
+        value + rng.gen_range(-jitter_range..=jitter_range)
     } else {
         // Standard relative jitter for values in the middle
         let delta = rng.gen_range(-pct..=pct);
@@ -3237,6 +3436,79 @@ fn jitter_f64_edge_aware(
     // Apply step rounding and clamping
     let candidate = (candidate / step).round() * step;
     candidate.clamp(min, max)
+}
+
+// =============================================================================
+// YOLO Auto-Export Artifact
+// =============================================================================
+
+/// Auto-export a strategy artifact for cross-symbol aggregate results.
+///
+/// This function:
+/// 1. Picks the best-performing symbol from the aggregate (by Sharpe)
+/// 2. Loads bars from Parquet for that representative symbol
+/// 3. Creates a StrategyArtifact using the config
+/// 4. Saves it to artifacts/exports/{session_id}/{strategy}_{config}.json
+///
+/// Uses a representative symbol because the artifact needs bar data for parity vectors,
+/// but the strategy config is validated across all symbols in the aggregate.
+fn auto_export_aggregate_artifact(
+    agg: &AggregatedConfigResult,
+    session_id: &str,
+    parquet_dir: &std::path::Path,
+    start: NaiveDate,
+    end: NaiveDate,
+    cost_model: CostModel,
+) -> Result<std::path::PathBuf, String> {
+    // Pick the best symbol by Sharpe ratio for representative parity vectors
+    let representative_symbol = agg
+        .per_symbol_metrics
+        .iter()
+        .max_by(|a, b| {
+            a.1.sharpe
+                .partial_cmp(&b.1.sharpe)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(sym, _)| sym.clone())
+        .ok_or_else(|| "No symbols in aggregate result".to_string())?;
+
+    // Load bars from Parquet with date filtering
+    let lf =
+        scan_symbol_parquet_lazy(parquet_dir, &representative_symbol, "1d", Some(start), Some(end))
+            .map_err(|e| {
+                format!(
+                    "Failed to scan parquet for {}: {}",
+                    representative_symbol, e
+                )
+            })?;
+
+    let df = lf
+        .collect()
+        .map_err(|e| format!("Failed to collect parquet data: {}", e))?;
+
+    let bars = dataframe_to_bars(&df)
+        .map_err(|e| format!("Failed to convert to bars: {}", e))?;
+
+    if bars.is_empty() {
+        return Err(format!(
+            "No bars found for {} in date range",
+            representative_symbol
+        ));
+    }
+
+    // Create artifact
+    let artifact = create_artifact_from_config(&agg.config_id, &bars, cost_model)
+        .map_err(|e| format!("Failed to create artifact: {}", e))?;
+
+    // Build output path
+    let output_dir = std::path::Path::new("artifacts/exports").join(session_id);
+    let filename = format!("{}_{}", agg.strategy_type.id(), agg.config_id.file_id());
+
+    // Export
+    let path = export_artifact_to_file(&artifact, &output_dir, &filename)
+        .map_err(|e| format!("Failed to write artifact: {}", e))?;
+
+    Ok(path)
 }
 
 #[cfg(test)]

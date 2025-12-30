@@ -1252,6 +1252,51 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             app.yolo.started_at = Some(chrono::Utc::now());
         }
 
+        WorkerUpdate::YoloDataRefresh {
+            symbols_needing_refresh,
+            total_symbols,
+            requested_start,
+            requested_end,
+        } => {
+            app.status_message = format!(
+                "YOLO: Refreshing data for {} of {} symbols ({} to {})...",
+                symbols_needing_refresh.len(),
+                total_symbols,
+                requested_start.format("%Y-%m-%d"),
+                requested_end.format("%Y-%m-%d")
+            );
+        }
+
+        WorkerUpdate::YoloDataRefreshProgress {
+            symbol,
+            index,
+            total,
+        } => {
+            app.status_message = format!(
+                "YOLO: Fetching {} ({}/{})...",
+                symbol,
+                index + 1,
+                total
+            );
+        }
+
+        WorkerUpdate::YoloDataRefreshComplete {
+            symbols_refreshed,
+            symbols_failed,
+        } => {
+            if symbols_failed > 0 {
+                app.status_message = format!(
+                    "YOLO: Data refresh done ({} OK, {} failed). Starting sweeps...",
+                    symbols_refreshed, symbols_failed
+                );
+            } else {
+                app.status_message = format!(
+                    "YOLO: Data refresh complete ({} symbols). Starting sweeps...",
+                    symbols_refreshed
+                );
+            }
+        }
+
         WorkerUpdate::YoloIterationComplete {
             iteration,
             best_aggregate,
@@ -1365,6 +1410,13 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             if let Some(ref mut all_time_cross) = app.yolo.all_time_cross_symbol_leaderboard {
                 for entry in cross_symbol_leaderboard.entries.iter() {
                     all_time_cross.try_insert(entry.clone());
+                }
+                // Update requested dates to match the current session
+                if let (Some(start), Some(end)) = (
+                    cross_symbol_leaderboard.requested_start,
+                    cross_symbol_leaderboard.requested_end,
+                ) {
+                    all_time_cross.set_requested_range(start, end);
                 }
             } else {
                 app.yolo.all_time_cross_symbol_leaderboard = Some(cross_symbol_leaderboard.clone());

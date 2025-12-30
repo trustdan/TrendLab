@@ -51,6 +51,16 @@ criterion/
 *~
 \#*\#
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+pip-log.txt
+
 # Node.js (Tauri frontend)
 **/node_modules/
 **/dist/

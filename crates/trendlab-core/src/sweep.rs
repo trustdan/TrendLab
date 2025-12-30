@@ -15,12 +15,14 @@ use crate::indicators::OpeningPeriod;
 use crate::metrics::{compute_metrics, Metrics};
 use crate::strategy::{
     AroonCrossStrategy, BollingerSqueezeStrategy, CCIStrategy, DarvasBoxStrategy, DmiAdxStrategy,
-    DonchianBreakoutStrategy, EnsembleStrategy, FiftyTwoWeekHighStrategy, HeikinAshiRegimeStrategy,
+    DonchianBreakoutStrategy, EnsembleStrategy, FiftyTwoWeekHighMomentumStrategy,
+    FiftyTwoWeekHighStrategy, FiftyTwoWeekHighTrailingStrategy, HeikinAshiRegimeStrategy,
     IchimokuStrategy, KeltnerBreakoutStrategy, LarryWilliamsStrategy, MACDAdxStrategy,
     MACDStrategy, MACrossoverStrategy, OpeningRangeBreakoutStrategy, OscillatorConfluenceStrategy,
-    ParabolicSARStrategy, ROCStrategy, RSIBollingerStrategy, RSIStrategy, STARCBreakoutStrategy,
-    StochasticStrategy, Strategy, SupertrendStrategy, TsmomStrategy, VotingMethod,
-    WilliamsRStrategy,
+    ParabolicSARStrategy, ParabolicSarDelayedStrategy, ParabolicSarFilteredStrategy, ROCStrategy,
+    RSIBollingerStrategy, RSIStrategy, STARCBreakoutStrategy, StochasticStrategy, Strategy,
+    SupertrendAsymmetricStrategy, SupertrendConfirmedStrategy, SupertrendCooldownStrategy,
+    SupertrendStrategy, SupertrendVolumeStrategy, TsmomStrategy, VotingMethod, WilliamsRStrategy,
 };
 use chrono::{DateTime, Utc};
 use rayon::prelude::*;
@@ -702,17 +704,25 @@ pub enum StrategyTypeId {
     Keltner,
     STARC,
     Supertrend,
+    SupertrendVolume,     // Volume filter on entry
+    SupertrendConfirmed,  // Confirmation bars before entry
+    SupertrendAsymmetric, // Different exit multiplier
+    SupertrendCooldown,   // Re-entry cooldown
     // Phase 2: Momentum & Direction
     DmiAdx,
     Aroon,
     BollingerSqueeze,
     // Phase 3: Price Structure
     FiftyTwoWeekHigh,
+    FiftyTwoWeekHighMomentum, // ROC filter for acceleration
+    FiftyTwoWeekHighTrailing, // Trailing stop instead of fixed exit
     DarvasBox,
     LarryWilliams,
     HeikinAshi,
     // Phase 4: Complex Stateful + Ensemble
     ParabolicSar,
+    ParabolicSarFiltered, // MA trend filter
+    ParabolicSarDelayed,  // Delay bars after flip
     OpeningRangeBreakout,
     Ensemble,
     // Phase 5: Oscillator Strategies
@@ -741,17 +751,25 @@ impl StrategyTypeId {
             Self::Keltner,
             Self::STARC,
             Self::Supertrend,
+            Self::SupertrendVolume,
+            Self::SupertrendConfirmed,
+            Self::SupertrendAsymmetric,
+            Self::SupertrendCooldown,
             // Phase 2
             Self::DmiAdx,
             Self::Aroon,
             Self::BollingerSqueeze,
             // Phase 3
             Self::FiftyTwoWeekHigh,
+            Self::FiftyTwoWeekHighMomentum,
+            Self::FiftyTwoWeekHighTrailing,
             Self::DarvasBox,
             Self::LarryWilliams,
             Self::HeikinAshi,
             // Phase 4
             Self::ParabolicSar,
+            Self::ParabolicSarFiltered,
+            Self::ParabolicSarDelayed,
             Self::OpeningRangeBreakout,
             Self::Ensemble,
             // Phase 5
@@ -779,14 +797,22 @@ impl StrategyTypeId {
             Self::Keltner => "Keltner Channel",
             Self::STARC => "STARC Bands",
             Self::Supertrend => "Supertrend",
+            Self::SupertrendVolume => "Supertrend + Volume",
+            Self::SupertrendConfirmed => "Supertrend Confirmed",
+            Self::SupertrendAsymmetric => "Supertrend Asymmetric",
+            Self::SupertrendCooldown => "Supertrend Cooldown",
             Self::DmiAdx => "DMI/ADX Directional",
             Self::Aroon => "Aroon Cross",
             Self::BollingerSqueeze => "Bollinger Squeeze",
             Self::FiftyTwoWeekHigh => "52-Week High",
+            Self::FiftyTwoWeekHighMomentum => "52-Week High Momentum",
+            Self::FiftyTwoWeekHighTrailing => "52-Week High Trailing",
             Self::DarvasBox => "Darvas Box",
             Self::LarryWilliams => "Larry Williams",
             Self::HeikinAshi => "Heikin-Ashi Regime",
             Self::ParabolicSar => "Parabolic SAR",
+            Self::ParabolicSarFiltered => "Parabolic SAR Filtered",
+            Self::ParabolicSarDelayed => "Parabolic SAR Delayed",
             Self::OpeningRangeBreakout => "Opening Range Breakout",
             Self::Ensemble => "Multi-Horizon Ensemble",
             // Phase 5
@@ -814,14 +840,22 @@ impl StrategyTypeId {
             Self::Keltner => "keltner",
             Self::STARC => "starc",
             Self::Supertrend => "supertrend",
+            Self::SupertrendVolume => "supertrend_volume",
+            Self::SupertrendConfirmed => "supertrend_confirmed",
+            Self::SupertrendAsymmetric => "supertrend_asymmetric",
+            Self::SupertrendCooldown => "supertrend_cooldown",
             Self::DmiAdx => "dmi_adx",
             Self::Aroon => "aroon",
             Self::BollingerSqueeze => "bollinger_squeeze",
             Self::FiftyTwoWeekHigh => "52wk_high",
+            Self::FiftyTwoWeekHighMomentum => "52wk_high_momentum",
+            Self::FiftyTwoWeekHighTrailing => "52wk_high_trailing",
             Self::DarvasBox => "darvas_box",
             Self::LarryWilliams => "larry_williams",
             Self::HeikinAshi => "heikin_ashi",
             Self::ParabolicSar => "parabolic_sar",
+            Self::ParabolicSarFiltered => "parabolic_sar_filtered",
+            Self::ParabolicSarDelayed => "parabolic_sar_delayed",
             Self::OpeningRangeBreakout => "orb",
             Self::Ensemble => "ensemble",
             // Phase 5: Oscillator Strategies
@@ -885,11 +919,44 @@ pub enum StrategyConfigId {
         atr_period: usize,
         multiplier: f64,
     },
+    SupertrendVolume {
+        atr_period: usize,
+        multiplier: f64,
+        volume_lookback: usize,
+        volume_threshold_pct: f64, // e.g., 1.2 = 120% of avg volume
+    },
+    SupertrendConfirmed {
+        atr_period: usize,
+        multiplier: f64,
+        confirmation_bars: usize,
+    },
+    SupertrendAsymmetric {
+        atr_period: usize,
+        entry_multiplier: f64,
+        exit_multiplier: f64,
+    },
+    SupertrendCooldown {
+        atr_period: usize,
+        multiplier: f64,
+        cooldown_bars: usize,
+    },
     // Phase 3: Price Structure
     FiftyTwoWeekHigh {
         period: usize,
         entry_pct: f64,
         exit_pct: f64,
+    },
+    FiftyTwoWeekHighMomentum {
+        period: usize,
+        entry_pct: f64,
+        exit_pct: f64,
+        momentum_period: usize,
+        momentum_threshold: f64, // min ROC to enter (e.g., 0.0 or 0.02)
+    },
+    FiftyTwoWeekHighTrailing {
+        period: usize,
+        entry_pct: f64,
+        trailing_stop_pct: f64, // e.g., 0.10 = 10% trailing stop
     },
     DarvasBox {
         box_confirmation_bars: usize,
@@ -906,6 +973,18 @@ pub enum StrategyConfigId {
         af_start: f64,
         af_step: f64,
         af_max: f64,
+    },
+    ParabolicSarFiltered {
+        af_start: f64,
+        af_step: f64,
+        af_max: f64,
+        trend_ma_period: usize, // Only enter when price > MA
+    },
+    ParabolicSarDelayed {
+        af_start: f64,
+        af_step: f64,
+        af_max: f64,
+        delay_bars: usize, // Wait N bars after flip
     },
     OpeningRangeBreakout {
         range_bars: usize,
@@ -995,13 +1074,21 @@ impl StrategyConfigId {
             Self::Keltner { .. } => StrategyTypeId::Keltner,
             Self::STARC { .. } => StrategyTypeId::STARC,
             Self::Supertrend { .. } => StrategyTypeId::Supertrend,
+            Self::SupertrendVolume { .. } => StrategyTypeId::SupertrendVolume,
+            Self::SupertrendConfirmed { .. } => StrategyTypeId::SupertrendConfirmed,
+            Self::SupertrendAsymmetric { .. } => StrategyTypeId::SupertrendAsymmetric,
+            Self::SupertrendCooldown { .. } => StrategyTypeId::SupertrendCooldown,
             // Phase 3
             Self::FiftyTwoWeekHigh { .. } => StrategyTypeId::FiftyTwoWeekHigh,
+            Self::FiftyTwoWeekHighMomentum { .. } => StrategyTypeId::FiftyTwoWeekHighMomentum,
+            Self::FiftyTwoWeekHighTrailing { .. } => StrategyTypeId::FiftyTwoWeekHighTrailing,
             Self::DarvasBox { .. } => StrategyTypeId::DarvasBox,
             Self::LarryWilliams { .. } => StrategyTypeId::LarryWilliams,
             Self::HeikinAshi { .. } => StrategyTypeId::HeikinAshi,
             // Phase 4
             Self::ParabolicSar { .. } => StrategyTypeId::ParabolicSar,
+            Self::ParabolicSarFiltered { .. } => StrategyTypeId::ParabolicSarFiltered,
+            Self::ParabolicSarDelayed { .. } => StrategyTypeId::ParabolicSarDelayed,
             Self::OpeningRangeBreakout { .. } => StrategyTypeId::OpeningRangeBreakout,
             Self::Ensemble { .. } => StrategyTypeId::Ensemble,
             // Phase 5: Oscillator Strategies
@@ -1064,6 +1151,39 @@ impl StrategyConfigId {
                 atr_period,
                 multiplier,
             } => format!("Supertrend {}/{:.1}", atr_period, multiplier),
+            Self::SupertrendVolume {
+                atr_period,
+                multiplier,
+                volume_lookback,
+                volume_threshold_pct,
+            } => format!(
+                "ST+Vol {}/{:.1}/{}/{:.0}%",
+                atr_period, multiplier, volume_lookback, volume_threshold_pct * 100.0
+            ),
+            Self::SupertrendConfirmed {
+                atr_period,
+                multiplier,
+                confirmation_bars,
+            } => format!(
+                "ST Confirmed {}/{:.1}/{}",
+                atr_period, multiplier, confirmation_bars
+            ),
+            Self::SupertrendAsymmetric {
+                atr_period,
+                entry_multiplier,
+                exit_multiplier,
+            } => format!(
+                "ST Asym {}/{:.1}/{:.1}",
+                atr_period, entry_multiplier, exit_multiplier
+            ),
+            Self::SupertrendCooldown {
+                atr_period,
+                multiplier,
+                cooldown_bars,
+            } => format!(
+                "ST Cooldown {}/{:.1}/{}",
+                atr_period, multiplier, cooldown_bars
+            ),
             // Phase 3: Price Structure
             Self::FiftyTwoWeekHigh {
                 period,
@@ -1074,6 +1194,30 @@ impl StrategyConfigId {
                 period,
                 entry_pct * 100.0,
                 exit_pct * 100.0
+            ),
+            Self::FiftyTwoWeekHighMomentum {
+                period,
+                entry_pct,
+                exit_pct,
+                momentum_period,
+                momentum_threshold,
+            } => format!(
+                "52wk Mom {}/{:.0}%/{:.0}%/{}/{:.0}%",
+                period,
+                entry_pct * 100.0,
+                exit_pct * 100.0,
+                momentum_period,
+                momentum_threshold * 100.0
+            ),
+            Self::FiftyTwoWeekHighTrailing {
+                period,
+                entry_pct,
+                trailing_stop_pct,
+            } => format!(
+                "52wk Trail {}/{:.0}%/{:.0}%",
+                period,
+                entry_pct * 100.0,
+                trailing_stop_pct * 100.0
             ),
             Self::DarvasBox {
                 box_confirmation_bars,
@@ -1093,6 +1237,24 @@ impl StrategyConfigId {
                 af_step,
                 af_max,
             } => format!("SAR {:.2}/{:.2}/{:.2}", af_start, af_step, af_max),
+            Self::ParabolicSarFiltered {
+                af_start,
+                af_step,
+                af_max,
+                trend_ma_period,
+            } => format!(
+                "SAR Filt {:.2}/{:.2}/{:.2}/MA{}",
+                af_start, af_step, af_max, trend_ma_period
+            ),
+            Self::ParabolicSarDelayed {
+                af_start,
+                af_step,
+                af_max,
+                delay_bars,
+            } => format!(
+                "SAR Delay {:.2}/{:.2}/{:.2}/{}",
+                af_start, af_step, af_max, delay_bars
+            ),
             Self::OpeningRangeBreakout { range_bars, period } => {
                 format!("ORB {} {:?}", range_bars, period)
             }
@@ -1196,6 +1358,210 @@ impl StrategyConfigId {
         }
     }
 
+    /// Get a filename-safe identifier for this config (for artifact exports).
+    pub fn file_id(&self) -> String {
+        match self {
+            Self::Donchian {
+                entry_lookback,
+                exit_lookback,
+            } => format!("{}_{}", entry_lookback, exit_lookback),
+            Self::TurtleS1 => "20_10".to_string(),
+            Self::TurtleS2 => "55_20".to_string(),
+            Self::MACrossover { fast, slow, ma_type } => {
+                format!("{}_{}_{}", fast, slow, ma_type.name())
+            }
+            Self::Tsmom { lookback } => format!("{}", lookback),
+            Self::DmiAdx {
+                di_period,
+                adx_period,
+                adx_threshold,
+            } => format!("{}_{}_{:.0}", di_period, adx_period, adx_threshold),
+            Self::Aroon { period } => format!("{}", period),
+            Self::BollingerSqueeze {
+                period,
+                std_mult,
+                squeeze_threshold,
+            } => format!("{}_{:.1}_{:.0}", period, std_mult, squeeze_threshold),
+            Self::Keltner {
+                ema_period,
+                atr_period,
+                multiplier,
+            } => format!("{}_{}_{:.1}", ema_period, atr_period, multiplier),
+            Self::STARC {
+                sma_period,
+                atr_period,
+                multiplier,
+            } => format!("{}_{}_{:.1}", sma_period, atr_period, multiplier),
+            Self::Supertrend {
+                atr_period,
+                multiplier,
+            } => format!("{}_{:.1}", atr_period, multiplier),
+            Self::SupertrendVolume {
+                atr_period,
+                multiplier,
+                volume_lookback,
+                volume_threshold_pct,
+            } => format!("{}_{:.1}_{}_{:.0}", atr_period, multiplier, volume_lookback, volume_threshold_pct * 100.0),
+            Self::SupertrendConfirmed {
+                atr_period,
+                multiplier,
+                confirmation_bars,
+            } => format!("{}_{:.1}_{}", atr_period, multiplier, confirmation_bars),
+            Self::SupertrendAsymmetric {
+                atr_period,
+                entry_multiplier,
+                exit_multiplier,
+            } => format!("{}_{:.1}_{:.1}", atr_period, entry_multiplier, exit_multiplier),
+            Self::SupertrendCooldown {
+                atr_period,
+                multiplier,
+                cooldown_bars,
+            } => format!("{}_{:.1}_{}", atr_period, multiplier, cooldown_bars),
+            Self::FiftyTwoWeekHigh {
+                period,
+                entry_pct,
+                exit_pct,
+            } => format!("{}_{:.0}_{:.0}", period, entry_pct * 100.0, exit_pct * 100.0),
+            Self::FiftyTwoWeekHighMomentum {
+                period,
+                entry_pct,
+                exit_pct,
+                momentum_period,
+                momentum_threshold,
+            } => format!(
+                "{}_{:.0}_{:.0}_{}_{:.0}",
+                period, entry_pct * 100.0, exit_pct * 100.0, momentum_period, momentum_threshold * 100.0
+            ),
+            Self::FiftyTwoWeekHighTrailing {
+                period,
+                entry_pct,
+                trailing_stop_pct,
+            } => format!(
+                "{}_{:.0}_{:.0}",
+                period, entry_pct * 100.0, trailing_stop_pct * 100.0
+            ),
+            Self::DarvasBox {
+                box_confirmation_bars,
+            } => format!("{}", box_confirmation_bars),
+            Self::LarryWilliams {
+                range_multiplier,
+                atr_stop_mult,
+            } => format!("{:.1}_{:.1}", range_multiplier, atr_stop_mult),
+            Self::HeikinAshi { confirmation_bars } => format!("{}", confirmation_bars),
+            Self::ParabolicSar {
+                af_start,
+                af_step,
+                af_max,
+            } => format!("{:.2}_{:.2}_{:.2}", af_start, af_step, af_max),
+            Self::ParabolicSarFiltered {
+                af_start,
+                af_step,
+                af_max,
+                trend_ma_period,
+            } => format!("{:.2}_{:.2}_{:.2}_{}", af_start, af_step, af_max, trend_ma_period),
+            Self::ParabolicSarDelayed {
+                af_start,
+                af_step,
+                af_max,
+                delay_bars,
+            } => format!("{:.2}_{:.2}_{:.2}_{}", af_start, af_step, af_max, delay_bars),
+            Self::OpeningRangeBreakout { range_bars, period } => {
+                format!("{}__{:?}", range_bars, period)
+            }
+            Self::Ensemble {
+                base_strategy,
+                horizons,
+                voting,
+            } => format!(
+                "{}_{}_{:?}",
+                base_strategy.id(),
+                horizons.iter().map(|h| h.to_string()).collect::<Vec<_>>().join("_"),
+                voting
+            ),
+            // Phase 5: Oscillator Strategies
+            Self::Rsi {
+                period,
+                oversold,
+                overbought,
+            } => format!("{}_{:.0}_{:.0}", period, oversold, overbought),
+            Self::Macd {
+                fast_period,
+                slow_period,
+                signal_period,
+                entry_mode,
+            } => format!(
+                "{}_{}_{}_{:?}",
+                fast_period, slow_period, signal_period, entry_mode
+            ),
+            Self::Stochastic {
+                k_period,
+                k_smooth,
+                d_period,
+                oversold,
+                overbought,
+            } => format!(
+                "{}_{}_{}_{:.0}_{:.0}",
+                k_period, k_smooth, d_period, oversold, overbought
+            ),
+            Self::WilliamsR {
+                period,
+                oversold,
+                overbought,
+            } => format!("{}_{:.0}_{:.0}", period, oversold, overbought),
+            Self::Cci {
+                period,
+                entry_threshold,
+                exit_threshold,
+            } => format!("{}_{:.0}_{:.0}", period, entry_threshold, exit_threshold),
+            Self::Roc { period } => format!("{}", period),
+            Self::RsiBollinger {
+                rsi_period,
+                rsi_oversold,
+                rsi_exit,
+                bb_period,
+                bb_std_mult,
+            } => format!(
+                "{}_{:.0}_{:.0}_{}_{:.1}",
+                rsi_period, rsi_oversold, rsi_exit, bb_period, bb_std_mult
+            ),
+            Self::MacdAdx {
+                fast_period,
+                slow_period,
+                signal_period,
+                adx_period,
+                adx_threshold,
+            } => format!(
+                "{}_{}_{}_{}_{:.0}",
+                fast_period, slow_period, signal_period, adx_period, adx_threshold
+            ),
+            Self::OscillatorConfluence {
+                rsi_period,
+                rsi_oversold,
+                rsi_overbought,
+                stoch_k_period,
+                stoch_k_smooth,
+                stoch_d_period,
+                stoch_oversold,
+                stoch_overbought,
+            } => format!(
+                "rsi{}_{:.0}_{:.0}_stoch{}_{}_{}_{}_{:.0}",
+                rsi_period,
+                rsi_oversold,
+                rsi_overbought,
+                stoch_k_period,
+                stoch_k_smooth,
+                stoch_d_period,
+                stoch_oversold,
+                stoch_overbought
+            ),
+            Self::Ichimoku {
+                tenkan_period,
+                kijun_period,
+                senkou_b_period,
+            } => format!("{}_{}_{}", tenkan_period, kijun_period, senkou_b_period),
+        }
+    }
+
     /// Convert to legacy ConfigId for backwards compatibility (only for Donchian types).
     pub fn to_legacy_config_id(&self) -> ConfigId {
         match self {
@@ -1226,8 +1592,14 @@ impl StrategyConfigId {
                 ..
             } => ConfigId::new(*sma_period, *atr_period),
             Self::Supertrend { atr_period, .. } => ConfigId::new(*atr_period, 0),
+            Self::SupertrendVolume { atr_period, .. } => ConfigId::new(*atr_period, 0),
+            Self::SupertrendConfirmed { atr_period, .. } => ConfigId::new(*atr_period, 0),
+            Self::SupertrendAsymmetric { atr_period, .. } => ConfigId::new(*atr_period, 0),
+            Self::SupertrendCooldown { atr_period, .. } => ConfigId::new(*atr_period, 0),
             // Phase 3
             Self::FiftyTwoWeekHigh { period, .. } => ConfigId::new(*period, 0),
+            Self::FiftyTwoWeekHighMomentum { period, .. } => ConfigId::new(*period, 0),
+            Self::FiftyTwoWeekHighTrailing { period, .. } => ConfigId::new(*period, 0),
             Self::DarvasBox {
                 box_confirmation_bars,
             } => ConfigId::new(*box_confirmation_bars, 0),
@@ -1238,6 +1610,12 @@ impl StrategyConfigId {
             // Phase 4: Pack params into legacy format
             Self::ParabolicSar { af_start, .. } => {
                 // Store af_start * 100 as entry_lookback
+                ConfigId::new((*af_start * 100.0) as usize, 0)
+            }
+            Self::ParabolicSarFiltered { af_start, .. } => {
+                ConfigId::new((*af_start * 100.0) as usize, 0)
+            }
+            Self::ParabolicSarDelayed { af_start, .. } => {
                 ConfigId::new((*af_start * 100.0) as usize, 0)
             }
             Self::OpeningRangeBreakout { range_bars, .. } => ConfigId::new(*range_bars, 0),
@@ -1313,6 +1691,11 @@ strategy("{0} ({1})", overlay=true, margin_long=100, margin_short=100,
 int atrPeriodInput = input.int({2}, "ATR Period", minval=1, tooltip="ATR lookback period")
 float multiplierInput = input.float({3:.1}, "Multiplier", minval=0.1, step=0.1, tooltip="ATR multiplier for bands")
 
+// === DATE RANGE ===
+startDate = input.time(timestamp("2020-01-01"), "Start Date", tooltip="Backtest start date")
+endDate = input.time(timestamp("2099-12-31"), "End Date", tooltip="Backtest end date")
+bool inDateRange = time >= startDate and time <= endDate
+
 // === INDICATORS ===
 [supertrendLine, supertrendDir] = ta.supertrend(multiplierInput, atrPeriodInput)
 
@@ -1323,7 +1706,7 @@ bool exitCondition = supertrendDir == 1 and supertrendDir[1] == -1   // Flip to 
 
 // === STRATEGY EXECUTION ===
 // Enter on bullish flip, exit on bearish flip
-if supertrendDir == -1 and strategy.position_size == 0
+if supertrendDir == -1 and strategy.position_size == 0 and inDateRange
     strategy.entry("Long", strategy.long)
 
 if supertrendDir == 1 and strategy.position_size > 0
@@ -1361,6 +1744,11 @@ int periodInput = input.int({2}, "Period (lookback days)", minval=1, tooltip="Lo
 float entryPctInput = input.float({6:.2}, "Entry % of high", minval=0.01, maxval=1.0, step=0.01, tooltip="Enter when close >= this % of period high")
 float exitPctInput = input.float({7:.2}, "Exit % of high", minval=0.01, maxval=1.0, step=0.01, tooltip="Exit when close < this % of period high")
 
+// === DATE RANGE ===
+startDate = input.time(timestamp("2020-01-01"), "Start Date", tooltip="Backtest start date")
+endDate = input.time(timestamp("2099-12-31"), "End Date", tooltip="Backtest end date")
+bool inDateRange = time >= startDate and time <= endDate
+
 // === INDICATORS ===
 float periodHigh = ta.highest(high, periodInput)
 float entryThreshold = periodHigh * entryPctInput
@@ -1372,7 +1760,7 @@ bool exitCondition = close < exitThreshold
 
 // === STRATEGY EXECUTION ===
 // Long-only: enter when price is strong (near highs), exit when weakness shows
-if entryCondition and strategy.position_size == 0
+if entryCondition and strategy.position_size == 0 and inDateRange
     strategy.entry("Long", strategy.long)
 
 if exitCondition and strategy.position_size > 0
@@ -1410,6 +1798,11 @@ float afStartInput = input.float({2:.2}, "AF Start", minval=0.01, step=0.01, too
 float afStepInput = input.float({3:.2}, "AF Step", minval=0.01, step=0.01, tooltip="AF increment")
 float afMaxInput = input.float({4:.2}, "AF Max", minval=0.1, step=0.01, tooltip="Maximum acceleration factor")
 
+// === DATE RANGE ===
+startDate = input.time(timestamp("2020-01-01"), "Start Date", tooltip="Backtest start date")
+endDate = input.time(timestamp("2099-12-31"), "End Date", tooltip="Backtest end date")
+bool inDateRange = time >= startDate and time <= endDate
+
 // === INDICATORS ===
 float sarValue = ta.sar(afStartInput, afStepInput, afMaxInput)
 
@@ -1419,7 +1812,7 @@ bool entryCondition = isBullish and not isBullish[1]  // SAR flips below price
 bool exitCondition = not isBullish and isBullish[1]    // SAR flips above price
 
 // === STRATEGY EXECUTION ===
-if isBullish and strategy.position_size == 0
+if isBullish and strategy.position_size == 0 and inDateRange
     strategy.entry("Long", strategy.long)
 
 if not isBullish and strategy.position_size > 0
@@ -1455,6 +1848,11 @@ float rangeMultInput = input.float({2:.2}, "Range Multiplier", minval=0.1, step=
 float atrStopMultInput = input.float({3:.1}, "ATR Stop Multiplier", minval=0.5, step=0.1, tooltip="ATR multiplier for stop loss")
 int atrPeriod = input.int(14, "ATR Period", minval=1)
 
+// === DATE RANGE ===
+startDate = input.time(timestamp("2020-01-01"), "Start Date", tooltip="Backtest start date")
+endDate = input.time(timestamp("2099-12-31"), "End Date", tooltip="Backtest end date")
+bool inDateRange = time >= startDate and time <= endDate
+
 // === INDICATORS ===
 float prevRange = high[1] - low[1]
 float entryLevel = open + prevRange * rangeMultInput
@@ -1466,7 +1864,7 @@ bool entryCondition = high >= entryLevel and close > open
 bool exitCondition = close < stopLevel
 
 // === STRATEGY EXECUTION ===
-if entryCondition and strategy.position_size == 0
+if entryCondition and strategy.position_size == 0 and inDateRange
     strategy.entry("Long", strategy.long)
 
 if exitCondition and strategy.position_size > 0
@@ -1503,6 +1901,11 @@ int smaPeriodInput = input.int({2}, "SMA Period", minval=1, tooltip="Period for 
 int atrPeriodInput = input.int({3}, "ATR Period", minval=1, tooltip="Period for ATR calculation")
 float multiplierInput = input.float({4:.1}, "Multiplier", minval=0.1, step=0.1, tooltip="ATR multiplier for bands")
 
+// === DATE RANGE ===
+startDate = input.time(timestamp("2020-01-01"), "Start Date", tooltip="Backtest start date")
+endDate = input.time(timestamp("2099-12-31"), "End Date", tooltip="Backtest end date")
+bool inDateRange = time >= startDate and time <= endDate
+
 // === INDICATORS ===
 float smaValue = ta.sma(close, smaPeriodInput)
 float atrValue = ta.atr(atrPeriodInput)
@@ -1514,7 +1917,7 @@ bool entryCondition = close > upperBand
 bool exitCondition = close < smaValue
 
 // === STRATEGY EXECUTION ===
-if entryCondition and strategy.position_size == 0
+if entryCondition and strategy.position_size == 0 and inDateRange
     strategy.entry("Long", strategy.long)
 
 if exitCondition and strategy.position_size > 0
@@ -1550,6 +1953,11 @@ strategy("{0} ({1})", overlay=false, margin_long=100, margin_short=100,
 // === INPUTS ===
 int lookbackInput = input.int({2}, "Lookback Period", minval=1, tooltip="Period for momentum calculation")
 
+// === DATE RANGE ===
+startDate = input.time(timestamp("2020-01-01"), "Start Date", tooltip="Backtest start date")
+endDate = input.time(timestamp("2099-12-31"), "End Date", tooltip="Backtest end date")
+bool inDateRange = time >= startDate and time <= endDate
+
 // === INDICATORS ===
 float momentum = (close - close[lookbackInput]) / close[lookbackInput] * 100
 
@@ -1558,7 +1966,7 @@ bool entryCondition = momentum > 0 and momentum[1] <= 0
 bool exitCondition = momentum < 0
 
 // === STRATEGY EXECUTION ===
-if momentum > 0 and strategy.position_size == 0
+if momentum > 0 and strategy.position_size == 0 and inDateRange
     strategy.entry("Long", strategy.long)
 
 if momentum < 0 and strategy.position_size > 0
@@ -1594,6 +2002,11 @@ strategy("{0} ({1})", overlay=true, margin_long=100, margin_short=100,
 int fastPeriodInput = input.int({2}, "Fast Period", minval=1, tooltip="Fast MA period")
 int slowPeriodInput = input.int({3}, "Slow Period", minval=1, tooltip="Slow MA period")
 
+// === DATE RANGE ===
+startDate = input.time(timestamp("2020-01-01"), "Start Date", tooltip="Backtest start date")
+endDate = input.time(timestamp("2099-12-31"), "End Date", tooltip="Backtest end date")
+bool inDateRange = time >= startDate and time <= endDate
+
 // === INDICATORS ===
 float fastMA = {6}(close, fastPeriodInput)
 float slowMA = {6}(close, slowPeriodInput)
@@ -1603,7 +2016,7 @@ bool goldenCross = ta.crossover(fastMA, slowMA)
 bool deathCross = ta.crossunder(fastMA, slowMA)
 
 // === STRATEGY EXECUTION ===
-if goldenCross and strategy.position_size == 0
+if goldenCross and strategy.position_size == 0 and inDateRange
     strategy.entry("Long", strategy.long)
 
 if deathCross and strategy.position_size > 0
@@ -1639,6 +2052,11 @@ strategy("{0} ({1})", overlay=true, margin_long=100, margin_short=100,
 int entryLookbackInput = input.int({2}, "Entry Lookback", minval=1, tooltip="Lookback for entry channel")
 int exitLookbackInput = input.int({3}, "Exit Lookback", minval=1, tooltip="Lookback for exit channel")
 
+// === DATE RANGE ===
+startDate = input.time(timestamp("2020-01-01"), "Start Date", tooltip="Backtest start date")
+endDate = input.time(timestamp("2099-12-31"), "End Date", tooltip="Backtest end date")
+bool inDateRange = time >= startDate and time <= endDate
+
 // === INDICATORS ===
 float entryHigh = ta.highest(high, entryLookbackInput)
 float entryLow = ta.lowest(low, entryLookbackInput)
@@ -1649,7 +2067,7 @@ bool entryCondition = high >= entryHigh[1]
 bool exitCondition = low <= exitLow[1]
 
 // === STRATEGY EXECUTION ===
-if entryCondition and strategy.position_size == 0
+if entryCondition and strategy.position_size == 0 and inDateRange
     strategy.entry("Long", strategy.long)
 
 if exitCondition and strategy.position_size > 0
@@ -1685,6 +2103,11 @@ strategy("{0} ({1})", overlay=false, margin_long=100, margin_short=100,
 // === INPUTS ===
 int periodInput = input.int({2}, "Period", minval=1, tooltip="Aroon lookback period")
 
+// === DATE RANGE ===
+startDate = input.time(timestamp("2020-01-01"), "Start Date", tooltip="Backtest start date")
+endDate = input.time(timestamp("2099-12-31"), "End Date", tooltip="Backtest end date")
+bool inDateRange = time >= startDate and time <= endDate
+
 // === INDICATORS ===
 float aroonUp = ta.aroon(periodInput, 1)
 float aroonDown = ta.aroon(periodInput, -1)
@@ -1694,7 +2117,7 @@ bool bullishCross = ta.crossover(aroonUp, aroonDown)
 bool bearishCross = ta.crossunder(aroonUp, aroonDown)
 
 // === STRATEGY EXECUTION ===
-if bullishCross and strategy.position_size == 0
+if bullishCross and strategy.position_size == 0 and inDateRange
     strategy.entry("Long", strategy.long)
 
 if bearishCross and strategy.position_size > 0
@@ -1724,6 +2147,11 @@ strategy("Turtle System S1 (20/10)", overlay=true, margin_long=100, margin_short
 // SOURCE: TrendLab YOLO sweep session
 {perf_comment}// ============================================================================
 
+// === DATE RANGE ===
+startDate = input.time(timestamp("2020-01-01"), "Start Date", tooltip="Backtest start date")
+endDate = input.time(timestamp("2099-12-31"), "End Date", tooltip="Backtest end date")
+bool inDateRange = time >= startDate and time <= endDate
+
 // === INDICATORS ===
 float entryHigh = ta.highest(high, 20)
 float exitLow = ta.lowest(low, 10)
@@ -1733,7 +2161,7 @@ bool entryCondition = high >= entryHigh[1]
 bool exitCondition = low <= exitLow[1]
 
 // === STRATEGY EXECUTION ===
-if entryCondition and strategy.position_size == 0
+if entryCondition and strategy.position_size == 0 and inDateRange
     strategy.entry("Long", strategy.long)
 
 if exitCondition and strategy.position_size > 0
@@ -1761,6 +2189,11 @@ strategy("Turtle System S2 (55/20)", overlay=true, margin_long=100, margin_short
 // SOURCE: TrendLab YOLO sweep session
 {perf_comment}// ============================================================================
 
+// === DATE RANGE ===
+startDate = input.time(timestamp("2020-01-01"), "Start Date", tooltip="Backtest start date")
+endDate = input.time(timestamp("2099-12-31"), "End Date", tooltip="Backtest end date")
+bool inDateRange = time >= startDate and time <= endDate
+
 // === INDICATORS ===
 float entryHigh = ta.highest(high, 55)
 float exitLow = ta.lowest(low, 20)
@@ -1770,7 +2203,7 @@ bool entryCondition = high >= entryHigh[1]
 bool exitCondition = low <= exitLow[1]
 
 // === STRATEGY EXECUTION ===
-if entryCondition and strategy.position_size == 0
+if entryCondition and strategy.position_size == 0 and inDateRange
     strategy.entry("Long", strategy.long)
 
 if exitCondition and strategy.position_size > 0
@@ -1845,11 +2278,44 @@ pub enum StrategyParams {
         atr_periods: Vec<usize>,
         multipliers: Vec<f64>,
     },
+    SupertrendVolume {
+        atr_periods: Vec<usize>,
+        multipliers: Vec<f64>,
+        volume_lookbacks: Vec<usize>,
+        volume_threshold_pcts: Vec<f64>,
+    },
+    SupertrendConfirmed {
+        atr_periods: Vec<usize>,
+        multipliers: Vec<f64>,
+        confirmation_bars: Vec<usize>,
+    },
+    SupertrendAsymmetric {
+        atr_periods: Vec<usize>,
+        entry_multipliers: Vec<f64>,
+        exit_multipliers: Vec<f64>,
+    },
+    SupertrendCooldown {
+        atr_periods: Vec<usize>,
+        multipliers: Vec<f64>,
+        cooldown_bars: Vec<usize>,
+    },
     // Phase 3: Price Structure
     FiftyTwoWeekHigh {
         periods: Vec<usize>,
         entry_pcts: Vec<f64>,
         exit_pcts: Vec<f64>,
+    },
+    FiftyTwoWeekHighMomentum {
+        periods: Vec<usize>,
+        entry_pcts: Vec<f64>,
+        exit_pcts: Vec<f64>,
+        momentum_periods: Vec<usize>,
+        momentum_thresholds: Vec<f64>,
+    },
+    FiftyTwoWeekHighTrailing {
+        periods: Vec<usize>,
+        entry_pcts: Vec<f64>,
+        trailing_stop_pcts: Vec<f64>,
     },
     DarvasBox {
         box_confirmation_bars: Vec<usize>,
@@ -1866,6 +2332,18 @@ pub enum StrategyParams {
         af_starts: Vec<f64>,
         af_steps: Vec<f64>,
         af_maxs: Vec<f64>,
+    },
+    ParabolicSarFiltered {
+        af_starts: Vec<f64>,
+        af_steps: Vec<f64>,
+        af_maxs: Vec<f64>,
+        trend_ma_periods: Vec<usize>,
+    },
+    ParabolicSarDelayed {
+        af_starts: Vec<f64>,
+        af_steps: Vec<f64>,
+        af_maxs: Vec<f64>,
+        delay_bars: Vec<usize>,
     },
     OpeningRangeBreakout {
         range_bars: Vec<usize>,
@@ -2085,6 +2563,88 @@ impl StrategyParams {
                 }
                 configs
             }
+            Self::SupertrendVolume {
+                atr_periods,
+                multipliers,
+                volume_lookbacks,
+                volume_threshold_pcts,
+            } => {
+                let mut configs = Vec::new();
+                for &atr_period in atr_periods {
+                    for &multiplier in multipliers {
+                        for &volume_lookback in volume_lookbacks {
+                            for &volume_threshold_pct in volume_threshold_pcts {
+                                configs.push(StrategyConfigId::SupertrendVolume {
+                                    atr_period,
+                                    multiplier,
+                                    volume_lookback,
+                                    volume_threshold_pct,
+                                });
+                            }
+                        }
+                    }
+                }
+                configs
+            }
+            Self::SupertrendConfirmed {
+                atr_periods,
+                multipliers,
+                confirmation_bars,
+            } => {
+                let mut configs = Vec::new();
+                for &atr_period in atr_periods {
+                    for &multiplier in multipliers {
+                        for &bars in confirmation_bars {
+                            configs.push(StrategyConfigId::SupertrendConfirmed {
+                                atr_period,
+                                multiplier,
+                                confirmation_bars: bars,
+                            });
+                        }
+                    }
+                }
+                configs
+            }
+            Self::SupertrendAsymmetric {
+                atr_periods,
+                entry_multipliers,
+                exit_multipliers,
+            } => {
+                let mut configs = Vec::new();
+                for &atr_period in atr_periods {
+                    for &entry_multiplier in entry_multipliers {
+                        for &exit_multiplier in exit_multipliers {
+                            if exit_multiplier > entry_multiplier {
+                                configs.push(StrategyConfigId::SupertrendAsymmetric {
+                                    atr_period,
+                                    entry_multiplier,
+                                    exit_multiplier,
+                                });
+                            }
+                        }
+                    }
+                }
+                configs
+            }
+            Self::SupertrendCooldown {
+                atr_periods,
+                multipliers,
+                cooldown_bars,
+            } => {
+                let mut configs = Vec::new();
+                for &atr_period in atr_periods {
+                    for &multiplier in multipliers {
+                        for &bars in cooldown_bars {
+                            configs.push(StrategyConfigId::SupertrendCooldown {
+                                atr_period,
+                                multiplier,
+                                cooldown_bars: bars,
+                            });
+                        }
+                    }
+                }
+                configs
+            }
             // Phase 3: Price Structure
             Self::FiftyTwoWeekHigh {
                 periods,
@@ -2102,6 +2662,54 @@ impl StrategyParams {
                                     exit_pct,
                                 });
                             }
+                        }
+                    }
+                }
+                configs
+            }
+            Self::FiftyTwoWeekHighMomentum {
+                periods,
+                entry_pcts,
+                exit_pcts,
+                momentum_periods,
+                momentum_thresholds,
+            } => {
+                let mut configs = Vec::new();
+                for &period in periods {
+                    for &entry_pct in entry_pcts {
+                        for &exit_pct in exit_pcts {
+                            for &momentum_period in momentum_periods {
+                                for &momentum_threshold in momentum_thresholds {
+                                    if exit_pct < entry_pct {
+                                        configs.push(StrategyConfigId::FiftyTwoWeekHighMomentum {
+                                            period,
+                                            entry_pct,
+                                            exit_pct,
+                                            momentum_period,
+                                            momentum_threshold,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                configs
+            }
+            Self::FiftyTwoWeekHighTrailing {
+                periods,
+                entry_pcts,
+                trailing_stop_pcts,
+            } => {
+                let mut configs = Vec::new();
+                for &period in periods {
+                    for &entry_pct in entry_pcts {
+                        for &trailing_stop_pct in trailing_stop_pcts {
+                            configs.push(StrategyConfigId::FiftyTwoWeekHighTrailing {
+                                period,
+                                entry_pct,
+                                trailing_stop_pct,
+                            });
                         }
                     }
                 }
@@ -2152,6 +2760,56 @@ impl StrategyParams {
                                     af_step,
                                     af_max,
                                 });
+                            }
+                        }
+                    }
+                }
+                configs
+            }
+            Self::ParabolicSarFiltered {
+                af_starts,
+                af_steps,
+                af_maxs,
+                trend_ma_periods,
+            } => {
+                let mut configs = Vec::new();
+                for &af_start in af_starts {
+                    for &af_step in af_steps {
+                        for &af_max in af_maxs {
+                            for &trend_ma_period in trend_ma_periods {
+                                if af_max >= af_start {
+                                    configs.push(StrategyConfigId::ParabolicSarFiltered {
+                                        af_start,
+                                        af_step,
+                                        af_max,
+                                        trend_ma_period,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                configs
+            }
+            Self::ParabolicSarDelayed {
+                af_starts,
+                af_steps,
+                af_maxs,
+                delay_bars,
+            } => {
+                let mut configs = Vec::new();
+                for &af_start in af_starts {
+                    for &af_step in af_steps {
+                        for &af_max in af_maxs {
+                            for &bars in delay_bars {
+                                if af_max >= af_start {
+                                    configs.push(StrategyConfigId::ParabolicSarDelayed {
+                                        af_start,
+                                        af_step,
+                                        af_max,
+                                        delay_bars: bars,
+                                    });
+                                }
                             }
                         }
                     }
@@ -2440,6 +3098,12 @@ pub struct StrategyGridConfig {
 }
 
 impl StrategyGridConfig {
+    /// Mark this config as disabled (won't be included in sweeps).
+    pub fn disabled(mut self) -> Self {
+        self.enabled = false;
+        self
+    }
+
     /// Default Donchian grid.
     pub fn donchian_default() -> Self {
         Self {
@@ -2798,6 +3462,93 @@ impl StrategyGridConfig {
         }
     }
 
+    /// Supertrend + Volume filter grid with specified sweep depth.
+    pub fn supertrend_volume_with_depth(depth: SweepDepth) -> Self {
+        let (atr_periods, multipliers, volume_lookbacks, volume_threshold_pcts) = match depth {
+            SweepDepth::Quick => (vec![10], vec![3.0], vec![20], vec![1.2]),
+            SweepDepth::Standard => (
+                vec![10, 14],
+                vec![2.5, 3.0],
+                vec![20],
+                vec![1.2, 1.5],
+            ),
+            SweepDepth::Comprehensive => (
+                vec![7, 10, 14],
+                vec![2.0, 2.5, 3.0],
+                vec![10, 20],
+                vec![1.0, 1.2, 1.5],
+            ),
+        };
+        Self {
+            strategy_type: StrategyTypeId::SupertrendVolume,
+            enabled: true,
+            params: StrategyParams::SupertrendVolume {
+                atr_periods,
+                multipliers,
+                volume_lookbacks,
+                volume_threshold_pcts,
+            },
+        }
+    }
+
+    /// Supertrend with confirmation bars grid.
+    pub fn supertrend_confirmed_with_depth(depth: SweepDepth) -> Self {
+        let (atr_periods, multipliers, confirmation_bars) = match depth {
+            SweepDepth::Quick => (vec![10], vec![3.0], vec![2]),
+            SweepDepth::Standard => (vec![10, 14], vec![2.5, 3.0], vec![2, 3]),
+            SweepDepth::Comprehensive => (vec![7, 10, 14], vec![2.0, 2.5, 3.0], vec![2, 3, 5]),
+        };
+        Self {
+            strategy_type: StrategyTypeId::SupertrendConfirmed,
+            enabled: true,
+            params: StrategyParams::SupertrendConfirmed {
+                atr_periods,
+                multipliers,
+                confirmation_bars,
+            },
+        }
+    }
+
+    /// Supertrend with asymmetric entry/exit multipliers grid.
+    pub fn supertrend_asymmetric_with_depth(depth: SweepDepth) -> Self {
+        let (atr_periods, entry_multipliers, exit_multipliers) = match depth {
+            SweepDepth::Quick => (vec![10], vec![2.5], vec![3.5]),
+            SweepDepth::Standard => (vec![10, 14], vec![2.0, 2.5], vec![3.0, 3.5]),
+            SweepDepth::Comprehensive => (
+                vec![7, 10, 14],
+                vec![2.0, 2.5, 3.0],
+                vec![3.0, 3.5, 4.0],
+            ),
+        };
+        Self {
+            strategy_type: StrategyTypeId::SupertrendAsymmetric,
+            enabled: true,
+            params: StrategyParams::SupertrendAsymmetric {
+                atr_periods,
+                entry_multipliers,
+                exit_multipliers,
+            },
+        }
+    }
+
+    /// Supertrend with re-entry cooldown grid.
+    pub fn supertrend_cooldown_with_depth(depth: SweepDepth) -> Self {
+        let (atr_periods, multipliers, cooldown_bars) = match depth {
+            SweepDepth::Quick => (vec![10], vec![3.0], vec![10]),
+            SweepDepth::Standard => (vec![10, 14], vec![2.5, 3.0], vec![5, 10, 20]),
+            SweepDepth::Comprehensive => (vec![7, 10, 14], vec![2.0, 2.5, 3.0], vec![5, 10, 15, 20]),
+        };
+        Self {
+            strategy_type: StrategyTypeId::SupertrendCooldown,
+            enabled: true,
+            params: StrategyParams::SupertrendCooldown {
+                atr_periods,
+                multipliers,
+                cooldown_bars,
+            },
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Phase 3: Price Structure Strategies
     // -------------------------------------------------------------------------
@@ -2833,6 +3584,60 @@ impl StrategyGridConfig {
                 periods,
                 entry_pcts,
                 exit_pcts,
+            },
+        }
+    }
+
+    /// 52-Week High Momentum (ROC filter) grid with specified sweep depth.
+    pub fn fifty_two_week_high_momentum_with_depth(depth: SweepDepth) -> Self {
+        let (periods, entry_pcts, exit_pcts, momentum_periods, momentum_thresholds) = match depth {
+            SweepDepth::Quick => (vec![252], vec![0.95], vec![0.90], vec![10], vec![0.0]),
+            SweepDepth::Standard => (
+                vec![189, 252],
+                vec![0.95, 0.98],
+                vec![0.85, 0.90],
+                vec![10, 20],
+                vec![0.0, 0.02],
+            ),
+            SweepDepth::Comprehensive => (
+                vec![126, 189, 252],
+                vec![0.95, 0.98, 1.0],
+                vec![0.80, 0.85, 0.90],
+                vec![10, 20],
+                vec![0.0, 0.02, 0.05],
+            ),
+        };
+        Self {
+            strategy_type: StrategyTypeId::FiftyTwoWeekHighMomentum,
+            enabled: true,
+            params: StrategyParams::FiftyTwoWeekHighMomentum {
+                periods,
+                entry_pcts,
+                exit_pcts,
+                momentum_periods,
+                momentum_thresholds,
+            },
+        }
+    }
+
+    /// 52-Week High Trailing Stop grid with specified sweep depth.
+    pub fn fifty_two_week_high_trailing_with_depth(depth: SweepDepth) -> Self {
+        let (periods, entry_pcts, trailing_stop_pcts) = match depth {
+            SweepDepth::Quick => (vec![252], vec![0.95], vec![0.10]),
+            SweepDepth::Standard => (vec![189, 252], vec![0.95, 0.98], vec![0.05, 0.10, 0.15]),
+            SweepDepth::Comprehensive => (
+                vec![126, 189, 252],
+                vec![0.95, 0.98, 1.0],
+                vec![0.05, 0.08, 0.10, 0.15],
+            ),
+        };
+        Self {
+            strategy_type: StrategyTypeId::FiftyTwoWeekHighTrailing,
+            enabled: true,
+            params: StrategyParams::FiftyTwoWeekHighTrailing {
+                periods,
+                entry_pcts,
+                trailing_stop_pcts,
             },
         }
     }
@@ -2960,6 +3765,64 @@ impl StrategyGridConfig {
                 af_starts,
                 af_steps,
                 af_maxs,
+            },
+        }
+    }
+
+    /// Parabolic SAR with MA trend filter grid.
+    pub fn parabolic_sar_filtered_with_depth(depth: SweepDepth) -> Self {
+        let (af_starts, af_steps, af_maxs, trend_ma_periods) = match depth {
+            SweepDepth::Quick => (vec![0.02], vec![0.02], vec![0.20], vec![50]),
+            SweepDepth::Standard => (
+                vec![0.02, 0.03],
+                vec![0.02],
+                vec![0.20],
+                vec![50, 200],
+            ),
+            SweepDepth::Comprehensive => (
+                vec![0.01, 0.02, 0.03],
+                vec![0.02],
+                vec![0.15, 0.20, 0.25],
+                vec![50, 100, 200],
+            ),
+        };
+        Self {
+            strategy_type: StrategyTypeId::ParabolicSarFiltered,
+            enabled: true,
+            params: StrategyParams::ParabolicSarFiltered {
+                af_starts,
+                af_steps,
+                af_maxs,
+                trend_ma_periods,
+            },
+        }
+    }
+
+    /// Parabolic SAR with delayed entry after flip grid.
+    pub fn parabolic_sar_delayed_with_depth(depth: SweepDepth) -> Self {
+        let (af_starts, af_steps, af_maxs, delay_bars) = match depth {
+            SweepDepth::Quick => (vec![0.02], vec![0.02], vec![0.20], vec![1]),
+            SweepDepth::Standard => (
+                vec![0.02, 0.03],
+                vec![0.02],
+                vec![0.20],
+                vec![1, 2, 3],
+            ),
+            SweepDepth::Comprehensive => (
+                vec![0.01, 0.02, 0.03],
+                vec![0.02],
+                vec![0.15, 0.20, 0.25],
+                vec![1, 2, 3, 5],
+            ),
+        };
+        Self {
+            strategy_type: StrategyTypeId::ParabolicSarDelayed,
+            enabled: true,
+            params: StrategyParams::ParabolicSarDelayed {
+                af_starts,
+                af_steps,
+                af_maxs,
+                delay_bars,
             },
         }
     }
@@ -3094,18 +3957,22 @@ pub struct MultiStrategyGrid {
 
 impl MultiStrategyGrid {
     /// Create with all strategies using default parameters.
+    ///
+    /// Note: The following strategies are disabled by default due to poor
+    /// backtesting performance (Sharpe < 0.15): TurtleS1, TurtleS2,
+    /// DmiAdx, BollingerSqueeze.
     pub fn all_strategies_default() -> Self {
         Self {
             strategies: vec![
                 StrategyGridConfig::donchian_default(),
-                StrategyGridConfig::turtle_s1(),
-                StrategyGridConfig::turtle_s2(),
+                StrategyGridConfig::turtle_s1().disabled(), // Poor performance
+                StrategyGridConfig::turtle_s2().disabled(), // Poor performance
                 StrategyGridConfig::ma_crossover_default(),
                 StrategyGridConfig::tsmom_default(),
                 // Phase 2
-                StrategyGridConfig::dmi_adx_default(),
+                StrategyGridConfig::dmi_adx_default().disabled(), // Poor performance
                 StrategyGridConfig::aroon_default(),
-                StrategyGridConfig::bollinger_squeeze_default(),
+                StrategyGridConfig::bollinger_squeeze_default().disabled(), // Poor performance
                 // Phase 4
                 StrategyGridConfig::parabolic_sar_default(),
                 StrategyGridConfig::orb_default(),
@@ -3150,30 +4017,42 @@ impl MultiStrategyGrid {
     ///
     /// This is the recommended way to create a multi-strategy grid with
     /// research-backed parameter ranges.
+    ///
+    /// Note: The following strategies are disabled by default due to poor
+    /// backtesting performance (Sharpe < 0.15): TurtleS1, TurtleS2, Keltner,
+    /// DmiAdx, BollingerSqueeze, DarvasBox.
     pub fn with_depth(depth: SweepDepth) -> Self {
         Self {
             strategies: vec![
                 // Original strategies
                 StrategyGridConfig::donchian_with_depth(depth),
-                StrategyGridConfig::turtle_s1(), // Fixed params, no depth
-                StrategyGridConfig::turtle_s2(), // Fixed params, no depth
+                StrategyGridConfig::turtle_s1().disabled(), // Poor performance
+                StrategyGridConfig::turtle_s2().disabled(), // Poor performance
                 StrategyGridConfig::ma_crossover_with_depth(depth),
                 StrategyGridConfig::tsmom_with_depth(depth),
                 // Phase 1: ATR-Based Channels
-                StrategyGridConfig::keltner_with_depth(depth),
+                StrategyGridConfig::keltner_with_depth(depth).disabled(), // Poor performance
                 StrategyGridConfig::starc_with_depth(depth),
                 StrategyGridConfig::supertrend_with_depth(depth),
+                StrategyGridConfig::supertrend_volume_with_depth(depth),
+                StrategyGridConfig::supertrend_confirmed_with_depth(depth),
+                StrategyGridConfig::supertrend_asymmetric_with_depth(depth),
+                StrategyGridConfig::supertrend_cooldown_with_depth(depth),
                 // Phase 2: Momentum/Direction
-                StrategyGridConfig::dmi_adx_with_depth(depth),
+                StrategyGridConfig::dmi_adx_with_depth(depth).disabled(), // Poor performance
                 StrategyGridConfig::aroon_with_depth(depth),
-                StrategyGridConfig::bollinger_squeeze_with_depth(depth),
+                StrategyGridConfig::bollinger_squeeze_with_depth(depth).disabled(), // Poor performance
                 // Phase 3: Price Structure
                 StrategyGridConfig::fifty_two_week_high_with_depth(depth),
-                StrategyGridConfig::darvas_box_with_depth(depth),
+                StrategyGridConfig::fifty_two_week_high_momentum_with_depth(depth),
+                StrategyGridConfig::fifty_two_week_high_trailing_with_depth(depth),
+                StrategyGridConfig::darvas_box_with_depth(depth).disabled(), // Poor performance
                 StrategyGridConfig::larry_williams_with_depth(depth),
                 StrategyGridConfig::heikin_ashi_with_depth(depth),
                 // Phase 4: Complex Stateful
                 StrategyGridConfig::parabolic_sar_with_depth(depth),
+                StrategyGridConfig::parabolic_sar_filtered_with_depth(depth),
+                StrategyGridConfig::parabolic_sar_delayed_with_depth(depth),
                 StrategyGridConfig::orb_with_depth(depth),
                 StrategyGridConfig::ensemble_with_depth(depth),
             ],
@@ -3197,15 +4076,39 @@ impl MultiStrategyGrid {
             StrategyTypeId::Keltner => StrategyGridConfig::keltner_with_depth(depth),
             StrategyTypeId::STARC => StrategyGridConfig::starc_with_depth(depth),
             StrategyTypeId::Supertrend => StrategyGridConfig::supertrend_with_depth(depth),
+            StrategyTypeId::SupertrendVolume => {
+                StrategyGridConfig::supertrend_volume_with_depth(depth)
+            }
+            StrategyTypeId::SupertrendConfirmed => {
+                StrategyGridConfig::supertrend_confirmed_with_depth(depth)
+            }
+            StrategyTypeId::SupertrendAsymmetric => {
+                StrategyGridConfig::supertrend_asymmetric_with_depth(depth)
+            }
+            StrategyTypeId::SupertrendCooldown => {
+                StrategyGridConfig::supertrend_cooldown_with_depth(depth)
+            }
             // Phase 3: Price Structure
             StrategyTypeId::FiftyTwoWeekHigh => {
                 StrategyGridConfig::fifty_two_week_high_with_depth(depth)
+            }
+            StrategyTypeId::FiftyTwoWeekHighMomentum => {
+                StrategyGridConfig::fifty_two_week_high_momentum_with_depth(depth)
+            }
+            StrategyTypeId::FiftyTwoWeekHighTrailing => {
+                StrategyGridConfig::fifty_two_week_high_trailing_with_depth(depth)
             }
             StrategyTypeId::DarvasBox => StrategyGridConfig::darvas_box_with_depth(depth),
             StrategyTypeId::LarryWilliams => StrategyGridConfig::larry_williams_with_depth(depth),
             StrategyTypeId::HeikinAshi => StrategyGridConfig::heikin_ashi_with_depth(depth),
             // Phase 4: Complex Stateful
             StrategyTypeId::ParabolicSar => StrategyGridConfig::parabolic_sar_with_depth(depth),
+            StrategyTypeId::ParabolicSarFiltered => {
+                StrategyGridConfig::parabolic_sar_filtered_with_depth(depth)
+            }
+            StrategyTypeId::ParabolicSarDelayed => {
+                StrategyGridConfig::parabolic_sar_delayed_with_depth(depth)
+            }
             StrategyTypeId::OpeningRangeBreakout => StrategyGridConfig::orb_with_depth(depth),
             StrategyTypeId::Ensemble => StrategyGridConfig::ensemble_with_depth(depth),
             // Phase 5 oscillator strategies - not yet implemented in grid
@@ -3618,6 +4521,29 @@ pub fn create_strategy_from_config(config: &StrategyConfigId) -> Box<dyn Strateg
         } => Box::new(FiftyTwoWeekHighStrategy::new(
             *period, *entry_pct, *exit_pct,
         )),
+        // FiftyTwoWeekHigh variants
+        StrategyConfigId::FiftyTwoWeekHighMomentum {
+            period,
+            entry_pct,
+            exit_pct,
+            momentum_period,
+            momentum_threshold,
+        } => Box::new(FiftyTwoWeekHighMomentumStrategy::new(
+            *period,
+            *entry_pct,
+            *exit_pct,
+            *momentum_period,
+            *momentum_threshold,
+        )),
+        StrategyConfigId::FiftyTwoWeekHighTrailing {
+            period,
+            entry_pct,
+            trailing_stop_pct,
+        } => Box::new(FiftyTwoWeekHighTrailingStrategy::new(
+            *period,
+            *entry_pct,
+            *trailing_stop_pct,
+        )),
         StrategyConfigId::DarvasBox {
             box_confirmation_bars,
         } => Box::new(DarvasBoxStrategy::new(*box_confirmation_bars)),
@@ -3638,6 +4564,29 @@ pub fn create_strategy_from_config(config: &StrategyConfigId) -> Box<dyn Strateg
             af_step,
             af_max,
         } => Box::new(ParabolicSARStrategy::new(*af_start, *af_step, *af_max)),
+        // ParabolicSar variants
+        StrategyConfigId::ParabolicSarFiltered {
+            af_start,
+            af_step,
+            af_max,
+            trend_ma_period,
+        } => Box::new(ParabolicSarFilteredStrategy::new(
+            *af_start,
+            *af_step,
+            *af_max,
+            *trend_ma_period,
+        )),
+        StrategyConfigId::ParabolicSarDelayed {
+            af_start,
+            af_step,
+            af_max,
+            delay_bars,
+        } => Box::new(ParabolicSarDelayedStrategy::new(
+            *af_start,
+            *af_step,
+            *af_max,
+            *delay_bars,
+        )),
         StrategyConfigId::OpeningRangeBreakout { range_bars, period } => {
             Box::new(OpeningRangeBreakoutStrategy::new(*range_bars, *period))
         }
@@ -3673,6 +4622,45 @@ pub fn create_strategy_from_config(config: &StrategyConfigId) -> Box<dyn Strateg
             atr_period,
             multiplier,
         } => Box::new(SupertrendStrategy::new(*atr_period, *multiplier)),
+        // Supertrend variants
+        StrategyConfigId::SupertrendVolume {
+            atr_period,
+            multiplier,
+            volume_lookback,
+            volume_threshold_pct,
+        } => Box::new(SupertrendVolumeStrategy::new(
+            *atr_period,
+            *multiplier,
+            *volume_lookback,
+            *volume_threshold_pct,
+        )),
+        StrategyConfigId::SupertrendConfirmed {
+            atr_period,
+            multiplier,
+            confirmation_bars,
+        } => Box::new(SupertrendConfirmedStrategy::new(
+            *atr_period,
+            *multiplier,
+            *confirmation_bars,
+        )),
+        StrategyConfigId::SupertrendAsymmetric {
+            atr_period,
+            entry_multiplier,
+            exit_multiplier,
+        } => Box::new(SupertrendAsymmetricStrategy::new(
+            *atr_period,
+            *entry_multiplier,
+            *exit_multiplier,
+        )),
+        StrategyConfigId::SupertrendCooldown {
+            atr_period,
+            multiplier,
+            cooldown_bars,
+        } => Box::new(SupertrendCooldownStrategy::new(
+            *atr_period,
+            *multiplier,
+            *cooldown_bars,
+        )),
         // Phase 5: Oscillator Strategies
         StrategyConfigId::Rsi {
             period,

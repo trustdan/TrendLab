@@ -78,7 +78,13 @@
       "Bash(set PYTHONUTF8=1)",
       "Bash(conda --version:*)",
       "Bash(conda env list:*)",
-      "Bash(\"C:\\\\tools\\\\Anaconda3\\\\Anaconda3\\\\python.exe\" --version)"
+      "Bash(\"C:\\\\tools\\\\Anaconda3\\\\Anaconda3\\\\python.exe\" --version)",
+      "Bash(dir \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\apps\\\\trendlab-gui\\\\src-tauri\\\\artifacts\")",
+      "Bash(move \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\reports\\\\research\\\\2024-12-29-yolo-sweep-analysis.md\" \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\reports\\\\research\\\\2025-12-29-yolo-sweep-analysis.md\")",
+      "Bash(cd:*)",
+      "Bash(if not exist \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\.github\\\\workflows\" mkdir \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\.github\\\\workflows\")",
+      "Bash(if not exist \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\reports\\\\scans\" mkdir \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\reports\\\\scans\")",
+      "Bash(powershell.exe -Command \"python scripts/analyze_yolo.py --charts --data-dir target/release/artifacts\")"
     ]
   }
 }

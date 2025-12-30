@@ -114,7 +114,7 @@ export const createSweepSlice: SliceCreator<SweepSlice> = (set, get) => ({
         costModel: state.cost_model,
         dateRange: state.date_range,
         isRunning: state.is_running,
-        currentJobId: state.current_job_id,
+        currentJobId: state.current_job_id ?? null,
         loading: false,
       });
     } catch (e) {
@@ -182,6 +182,10 @@ export const createSweepSlice: SliceCreator<SweepSlice> = (set, get) => ({
     set({ error: null });
     try {
       const response = await invoke<StartSweepResponse>('start_sweep');
+      if (!response) {
+        set({ error: 'Failed to start sweep (no response)' });
+        return null;
+      }
       set({
         isRunning: true,
         currentJobId: response.job_id,

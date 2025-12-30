@@ -239,6 +239,11 @@ fn apply_worker_update(engine: &mut trendlab_engine::app::App, update: &WorkerUp
 
         // Analysis started - no state change needed
         WorkerUpdate::AnalysisStarted { .. } => {}
+
+        // YOLO data refresh - GUI can show progress (optional)
+        WorkerUpdate::YoloDataRefresh { .. } => {}
+        WorkerUpdate::YoloDataRefreshProgress { .. } => {}
+        WorkerUpdate::YoloDataRefreshComplete { .. } => {}
     }
 }
 

@@ -26,7 +26,7 @@ The project optimizes for:
 
 ## Quick Links
 
-[Quick Start](#quick-start) | [Zero to Backtest](#zero-to-first-backtest-5-minutes) | [TUI Guide](#tui-features) | [Help Panel](#help-panel-6-or-) | [Desktop GUI](#desktop-gui) | [YOLO Mode](#yolo-mode) | [Statistical Rigor](#statistical-rigor) | [Risk Profiles](#risk-profiles) | [Strategies](#strategies) | [CLI Commands](#cli-commands) | [Contributing](#contributing)
+[Quick Start](#quick-start) | [Zero to Backtest](#zero-to-first-backtest-5-minutes) | [TUI Guide](#tui-features) | [Help Panel](#help-panel-6-or-) | [Desktop GUI](#desktop-gui) | [YOLO Mode](#yolo-mode) | [Daily Signal Scanner](#daily-signal-scanner) | [Statistical Rigor](#statistical-rigor) | [Risk Profiles](#risk-profiles) | [Strategies](#strategies) | [CLI Commands](#cli-commands) | [Contributing](#contributing)
 
 ## Ethos (what we care about)
 
@@ -642,11 +642,47 @@ YOLO Mode is TrendLab's autonomous strategy discovery engine. It continuously ex
 
 ### How It Works
 
-1. **Random Exploration**: Samples strategy configurations with configurable randomization (default 15%)
-2. **Parallel Execution**: Runs backtests across all selected tickers simultaneously
-3. **Leaderboard Ranking**: Maintains top N configurations ranked by Sharpe ratio
-4. **Cross-Symbol Aggregation**: Identifies configs that work across multiple symbols
-5. **Session Persistence**: Results persist across sessions for long-running research
+1. **Smart Data Fetching**: Automatically checks cached data coverage and fetches missing historical data from Yahoo Finance to match your requested date range
+2. **Random Exploration**: Samples strategy configurations with configurable randomization (default 15%)
+3. **Parallel Execution**: Runs backtests across all selected tickers simultaneously
+4. **Leaderboard Ranking**: Maintains top N configurations ranked by Sharpe ratio
+5. **Cross-Symbol Aggregation**: Identifies configs that work across multiple symbols
+6. **Artifact Auto-Export**: Automatically exports StrategyArtifact JSON for new top performers
+7. **Session Persistence**: Results persist across sessions for long-running research
+
+### Automatic Data Refresh
+
+When you select a date range (e.g., 30 years), YOLO mode:
+
+- Scans the Parquet cache to check each symbol's available data range
+- Identifies symbols where cached data doesn't cover the full requested period
+- Automatically fetches missing data from Yahoo Finance
+- Shows progress updates during the fetch phase ("Refreshing data for X symbols...")
+- Proceeds with sweeps once all data is available
+
+This ensures your backtests always use the full historical range you requested, not just whatever was previously cached.
+
+### Artifact Auto-Export
+
+When YOLO mode discovers a new top-performing cross-symbol configuration, it automatically exports a StrategyArtifact JSON file ready for Pine Script generation.
+
+**What gets exported:**
+
+- Strategy parameters and rules (entry/exit conditions)
+- Indicator definitions in Pine-friendly DSL
+- Parity vectors from a representative symbol (best Sharpe) for validation
+- Cost model and fill conventions
+
+**Output location:**
+
+```text
+artifacts/exports/{session_id}/
+├── 52wk_high_80_70_59.json
+├── donchian_55_20.json
+└── ...
+```
+
+This enables a seamless workflow: discover winning configs in YOLO mode → auto-export artifacts → generate Pine Scripts via `/pine:generate`.
 
 ### Leaderboard Views
 
@@ -695,6 +731,106 @@ TrendLab uses different evidence depending on what data is available:
 | `t` | Toggle Session/All-Time view |
 | `↑/↓` | Navigate leaderboard entries |
 | `Enter` | View selected config in Chart panel |
+
+## Daily Signal Scanner
+
+TrendLab includes a daily signal scanner for automated watchlist monitoring with email alerts.
+
+### How It Works
+
+1. **Watchlist Configuration**: Define tickers and strategies in `configs/watchlist.toml`
+2. **Data Refresh**: Automatically fetches recent data from Yahoo Finance
+3. **Signal Generation**: Runs each strategy against each ticker to detect entry/exit signals
+4. **Email Alerts**: Sends HTML email via Resend when actionable signals are found
+5. **GitHub Actions**: Runs automatically after market close (9:05 PM ET, Mon-Fri)
+
+### CLI Usage
+
+```bash
+# Run a scan with default watchlist
+trendlab scan --watchlist configs/watchlist.toml --lookback 300
+
+# Output to JSON file
+trendlab scan --watchlist configs/watchlist.toml --output reports/scans/2025-01-15.json
+
+# Only show actionable signals (entries/exits, no holds)
+trendlab scan --actionable-only
+```
+
+### Watchlist Configuration
+
+Create a TOML file with your tickers and default strategies:
+
+```toml
+[watchlist]
+name = "Daily Alerts"
+description = "Personal watchlist for signal notifications"
+default_strategies = [
+    "donchian:55,20",
+    "52wk_high:252,0.95,0.90",
+    "supertrend:10,3.0",
+]
+
+[[tickers]]
+symbol = "NVDA"
+
+[[tickers]]
+symbol = "AAPL"
+
+[[tickers]]
+symbol = "SPY"
+strategies = ["donchian:20,10"]  # Override for this ticker
+```
+
+**Strategy format**: `strategy_id:param1,param2,...`
+
+| Strategy | Format | Example |
+|----------|--------|---------|
+| Donchian | `donchian:entry,exit` | `donchian:55,20` |
+| 52-Week High | `52wk_high:period,entry_pct,exit_pct` | `52wk_high:252,0.95,0.90` |
+| Supertrend | `supertrend:period,multiplier` | `supertrend:10,3.0` |
+| MA Crossover | `ma_cross:fast,slow` | `ma_cross:50,200` |
+| TSMOM | `tsmom:lookback` | `tsmom:126` |
+| Parabolic SAR | `psar:start,step,max` | `psar:0.02,0.02,0.20` |
+
+### JSON Output
+
+```json
+{
+  "scan_date": "2025-01-15",
+  "watchlist_name": "Daily Alerts",
+  "signals": [
+    {"symbol": "NVDA", "strategy": "donchian", "params": "55,20", "signal": "entry", "close_price": 138.45},
+    {"symbol": "SPY", "strategy": "52wk_high", "params": "252,0.95,0.90", "signal": "hold", "close_price": 595.23}
+  ],
+  "summary": {"total_tickers": 10, "entry_signals": 1, "exit_signals": 0, "errors": []}
+}
+```
+
+### GitHub Actions Setup
+
+The workflow at `.github/workflows/daily-scan.yml` runs automatically after market close.
+
+**Required Secrets:**
+
+| Secret             | Description                                   |
+|--------------------|-----------------------------------------------|
+| `RESEND_API_KEY`   | Your Resend API key                           |
+| `ALERT_EMAIL_TO`   | Recipient email address                       |
+| `ALERT_EMAIL_FROM` | Sender address (from verified Resend domain)  |
+
+**Manual Trigger:**
+
+You can also trigger the scan manually from the GitHub Actions tab with a custom lookback period.
+
+### Email Notifications
+
+Emails are only sent when there are actionable signals (entries or exits). The HTML email includes:
+
+- Summary stats (entries, exits, total tickers)
+- Entry signals table with symbol, strategy, and close price
+- Exit signals table
+- Any scan errors
 
 ## Statistical Rigor
 
@@ -1364,6 +1500,11 @@ trendlab report export --run-id sweep_001 --output results.csv
 # Strategy artifacts (for Pine parity)
 trendlab artifact export --run-id sweep_001 --config-id best_sharpe
 trendlab artifact validate --path artifact.json
+
+# Daily signal scanner
+trendlab scan --watchlist configs/watchlist.toml --lookback 300
+trendlab scan --watchlist configs/watchlist.toml --output reports/scans/today.json
+trendlab scan --actionable-only
 ```
 
 ## Project structure
@@ -1529,10 +1670,11 @@ TrendLab
 ├─ Using TrendLab
 │  ├── TUI Features ............. Interactive terminal UI
 │  ├── Desktop GUI .............. Tauri + React desktop app
-│  ├── CLI Commands ............. Data, sweep, report, artifact
+│  ├── CLI Commands ............. Data, sweep, report, artifact, scan
 │  ├── Strategies ............... 20 trend-following strategies
 │  ├── Risk Profiles ............ Balanced, Conservative, Aggressive, TrendOptions
-│  └── YOLO Mode ................ Auto-optimization with leaderboard
+│  ├── YOLO Mode ................ Auto-optimization with leaderboard
+│  └── Daily Signal Scanner ..... Automated alerts via GitHub Actions
 │
 ├─ Architecture
 │  ├── Workspace Crates ......... core, cli, bdd, tui, gui

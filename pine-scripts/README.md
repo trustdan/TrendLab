@@ -6,6 +6,11 @@ Pine Scripts generated from TrendLab strategy artifacts for use in TradingView.
 
 | Strategy | Config | Generated | Performance | File |
 |----------|--------|-----------|-------------|------|
+| Supertrend | ATR=18, Mult=4.3 | 2025-12-29 | Sharpe 0.415, OOS 0.44, Hit 97.3% | [supertrend/18_4.3.pine](strategies/supertrend/18_4.3.pine) |
+| Parabolic SAR | 0.01/0.08/0.37 | 2025-12-29 | Sharpe 0.413, OOS 0.44, Hit 96.8% | [parabolic_sar/0.01_0.08_0.37.pine](strategies/parabolic_sar/0.01_0.08_0.37.pine) |
+| 52-Week High | 115/70%/52% | 2025-12-29 | Sharpe 0.403, OOS 0.36, Hit 95.9% | [52wk_high/115_70_52.pine](strategies/52wk_high/115_70_52.pine) |
+| Supertrend | ATR=17, Mult=3.2 | 2025-12-29 | Sharpe 0.413, OOS 0.44, Hit 95.9% | [supertrend/17_3.2.pine](strategies/supertrend/17_3.2.pine) |
+| Parabolic SAR | 0.05/0.01/0.33 | 2025-12-29 | Sharpe 0.413, OOS 0.44, Hit 96.4% | [parabolic_sar/0.05_0.01_0.33.pine](strategies/parabolic_sar/0.05_0.01_0.33.pine) |
 | 52-Week High | 80/70%/59% | 2025-12-29 | Sharpe 0.583, Hit 94.1% | [52wk_high/80_70_59.pine](strategies/52wk_high/80_70_59.pine) |
 
 ## Usage

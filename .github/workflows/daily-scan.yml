@@ -1,0 +1,89 @@
+name: Daily Signal Scan
+
+on:
+  schedule:
+    # Run at 9:05 PM ET (01:05 UTC) Monday-Friday after market close
+    - cron: '5 1 * * 2-6'
+  workflow_dispatch:
+    inputs:
+      lookback:
+        description: 'Number of lookback days for data refresh'
+        required: false
+        default: '60'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          components: rustfmt
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build CLI (release)
+        run: cargo build --release -p trendlab-cli
+
+      - name: Create data directories
+        run: mkdir -p data/raw/yahoo data/parquet/1d reports/scans
+
+      - name: Get current date
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Run daily scan
+        run: |
+          ./target/release/trendlab-cli scan \
+            --watchlist configs/watchlist.toml \
+            --lookback ${{ github.event.inputs.lookback || '60' }} \
+            --output reports/scans/${{ steps.date.outputs.date }}.json \
+            --actionable-only
+
+      - name: Upload scan results
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-results-${{ steps.date.outputs.date }}
+          path: reports/scans/${{ steps.date.outputs.date }}.json
+          retention-days: 90
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: pip install requests
+
+      - name: Send email notification
+        if: success()
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
+        run: python scripts/send_signal_email.py reports/scans/${{ steps.date.outputs.date }}.json
+
+      - name: Commit scan results (optional)
+        if: success() && github.event_name == 'schedule'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add reports/scans/${{ steps.date.outputs.date }}.json
+          git diff --cached --quiet || git commit -m "Add scan results for ${{ steps.date.outputs.date }}"
+          git push || echo "Push failed (may need permissions)"

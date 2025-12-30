@@ -10,6 +10,7 @@ use trendlab_core::SweepDepth as CoreSweepDepth;
 use trendlab_engine::worker::WorkerCommand;
 
 use crate::error::GuiError;
+use crate::jobs::JobStatus;
 use crate::state::AppState;
 
 // ============================================================================
@@ -152,6 +153,13 @@ pub struct SweepStateResponse {
     pub cost_model: CostModel,
     pub date_range: DateRange,
     pub is_running: bool,
+    pub current_job_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StartSweepResponse {
+    pub job_id: String,
+    pub total_configs: usize,
 }
 
 // ============================================================================
@@ -272,12 +280,13 @@ pub fn get_sweep_state(state: State<'_, AppState>) -> SweepStateResponse {
             end: end.format("%Y-%m-%d").to_string(),
         },
         is_running: state.is_sweep_running(),
+        current_job_id: None,
     }
 }
 
 /// Start a parameter sweep via the worker thread.
 #[tauri::command]
-pub fn start_sweep(state: State<'_, AppState>) -> Result<(), GuiError> {
+pub fn start_sweep(state: State<'_, AppState>) -> Result<StartSweepResponse, GuiError> {
     // Check if already running
     if state.is_sweep_running() {
         return Err(GuiError::InvalidState(
@@ -317,6 +326,14 @@ pub fn start_sweep(state: State<'_, AppState>) -> Result<(), GuiError> {
         pyramid_config: trendlab_core::PyramidConfig::default(),
     };
 
+    // Register job and set running status (GUI-side tracking)
+    let (job_id, _token) = state.jobs.create_new("sweep");
+    state.jobs.set_status(&job_id, JobStatus::Running);
+
+    // Estimate total configs for UI progress (same multiplier as UI uses)
+    let depth_multiplier = SweepDepth::from_core(&state.get_sweep_depth()).config_multiplier();
+    let estimated_total = symbols.len() * strategies.len() * depth_multiplier;
+
     // Clear cancellation flag
     state.clear_cancel();
 
@@ -329,7 +346,12 @@ pub fn start_sweep(state: State<'_, AppState>) -> Result<(), GuiError> {
             strategy_grid,
             backtest_config,
         })
-        .map_err(|e| GuiError::Internal(format!("Failed to start sweep: {}", e)))
+        .map_err(|e| GuiError::Internal(format!("Failed to start sweep: {}", e)))?;
+
+    Ok(StartSweepResponse {
+        job_id,
+        total_configs: estimated_total,
+    })
 }
 
 /// Cancel a running sweep.

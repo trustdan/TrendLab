@@ -34,7 +34,8 @@ pub mod universe;
 pub mod validation;
 
 pub use artifact::{
-    create_donchian_artifact, ArtifactBuilder, ArtifactCostModel, ArtifactError, ArtifactMetadata,
+    create_52wk_high_artifact, create_artifact_from_config, create_donchian_artifact,
+    export_artifact_to_file, ArtifactBuilder, ArtifactCostModel, ArtifactError, ArtifactMetadata,
     DataRange, IndicatorDef, IndicatorValue, OhlcvData, ParamValue, ParityVector, ParityVectors,
     Rule, Rules, StrategyArtifact, SCHEMA_VERSION,
 };
@@ -69,11 +70,11 @@ pub use clustering::{
     ROBUSTNESS_CLUSTER_FEATURES,
 };
 pub use data::{
-    bars_to_dataframe, build_yahoo_chart_url, build_yahoo_url, dataframe_to_bars, parquet_path,
-    parse_yahoo_chart_json, parse_yahoo_csv, partition_by_year, read_parquet,
-    scan_multiple_parquet_lazy, scan_parquet_lazy, scan_symbol_parquet_lazy, write_parquet,
-    write_partitioned_parquet, CacheMetadata, DataQualityChecker, DataQualityReport, DataSource,
-    FetchRequest, FetchResult, ProviderError, QualityIssue,
+    bars_to_dataframe, build_yahoo_chart_url, build_yahoo_url, dataframe_to_bars,
+    get_parquet_date_range, parquet_path, parse_yahoo_chart_json, parse_yahoo_csv, partition_by_year,
+    read_parquet, scan_multiple_parquet_lazy, scan_parquet_lazy, scan_symbol_parquet_lazy,
+    write_parquet, write_partitioned_parquet, CacheMetadata, DataQualityChecker, DataQualityReport,
+    DataSource, FetchRequest, FetchResult, ProviderError, QualityIssue,
 };
 pub use error::TrendLabError;
 pub use indicator_cache::{
@@ -127,12 +128,15 @@ pub use statistics::{
 };
 pub use strategy::{
     AroonCrossStrategy, BollingerSqueezeStrategy, CCIStrategy, DarvasBoxStrategy, DmiAdxStrategy,
-    DonchianBreakoutStrategy, EnsembleStrategy, FiftyTwoWeekHighStrategy, HeikinAshiRegimeStrategy,
+    DonchianBreakoutStrategy, EnsembleStrategy, FiftyTwoWeekHighMomentumStrategy,
+    FiftyTwoWeekHighStrategy, FiftyTwoWeekHighTrailingStrategy, HeikinAshiRegimeStrategy,
     IchimokuStrategy, KeltnerBreakoutStrategy, LarryWilliamsStrategy, MACDAdxStrategy,
     MACDStrategy, MACrossoverStrategy, NullStrategy, OpeningRangeBreakoutStrategy,
-    OscillatorConfluenceStrategy, ParabolicSARStrategy, Position, ROCStrategy,
-    RSIBollingerStrategy, RSIStrategy, STARCBreakoutStrategy, Signal, StochasticStrategy, Strategy,
-    SupertrendStrategy, TradingMode, TsmomStrategy, VotingMethod, WilliamsRStrategy,
+    OscillatorConfluenceStrategy, ParabolicSARStrategy, ParabolicSarDelayedStrategy,
+    ParabolicSarFilteredStrategy, Position, ROCStrategy, RSIBollingerStrategy, RSIStrategy,
+    STARCBreakoutStrategy, Signal, StochasticStrategy, Strategy, SupertrendAsymmetricStrategy,
+    SupertrendConfirmedStrategy, SupertrendCooldownStrategy, SupertrendStrategy,
+    SupertrendVolumeStrategy, TradingMode, TsmomStrategy, VotingMethod, WilliamsRStrategy,
 };
 pub use strategy_v2::{
     create_strategy_v2, create_strategy_v2_from_config, AroonV2, BollingerSqueezeV2, DarvasBoxV2,

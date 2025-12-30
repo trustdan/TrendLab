@@ -49,7 +49,7 @@ export interface SweepState {
   cost_model: CostModel;
   date_range: DateRange;
   is_running: boolean;
-  current_job_id: string | null;
+  current_job_id?: string | null;
 }
 
 /** Selection summary for display */

@@ -404,6 +404,80 @@ pub fn scan_symbol_parquet_lazy(
     Ok(lf)
 }
 
+/// Check the date coverage of cached Parquet data for a symbol.
+///
+/// Returns `Some((min_date, max_date))` if data exists, or `None` if no data found.
+/// This is used to determine if we need to fetch additional data from Yahoo.
+///
+/// # Arguments
+/// * `base_dir` - Base Parquet directory (e.g., "data/parquet")
+/// * `symbol` - Ticker symbol
+/// * `timeframe` - Timeframe (e.g., "1d")
+pub fn get_parquet_date_range(
+    base_dir: &Path,
+    symbol: &str,
+    timeframe: &str,
+) -> Option<(NaiveDate, NaiveDate)> {
+    let symbol_dir = base_dir.join(format!("{}/symbol={}", timeframe, symbol));
+
+    if !symbol_dir.exists() {
+        return None;
+    }
+
+    // Find all year directories and determine min/max years
+    let years: Vec<i32> = std::fs::read_dir(&symbol_dir)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("year=") {
+                name.strip_prefix("year=")?.parse::<i32>().ok()
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if years.is_empty() {
+        return None;
+    }
+
+    let min_year = *years.iter().min()?;
+    let max_year = *years.iter().max()?;
+
+    // Scan the data to get actual min/max dates
+    // We scan all available data (no date filter) to find the true range
+    let lf = scan_symbol_parquet_lazy(base_dir, symbol, timeframe, None, None).ok()?;
+
+    // Get min and max timestamps
+    let agg = lf
+        .select([col("ts").min().alias("min_ts"), col("ts").max().alias("max_ts")])
+        .collect()
+        .ok()?;
+
+    if agg.height() == 0 {
+        return None;
+    }
+
+    let min_ts = agg.column("min_ts").ok()?.datetime().ok()?.get(0)?;
+    let max_ts = agg.column("max_ts").ok()?.datetime().ok()?.get(0)?;
+
+    // Convert milliseconds to NaiveDate
+    let min_date = Utc
+        .timestamp_millis_opt(min_ts)
+        .single()?
+        .date_naive();
+    let max_date = Utc
+        .timestamp_millis_opt(max_ts)
+        .single()?
+        .date_naive();
+
+    // Suppress unused variable warnings
+    let _ = (min_year, max_year);
+
+    Some((min_date, max_date))
+}
+
 /// Write bars to partitioned Parquet files.
 ///
 /// # Arguments

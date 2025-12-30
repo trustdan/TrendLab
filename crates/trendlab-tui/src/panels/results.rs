@@ -564,22 +564,36 @@ fn draw_leaderboard_table(
         }
     };
 
-    // Extract date range from the first entry's dates vector
-    let date_range_str = cross_symbol
-        .entries
-        .first()
-        .and_then(|e| {
-            let start = e.dates.first()?;
-            let end = e.dates.last()?;
-            let years = (*end - *start).num_days() as f64 / 365.25;
-            Some(format!(
+    // Use the requested date range (user-configured), or fall back to actual data range
+    let date_range_str = match (cross_symbol.requested_start, cross_symbol.requested_end) {
+        (Some(start), Some(end)) => {
+            let years = (end - start).num_days() as f64 / 365.25;
+            format!(
                 "{} -> {} ({:.1}y)",
                 start.format("%Y-%m-%d"),
                 end.format("%Y-%m-%d"),
                 years
-            ))
-        })
-        .unwrap_or_default();
+            )
+        }
+        _ => {
+            // Fallback: extract from the first entry's dates vector (legacy behavior)
+            cross_symbol
+                .entries
+                .first()
+                .and_then(|e| {
+                    let start = e.dates.first()?;
+                    let end = e.dates.last()?;
+                    let years = (*end - *start).num_days() as f64 / 365.25;
+                    Some(format!(
+                        "{} -> {} ({:.1}y)",
+                        start.format("%Y-%m-%d"),
+                        end.format("%Y-%m-%d"),
+                        years
+                    ))
+                })
+                .unwrap_or_default()
+        }
+    };
 
     let header_style = Style::default()
         .fg(colors::MAGENTA)
@@ -700,22 +714,65 @@ fn draw_leaderboard_table(
             let config_detail = format!("\u{251c}\u{2500} Params: {}", entry.config_id.display());
             rows.push(detail_row(config_detail, highlight_style));
 
-            // Row 2: Date range for this config
-            let entry_date_range = entry
-                .dates
-                .first()
-                .zip(entry.dates.last())
-                .map(|(s, e)| {
-                    let years = (*e - *s).num_days() as f64 / 365.25;
+            // Row 2: Date range - show requested range first, then actual data coverage
+            // Use requested range from leaderboard if available
+            let (requested_start, requested_end) =
+                (cross_symbol.requested_start, cross_symbol.requested_end);
+
+            // Get actual data range from entry's combined equity curve
+            let actual_start = entry.dates.first().map(|d| d.date_naive());
+            let actual_end = entry.dates.last().map(|d| d.date_naive());
+
+            let date_range_line = match (requested_start, requested_end) {
+                (Some(req_start), Some(req_end)) => {
+                    let years = (req_end - req_start).num_days() as f64 / 365.25;
                     format!(
                         "\u{251c}\u{2500} Range: {} \u{2192} {} ({:.1}y)",
-                        s.format("%Y-%m-%d"),
-                        e.format("%Y-%m-%d"),
+                        req_start.format("%Y-%m-%d"),
+                        req_end.format("%Y-%m-%d"),
                         years
                     )
-                })
-                .unwrap_or_else(|| "\u{251c}\u{2500} Range: N/A".to_string());
-            rows.push(detail_row(entry_date_range, detail_style));
+                }
+                _ => {
+                    // Fallback to actual data range if no requested range
+                    entry
+                        .dates
+                        .first()
+                        .zip(entry.dates.last())
+                        .map(|(s, e)| {
+                            let years = (*e - *s).num_days() as f64 / 365.25;
+                            format!(
+                                "\u{251c}\u{2500} Range: {} \u{2192} {} ({:.1}y)",
+                                s.format("%Y-%m-%d"),
+                                e.format("%Y-%m-%d"),
+                                years
+                            )
+                        })
+                        .unwrap_or_else(|| "\u{251c}\u{2500} Range: N/A".to_string())
+                }
+            };
+            rows.push(detail_row(date_range_line, detail_style));
+
+            // Show actual data coverage if it differs significantly from requested
+            if let (Some(req_start), Some(req_end), Some(act_start), Some(act_end)) =
+                (requested_start, requested_end, actual_start, actual_end)
+            {
+                let requested_days = (req_end - req_start).num_days();
+                let actual_days = (act_end - act_start).num_days();
+                // Show data coverage line if actual range is <90% of requested
+                if actual_days < (requested_days * 9 / 10) {
+                    let coverage_pct = (actual_days as f64 / requested_days as f64) * 100.0;
+                    let actual_years = actual_days as f64 / 365.25;
+                    let data_line = format!(
+                        "\u{251c}\u{2500} Data: {} \u{2192} {} ({:.1}y, {:.0}% coverage)",
+                        act_start.format("%Y-%m-%d"),
+                        act_end.format("%Y-%m-%d"),
+                        actual_years,
+                        coverage_pct
+                    );
+                    rows.push(detail_row(data_line, Style::default().fg(colors::ORANGE)));
+                }
+            }
 
             // Row 3: Best symbols by Sharpe
             let mut sorted_symbols: Vec<_> = entry.per_symbol_metrics.iter().collect();

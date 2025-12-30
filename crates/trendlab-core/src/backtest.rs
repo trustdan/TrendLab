@@ -240,7 +240,7 @@ pub struct EquityPoint {
     pub equity: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct BacktestResult {
     pub fills: Vec<Fill>,
     pub trades: Vec<Trade>,

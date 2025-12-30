@@ -1874,6 +1874,14 @@ pub struct CrossSymbolLeaderboard {
 
     /// Total configs tested across all iterations
     pub total_configs_tested: u64,
+
+    /// Requested start date (user-configured) - may differ from actual data range
+    #[serde(default)]
+    pub requested_start: Option<chrono::NaiveDate>,
+
+    /// Requested end date (user-configured) - may differ from actual data range
+    #[serde(default)]
+    pub requested_end: Option<chrono::NaiveDate>,
 }
 
 impl Default for CrossSymbolLeaderboard {
@@ -1894,7 +1902,27 @@ impl CrossSymbolLeaderboard {
             started_at: now,
             last_updated: now,
             total_configs_tested: 0,
+            requested_start: None,
+            requested_end: None,
         }
+    }
+
+    /// Set the requested date range (user-configured).
+    /// This is the range the user asked for, which may differ from actual data coverage.
+    pub fn with_requested_range(
+        mut self,
+        start: chrono::NaiveDate,
+        end: chrono::NaiveDate,
+    ) -> Self {
+        self.requested_start = Some(start);
+        self.requested_end = Some(end);
+        self
+    }
+
+    /// Set the requested date range on an existing leaderboard.
+    pub fn set_requested_range(&mut self, start: chrono::NaiveDate, end: chrono::NaiveDate) {
+        self.requested_start = Some(start);
+        self.requested_end = Some(end);
     }
 
     /// Try to insert an entry. Returns true if the entry was added.

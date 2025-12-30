@@ -1,0 +1,58 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © TrendLab - Generated from Strategy Artifact
+
+//@version=6
+strategy("52-Week High 115/70/52", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=100, initial_capital=100000, commission_type=strategy.commission.percent, commission_value=0.1, slippage=1)
+
+// =============================================================================
+// INPUTS
+// =============================================================================
+lookbackPeriod = input.int(115, "Lookback Period", minval=1)
+entryPct = input.float(70.0, "Entry Threshold %", minval=1, maxval=100) / 100
+exitPct = input.float(52.0, "Exit Threshold %", minval=1, maxval=100) / 100
+
+// =============================================================================
+// INDICATOR CALCULATION
+// =============================================================================
+// Calculate the highest high over the lookback period
+periodHigh = ta.highest(high, lookbackPeriod)
+
+// Calculate entry and exit thresholds
+entryThreshold = periodHigh * entryPct
+exitThreshold = periodHigh * exitPct
+
+// =============================================================================
+// STRATEGY LOGIC
+// =============================================================================
+// Entry: Close >= 70% of the 115-day period high
+// This means: enter when price is within 30% of its recent high (showing strength)
+entryCondition = close >= entryThreshold
+
+// Exit: Close < 52% of the 115-day period high
+// This means: exit when price has dropped more than 48% from its recent high
+exitCondition = close < exitThreshold
+
+// Position management
+isFlat = strategy.position_size == 0
+isLong = strategy.position_size > 0
+
+if entryCondition and isFlat
+    strategy.entry("Long", strategy.long)
+
+if exitCondition and isLong
+    strategy.close("Long")
+
+// =============================================================================
+// PLOTTING
+// =============================================================================
+// Plot the period high and thresholds
+plot(periodHigh, "Period High", color=color.blue, linewidth=1)
+plot(entryThreshold, "Entry Threshold (70%)", color=color.green, linewidth=1, style=plot.style_stepline)
+plot(exitThreshold, "Exit Threshold (52%)", color=color.red, linewidth=1, style=plot.style_stepline)
+
+// Fill between thresholds for visual clarity
+fill(plot(entryThreshold, display=display.none), plot(exitThreshold, display=display.none), color=color.new(color.yellow, 90))
+
+// Plot entry/exit signals
+plotshape(entryCondition and isFlat, "Entry Signal", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(exitCondition and isLong, "Exit Signal", shape.triangledown, location.abovebar, color.red, size=size.small)

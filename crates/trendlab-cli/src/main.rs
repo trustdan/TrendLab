@@ -7,6 +7,7 @@ use commands::data::{self, DataConfig, RefreshSource};
 use commands::html_report;
 use commands::report;
 use commands::run;
+use commands::scan;
 use commands::sweep;
 use trendlab_cli::commands;
 
@@ -87,6 +88,25 @@ enum Commands {
     Artifact {
         #[command(subcommand)]
         command: ArtifactCommands,
+    },
+
+    /// Scan watchlist for today's signals
+    Scan {
+        /// Path to watchlist TOML file
+        #[arg(short, long, default_value = "configs/watchlist.toml")]
+        watchlist: String,
+
+        /// Number of lookback days for data refresh
+        #[arg(long, default_value = "60")]
+        lookback: usize,
+
+        /// Output JSON file path (prints to stdout if not specified)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Only show entry/exit signals (filter out holds)
+        #[arg(long, default_value = "false")]
+        actionable_only: bool,
     },
 }
 
@@ -292,6 +312,34 @@ async fn main() -> Result<()> {
                 artifact::execute_validate(&path)?;
             }
         },
+
+        Commands::Scan {
+            watchlist,
+            lookback,
+            output,
+            actionable_only,
+        } => {
+            let watchlist_path = std::path::Path::new(&watchlist);
+            let config = DataConfig::default();
+
+            println!("Running daily signal scan...");
+            println!("  Watchlist: {}", watchlist);
+            println!("  Lookback: {} days", lookback);
+            println!();
+
+            let result =
+                scan::execute_scan(watchlist_path, lookback, actionable_only, &config).await?;
+
+            // Output to file or stdout
+            if let Some(output_path) = output {
+                let json = serde_json::to_string_pretty(&result)?;
+                std::fs::write(&output_path, &json)?;
+                println!("Scan results written to: {}", output_path);
+            }
+
+            // Always print summary to terminal
+            println!("{}", scan::format_scan_output(&result));
+        }
     }
 
     Ok(())

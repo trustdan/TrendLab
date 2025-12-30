@@ -1,0 +1,166 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-gui:
+    name: Build GUI (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/trendlab-gui/src-tauri
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/trendlab-gui/ui/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: apps/trendlab-gui/ui
+        run: npm ci
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/trendlab-gui
+          tauriScript: npx tauri
+          args: --target ${{ matrix.target }}
+          tagName: ${{ github.ref_name }}
+          releaseName: 'TrendLab ${{ github.ref_name }}'
+          releaseBody: |
+            ## TrendLab ${{ github.ref_name }}
+
+            ### Downloads
+            - **Linux**: `.AppImage` (portable) or `.deb` (Debian/Ubuntu)
+            - **Windows**: `.msi` (installer) or `.exe` (portable)
+            - **macOS**: `.dmg` (Intel or Apple Silicon)
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+          releaseDraft: true
+          prerelease: false
+
+  build-cli:
+    name: Build CLI (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            artifact: trendlab
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact: trendlab.exe
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            artifact: trendlab
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            artifact: trendlab
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build CLI
+        run: cargo build --release --target ${{ matrix.target }} -p trendlab-cli
+
+      - name: Build TUI
+        run: cargo build --release --target ${{ matrix.target }} -p trendlab-tui
+
+      - name: Package (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/trendlab dist/
+          cp target/${{ matrix.target }}/release/trendlab-tui dist/
+          cd dist
+          tar -czvf trendlab-cli-${{ matrix.target }}.tar.gz trendlab trendlab-tui
+
+      - name: Package (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item target/${{ matrix.target }}/release/trendlab.exe dist/
+          Copy-Item target/${{ matrix.target }}/release/trendlab-tui.exe dist/
+          Compress-Archive -Path dist/trendlab.exe, dist/trendlab-tui.exe -DestinationPath dist/trendlab-cli-${{ matrix.target }}.zip
+
+      - name: Upload CLI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: dist/trendlab-cli-*
+
+  upload-cli:
+    name: Upload CLI to Release
+    needs: build-cli
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all CLI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: true
+          files: artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

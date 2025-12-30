@@ -2,6 +2,29 @@
   "productName": "TrendLab",
   "version": "0.1.0",
   "identifier": "com.trendlab.dev",
+  "bundle": {
+    "active": true,
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "targets": "all",
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false
+      },
+      "deb": {
+        "depends": []
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.13"
+    },
+    "windows": {
+      "wix": null,
+      "nsis": null
+    }
+  },
   "build": {
     "beforeDevCommand": { "script": "npm run dev", "cwd": "../ui" },
     "beforeBuildCommand": { "script": "npm run build", "cwd": "../ui" },

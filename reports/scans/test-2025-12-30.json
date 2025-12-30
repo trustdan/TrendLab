@@ -1,0 +1,253 @@
+{
+  "scan_date": "2025-12-30",
+  "scan_timestamp": "2025-12-30T01:45:48.831637200+00:00",
+  "watchlist_name": "Daily Alerts",
+  "signals": [
+    {
+      "symbol": "NVDA",
+      "strategy": "donchian",
+      "params": "55,20",
+      "signal": "hold",
+      "close_price": 188.220001,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "NVDA",
+      "strategy": "52wk_high",
+      "params": "252,0.95,0.90",
+      "signal": "hold",
+      "close_price": 188.220001,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "NVDA",
+      "strategy": "supertrend",
+      "params": "10,3.0",
+      "signal": "hold",
+      "close_price": 188.220001,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "AAPL",
+      "strategy": "donchian",
+      "params": "55,20",
+      "signal": "hold",
+      "close_price": 273.76001,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "AAPL",
+      "strategy": "52wk_high",
+      "params": "252,0.95,0.90",
+      "signal": "entry",
+      "close_price": 273.76001,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "AAPL",
+      "strategy": "supertrend",
+      "params": "10,3.0",
+      "signal": "hold",
+      "close_price": 273.76001,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "MSFT",
+      "strategy": "donchian",
+      "params": "55,20",
+      "signal": "hold",
+      "close_price": 487.100006,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "MSFT",
+      "strategy": "52wk_high",
+      "params": "252,0.95,0.90",
+      "signal": "hold",
+      "close_price": 487.100006,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "MSFT",
+      "strategy": "supertrend",
+      "params": "10,3.0",
+      "signal": "hold",
+      "close_price": 487.100006,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "GOOGL",
+      "strategy": "donchian",
+      "params": "55,20",
+      "signal": "hold",
+      "close_price": 313.559998,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "GOOGL",
+      "strategy": "supertrend",
+      "params": "10,3.0",
+      "signal": "hold",
+      "close_price": 313.559998,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "META",
+      "strategy": "donchian",
+      "params": "55,20",
+      "signal": "hold",
+      "close_price": 658.690002,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "META",
+      "strategy": "52wk_high",
+      "params": "252,0.95,0.90",
+      "signal": "hold",
+      "close_price": 658.690002,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "META",
+      "strategy": "supertrend",
+      "params": "10,3.0",
+      "signal": "hold",
+      "close_price": 658.690002,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "AMZN",
+      "strategy": "donchian",
+      "params": "55,20",
+      "signal": "hold",
+      "close_price": 232.070007,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "AMZN",
+      "strategy": "52wk_high",
+      "params": "252,0.95,0.90",
+      "signal": "hold",
+      "close_price": 232.070007,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "AMZN",
+      "strategy": "supertrend",
+      "params": "10,3.0",
+      "signal": "hold",
+      "close_price": 232.070007,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "TSLA",
+      "strategy": "donchian",
+      "params": "55,20",
+      "signal": "hold",
+      "close_price": 459.640015,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "TSLA",
+      "strategy": "52wk_high",
+      "params": "252,0.95,0.90",
+      "signal": "hold",
+      "close_price": 459.640015,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "TSLA",
+      "strategy": "supertrend",
+      "params": "10,3.0",
+      "signal": "hold",
+      "close_price": 459.640015,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "SPY",
+      "strategy": "donchian",
+      "params": "55,20",
+      "signal": "hold",
+      "close_price": 687.849976,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "SPY",
+      "strategy": "52wk_high",
+      "params": "252,0.95,0.90",
+      "signal": "entry",
+      "close_price": 687.849976,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "SPY",
+      "strategy": "supertrend",
+      "params": "10,3.0",
+      "signal": "hold",
+      "close_price": 687.849976,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "QQQ",
+      "strategy": "donchian",
+      "params": "55,20",
+      "signal": "hold",
+      "close_price": 620.869995,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "QQQ",
+      "strategy": "52wk_high",
+      "params": "252,0.95,0.90",
+      "signal": "entry",
+      "close_price": 620.869995,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "QQQ",
+      "strategy": "supertrend",
+      "params": "10,3.0",
+      "signal": "hold",
+      "close_price": 620.869995,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "IWM",
+      "strategy": "donchian",
+      "params": "55,20",
+      "signal": "hold",
+      "close_price": 249.880005,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "IWM",
+      "strategy": "52wk_high",
+      "params": "252,0.95,0.90",
+      "signal": "entry",
+      "close_price": 249.880005,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    },
+    {
+      "symbol": "IWM",
+      "strategy": "supertrend",
+      "params": "10,3.0",
+      "signal": "hold",
+      "close_price": 249.880005,
+      "timestamp": "2025-12-29T00:00:00+00:00"
+    }
+  ],
+  "summary": {
+    "total_tickers": 10,
+    "total_checks": 30,
+    "entry_signals": 4,
+    "exit_signals": 0,
+    "hold_signals": 25,
+    "errors": [
+      {
+        "symbol": "GOOGL",
+        "strategy": "52wk_high:252,0.95,0.90",
+        "error": "Insufficient data for GOOGL: 207 bars, need > 252"
+      }
+    ]
+  }
+}
