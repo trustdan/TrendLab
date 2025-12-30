@@ -61,13 +61,16 @@ jobs:
         working-directory: apps/trendlab-gui/ui
         run: npm ci
 
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/trendlab-gui
-          tauriScript: npx tauri
+          tauriScript: tauri
           args: --target ${{ matrix.target }}
           tagName: ${{ github.ref_name }}
           releaseName: 'TrendLab ${{ github.ref_name }}'
