@@ -96,8 +96,8 @@ enum Commands {
         #[arg(short, long, default_value = "configs/watchlist.toml")]
         watchlist: String,
 
-        /// Number of lookback days for data refresh
-        #[arg(long, default_value = "60")]
+        /// Number of lookback days for data refresh (calendar days; 90 ≈ 60 trading days)
+        #[arg(long, default_value = "90")]
         lookback: usize,
 
         /// Output JSON file path (prints to stdout if not specified)

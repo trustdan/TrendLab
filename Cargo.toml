@@ -8,7 +8,8 @@ members = [
     "crates/trendlab-tui",
     "crates/trendlab-launcher",
     "crates/trendlab-logging",
-    "apps/trendlab-gui/src-tauri",
+    # GUI deprecated - see docs/roadmap-gui-resurrection.md
+    # "apps/trendlab-gui/src-tauri",
 ]
 
 [workspace.package]

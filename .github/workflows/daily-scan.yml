@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       lookback:
-        description: 'Number of lookback days for data refresh'
+        description: 'Number of lookback days for data refresh (calendar days, need ~90 for 60 trading days)'
         required: false
-        default: '60'
+        default: '90'
 
 env:
   CARGO_TERM_COLOR: always
@@ -52,7 +52,7 @@ jobs:
         run: |
           ./target/release/trendlab-cli scan \
             --watchlist configs/watchlist.toml \
-            --lookback ${{ github.event.inputs.lookback || '60' }} \
+            --lookback ${{ github.event.inputs.lookback || '90' }} \
             --output reports/scans/${{ steps.date.outputs.date }}.json \
             --actionable-only
 

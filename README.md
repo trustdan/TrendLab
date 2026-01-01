@@ -145,15 +145,16 @@ See [Backtest Architecture](#backtest-architecture) below for details on the dua
 
 See [Strategy Roadmap](#strategy-roadmap) and [docs/roadmap-v2-strategies.md](docs/roadmap-v2-strategies.md) for details.
 
-**Milestone 6 ("Desktop GUI")** ✅ Complete:
+**Milestone 6 ("Desktop GUI")** ⚠️ Deprecated:
 
 - Tauri v2 desktop application with React + TypeScript frontend
 - TradingView Lightweight Charts for professional candlestick visualization
 - Same 5-panel workflow as TUI with polished web aesthetics
 - Full keyboard navigation matching TUI shortcuts
 - YOLO Mode with auto-optimization and leaderboard
+- **Status**: Deprecated due to feature gaps and architectural mismatch with TUI. Use `trendlab --tui` instead.
 
-See [Desktop GUI](#desktop-gui) and [docs/roadmap-tauri-gui.md](docs/roadmap-tauri-gui.md) for details.
+See [docs/roadmap-gui-resurrection.md](docs/roadmap-gui-resurrection.md) for resurrection details.
 
 **Milestone 7 ("Statistical Rigor")** ✅ Complete:
 
@@ -502,6 +503,13 @@ Press `Tab` or `→` to switch to parameter editing:
 
 ## Desktop GUI
 
+> **DEPRECATED**: The Desktop GUI has been deprecated due to feature gaps, architectural mismatch with the TUI, and runtime issues. The TUI (`trendlab --tui`) provides the complete feature set and is the recommended interface.
+>
+> The GUI code remains intact for potential resurrection. See [docs/roadmap-gui-resurrection.md](docs/roadmap-gui-resurrection.md) for the detailed resurrection roadmap.
+
+<details>
+<summary>Archived GUI Documentation (click to expand)</summary>
+
 A polished desktop GUI built with **Tauri v2** + **React** + **TypeScript**, featuring **TradingView Lightweight Charts** for professional financial visualization.
 
 ### Quick Start (GUI)
@@ -635,6 +643,8 @@ See [docs/roadmap-tauri-gui.md](docs/roadmap-tauri-gui.md) for the detailed impl
 - **Phase 7**: Polish (keyboard nav, accessibility, performance) - Complete
 - **Phase 8**: Unified Launcher + Companion Mode - Complete
 - **YOLO Mode**: Auto-optimization with leaderboard - Complete
+
+</details>
 
 ## YOLO Mode
 

@@ -20,7 +20,7 @@ TrendLab/
 │   ├── commands/         # Slash command skills (9 skills)
 │   └── rules.md          # Operational rules for Claude
 ├── apps/
-│   └── trendlab-gui/     # Desktop GUI (Tauri v2 + React)
+│   └── trendlab-gui/     # Desktop GUI (DEPRECATED - see docs/roadmap-gui-resurrection.md)
 │       ├── src-tauri/    # Rust backend
 │       │   ├── src/
 │       │   │   ├── commands/  # Tauri command handlers
@@ -78,9 +78,9 @@ Delegate immediately when a task matches an agent's domain. Agents are in `.clau
 | **bdd-test-author** | Gherkin feature files + cucumber-rs step definitions |
 | **metrics-analyst** | CAGR, Sharpe, drawdown, turnover, ranking logic, cost sensitivity |
 | **pine-artifact-writer** | StrategyArtifact schema, Pine-friendly DSL, parity test vectors |
-| **tauri-expert** | Tauri desktop apps, Rust backend commands, IPC, window management |
-| **financial-charts-expert** | Candlestick charts, indicators, TradingView Lightweight Charts |
-| **web-frontend-expert** | TypeScript/web frontends for Tauri, component architecture, state management |
+| **tauri-expert** | Tauri desktop apps, Rust backend commands, IPC, window management (GUI resurrection only) |
+| **financial-charts-expert** | Candlestick charts, indicators, TradingView Lightweight Charts (GUI resurrection only) |
+| **web-frontend-expert** | TypeScript/web frontends for Tauri, component architecture, state management (GUI resurrection only) |
 
 ---
 

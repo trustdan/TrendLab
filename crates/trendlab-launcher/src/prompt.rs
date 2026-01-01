@@ -83,10 +83,14 @@ fn show_inner() -> io::Result<Option<LaunchMode>> {
     execute!(
         stdout,
         Print("  │   Press "),
-        SetForegroundColor(Color::Yellow),
+        SetForegroundColor(Color::DarkGrey),
         Print("[G]"),
+        SetForegroundColor(Color::DarkGrey),
+        Print(" for Desktop GUI "),
+        SetForegroundColor(Color::Red),
+        Print("(deprecated)"),
         SetForegroundColor(Color::Blue),
-        Print(" for Desktop GUI         │\r\n"),
+        Print("│\r\n"),
     )?;
 
     execute!(

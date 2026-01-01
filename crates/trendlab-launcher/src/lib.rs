@@ -4,6 +4,7 @@
 //! with a companion mode that displays progress in the terminal while the GUI runs.
 
 pub mod companion;
+pub mod deprecation;
 pub mod exec;
 pub mod ipc;
 pub mod prompt;

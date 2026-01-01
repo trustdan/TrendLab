@@ -5,7 +5,7 @@
 
 use clap::Parser;
 
-use trendlab_launcher::companion;
+use trendlab_launcher::deprecation;
 use trendlab_launcher::exec;
 use trendlab_launcher::prompt::{self, LaunchMode};
 use trendlab_logging::LogConfig;
@@ -87,23 +87,10 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(LaunchMode::Gui) => {
             if logging_enabled {
-                tracing::info!("Launching GUI mode");
+                tracing::info!("GUI mode requested (deprecated)");
             }
-            // Start IPC server first (binds to ephemeral port)
-            let (server, addr) = companion::start_server().await?;
-
-            // Launch GUI with server address in environment
-            let gui_pid = exec::launch_gui(&addr)?;
-
-            println!("GUI launched (PID {})", gui_pid);
-            println!("Companion listening on {}", addr);
-            if logging_enabled {
-                println!("Logging enabled (filter: {})", args.log_filter);
-            }
-            println!("Starting companion mode...\n");
-
-            // Run companion mode
-            companion::run(server, gui_pid).await?;
+            // GUI is deprecated - show message and open resurrection roadmap
+            deprecation::handle_gui_deprecation()?;
         }
         None => {
             // User cancelled
