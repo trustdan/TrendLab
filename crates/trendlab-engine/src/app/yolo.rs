@@ -37,6 +37,8 @@ pub struct YoloState {
 
     /// Randomization percentage (e.g., 0.15 = ±15%)
     pub randomization_pct: f64,
+    /// Walk-forward Sharpe threshold (min avg Sharpe to trigger WF validation)
+    pub wf_sharpe_threshold: f64,
     /// Optional cap for Polars threads (per backtest)
     pub polars_max_threads: Option<usize>,
     /// Optional cap for outer Rayon pool (symbol-level parallelism)
@@ -64,6 +66,8 @@ pub struct YoloConfigState {
     pub end_date: NaiveDate,
     /// Randomization percentage (0.0 to 1.0)
     pub randomization_pct: f64,
+    /// Walk-forward Sharpe threshold (0.15 to 0.50)
+    pub wf_sharpe_threshold: f64,
     /// Sweep depth for parameter coverage
     pub sweep_depth: SweepDepth,
     /// Optional cap for Polars threads (per backtest)
@@ -78,6 +82,7 @@ pub enum YoloConfigField {
     StartDate,
     EndDate,
     Randomization,
+    WfSharpeThreshold,
     SweepDepth,
     PolarsThreads,
     OuterThreads,
@@ -91,6 +96,7 @@ impl Default for YoloConfigState {
             start_date: today - chrono::Duration::days(5 * 365),
             end_date: today,
             randomization_pct: 0.30,
+            wf_sharpe_threshold: 0.25,
             sweep_depth: SweepDepth::Quick,
             polars_max_threads: None,
             outer_threads: None,
@@ -103,7 +109,8 @@ impl YoloConfigField {
         match self {
             Self::StartDate => Self::EndDate,
             Self::EndDate => Self::Randomization,
-            Self::Randomization => Self::SweepDepth,
+            Self::Randomization => Self::WfSharpeThreshold,
+            Self::WfSharpeThreshold => Self::SweepDepth,
             Self::SweepDepth => Self::PolarsThreads,
             Self::PolarsThreads => Self::OuterThreads,
             Self::OuterThreads => Self::StartDate,
@@ -115,7 +122,8 @@ impl YoloConfigField {
             Self::StartDate => Self::OuterThreads,
             Self::EndDate => Self::StartDate,
             Self::Randomization => Self::EndDate,
-            Self::SweepDepth => Self::Randomization,
+            Self::WfSharpeThreshold => Self::Randomization,
+            Self::SweepDepth => Self::WfSharpeThreshold,
             Self::PolarsThreads => Self::SweepDepth,
             Self::OuterThreads => Self::PolarsThreads,
         }
@@ -142,6 +150,8 @@ impl Default for YoloState {
             // Default exploration strength for YOLO mode. Kept moderate so it explores meaningfully
             // without completely thrashing parameter space each iteration.
             randomization_pct: 0.30,
+            // Default walk-forward threshold (lowered from 0.30 to capture more configs)
+            wf_sharpe_threshold: 0.25,
             polars_max_threads: None,
             outer_threads: None,
             session_configs_tested: 0,

@@ -2081,6 +2081,7 @@ impl App {
             strategy_grid,
             backtest_config,
             randomization_pct: self.yolo.randomization_pct,
+            wf_sharpe_threshold: self.yolo.wf_sharpe_threshold,
             existing_per_symbol_leaderboard,
             existing_cross_symbol_leaderboard,
             session_id: Some(self.yolo.session_id.clone()),

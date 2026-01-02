@@ -135,6 +135,8 @@ pub enum WorkerCommand {
         backtest_config: BacktestConfig,
         /// Randomization percentage (e.g., 0.15 = +/-15%)
         randomization_pct: f64,
+        /// Walk-forward Sharpe threshold (min avg Sharpe to trigger WF validation)
+        wf_sharpe_threshold: f64,
         /// Optional: existing per-symbol leaderboard to continue from
         existing_per_symbol_leaderboard: Option<Leaderboard>,
         /// Optional: existing cross-symbol leaderboard to continue from
@@ -515,6 +517,7 @@ fn worker_loop(
                 strategy_grid,
                 backtest_config,
                 randomization_pct,
+                wf_sharpe_threshold,
                 existing_per_symbol_leaderboard,
                 existing_cross_symbol_leaderboard,
                 session_id,
@@ -529,6 +532,7 @@ fn worker_loop(
                     &strategy_grid,
                     backtest_config,
                     randomization_pct,
+                    wf_sharpe_threshold,
                     existing_per_symbol_leaderboard,
                     existing_cross_symbol_leaderboard,
                     session_id,
@@ -1859,6 +1863,7 @@ async fn handle_yolo_mode(
     base_grid: &MultiStrategyGrid,
     config: BacktestConfig,
     randomization_pct: f64,
+    wf_sharpe_threshold: f64,
     existing_per_symbol_leaderboard: Option<Leaderboard>,
     existing_cross_symbol_leaderboard: Option<CrossSymbolLeaderboard>,
     session_id: Option<String>,
@@ -2388,7 +2393,7 @@ async fn handle_yolo_mode(
 
             // Walk-forward validation for promising configs
             let (wf_grade, mean_oos, std_oos, pct_profitable, degradation, oos_pval) =
-                if aggregate_metrics.avg_sharpe >= WF_SHARPE_THRESHOLD {
+                if aggregate_metrics.avg_sharpe >= wf_sharpe_threshold {
                     compute_equity_based_wf(&per_symbol_equity)
                 } else {
                     (None, None, None, None, None, None)

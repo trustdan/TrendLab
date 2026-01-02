@@ -732,6 +732,11 @@ fn handle_yolo_config_key(app: &mut App, code: KeyCode, channels: &WorkerChannel
                     app.yolo.config.randomization_pct =
                         (app.yolo.config.randomization_pct - 0.05).max(0.0);
                 }
+                YoloConfigField::WfSharpeThreshold => {
+                    // Decrease by 0.05 (floor at 0.15)
+                    app.yolo.config.wf_sharpe_threshold =
+                        (app.yolo.config.wf_sharpe_threshold - 0.05).max(0.15);
+                }
                 YoloConfigField::SweepDepth => {
                     // Cycle to previous depth
                     let depths = SweepDepth::all();
@@ -786,6 +791,11 @@ fn handle_yolo_config_key(app: &mut App, code: KeyCode, channels: &WorkerChannel
                     app.yolo.config.randomization_pct =
                         (app.yolo.config.randomization_pct + 0.05).min(1.0);
                 }
+                YoloConfigField::WfSharpeThreshold => {
+                    // Increase by 0.05 (ceiling at 0.50)
+                    app.yolo.config.wf_sharpe_threshold =
+                        (app.yolo.config.wf_sharpe_threshold + 0.05).min(0.50);
+                }
                 YoloConfigField::SweepDepth => {
                     // Cycle to next depth
                     let depths = SweepDepth::all();
@@ -819,6 +829,7 @@ fn handle_yolo_config_key(app: &mut App, code: KeyCode, channels: &WorkerChannel
             // Apply config and start YOLO mode
             app.fetch_range = (app.yolo.config.start_date, app.yolo.config.end_date);
             app.yolo.randomization_pct = app.yolo.config.randomization_pct;
+            app.yolo.wf_sharpe_threshold = app.yolo.config.wf_sharpe_threshold;
             app.yolo.polars_max_threads = app.yolo.config.polars_max_threads;
             app.yolo.outer_threads = app.yolo.config.outer_threads;
             app.yolo.show_config = false;

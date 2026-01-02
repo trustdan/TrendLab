@@ -503,6 +503,28 @@ fn draw_yolo_config_modal(f: &mut Frame, app: &App) {
         ),
     ]));
 
+    // Walk-forward Sharpe threshold
+    let wf_style = if focused == YoloConfigField::WfSharpeThreshold {
+        Style::default()
+            .fg(colors::GREEN)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(colors::FG)
+    };
+    let wf_marker = if focused == YoloConfigField::WfSharpeThreshold {
+        "▶ "
+    } else {
+        "  "
+    };
+    lines.push(Line::from(vec![
+        Span::styled(wf_marker, wf_style),
+        Span::styled("WF Sharpe:  ", Style::default().fg(colors::FG_DARK)),
+        Span::styled(
+            format!("{:.2}", config.wf_sharpe_threshold),
+            wf_style,
+        ),
+    ]));
+
     // Sweep depth
     let depth_style = if focused == YoloConfigField::SweepDepth {
         Style::default()
