@@ -1,6 +1,0 @@
-param,all_median,all_min,all_max,top25_median,top25_min,top25_max,corr_with_sharpe
-period,,,,,,,0.0
-entry_pct,,,,,,,0.0
-exit_pct,,,,,,,0.0
-atr_period,15.0,15.0,15.0,15.0,15.0,15.0,NaN
-multiplier,1.4000000000000001,1.4000000000000001,1.4000000000000001,1.4000000000000001,1.4000000000000001,1.4000000000000001,4.264809808301512e-17

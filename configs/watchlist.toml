@@ -1,12 +1,19 @@
 # TrendLab Daily Signal Watchlist
-# Full universe for signal notifications - mirrors YOLO mode tickers.
+# Curated universe for signal notifications using research-backed robust configs.
 #
 # Usage:
 #   trendlab-cli scan --watchlist configs/watchlist.toml --output signals.json
+#
+# Research Summary (1980-2025, 45-year backtest):
+#   - Top strategies by median Sharpe: ParabolicSar (0.279), Supertrend (0.264),
+#     FiftyTwoWeekHigh (0.259), LarryWilliams (0.238), MACrossover (0.214)
+#   - Best sectors: Real Estate (Supertrend 0.324), Utilities (PSAR 0.314),
+#     Industrials (Supertrend 0.297)
+#   - All robust configs below have 100% symbol win ratio (positive Sharpe on every symbol)
 
 [watchlist]
 name = "Daily Alerts"
-description = "Full universe watchlist for signal notifications"
+description = "Curated universe with research-backed robust strategy configs"
 
 # Default strategies applied to all tickers unless overridden.
 # Format: "strategy_type:param1,param2,..."
@@ -19,14 +26,14 @@ description = "Full universe watchlist for signal notifications"
 #   ma_cross:fast,slow,type      - MA crossover (e.g., "ma_cross:50,200,sma")
 #   tsmom:lookback               - Time-series momentum (e.g., "tsmom:252")
 #
-# Top 3 from YOLO sweep (Dec 2025, 2005-2025 backtest):
-#   #1 supertrend:5,4.2         - Avg Sharpe 0.369, OOS 0.15, Hit Rate 98.8%
-#   #2 psar:0.10,0.01,0.36      - Avg Sharpe 0.367, OOS 0.15, Hit Rate 98.8%
-#   #3 52wk_high:50,0.92,0.40   - Avg Sharpe 0.364, OOS 0.15, Hit Rate 98.8%
+# Robust configs from 45-year backtest (all have 100% symbol win ratio):
+#   52wk_high:50,0.95,0.80  - Robustness 0.255, Avg Sharpe 0.273
+#   supertrend:10,3.0       - Robustness 0.253, Avg Sharpe 0.271
+#   psar:0.02,0.02,0.2      - Robustness 0.252, Avg Sharpe 0.271
 default_strategies = [
-    "supertrend:5,4.2",
-    "psar:0.10,0.01,0.36",
-    "52wk_high:50,0.92,0.40",
+    "52wk_high:50,0.95,0.80",
+    "supertrend:10,3.0",
+    "psar:0.02,0.02,0.2",
 ]
 
 # =============================================================================

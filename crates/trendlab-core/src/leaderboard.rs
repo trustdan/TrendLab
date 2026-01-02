@@ -2089,9 +2089,12 @@ impl CrossSymbolLeaderboard {
     }
 
     /// Get entries grouped by strategy type, sorted by rank within each group.
-    pub fn entries_by_strategy(&self) -> std::collections::HashMap<crate::StrategyTypeId, Vec<&AggregatedConfigResult>> {
+    pub fn entries_by_strategy(
+        &self,
+    ) -> std::collections::HashMap<crate::StrategyTypeId, Vec<&AggregatedConfigResult>> {
         use std::collections::HashMap;
-        let mut grouped: HashMap<crate::StrategyTypeId, Vec<&AggregatedConfigResult>> = HashMap::new();
+        let mut grouped: HashMap<crate::StrategyTypeId, Vec<&AggregatedConfigResult>> =
+            HashMap::new();
         for entry in &self.entries {
             grouped.entry(entry.strategy_type).or_default().push(entry);
         }

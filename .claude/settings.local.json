@@ -96,7 +96,19 @@
       "Bash(powershell.exe -Command \"cd c:/Users/Dan/TrendLab; python -c ''import json; f=open\\(\"\"target/release/artifacts/cross_symbol_leaderboard.json\"\"\\); d=json.load\\(f\\); print\\(len\\(d.get\\(\"\"entries\"\", []\\)\\), \"\"entries\"\"\\)''\")",
       "Bash(cmd.exe /c \"cd /d c:\\\\Users\\\\Dan\\\\TrendLab && python scripts/analyze_yolo.py --data-dir target/release/artifacts\")",
       "Bash(cmd.exe /c \"cd /d c:/Users/Dan/TrendLab && python scripts/analyze_yolo.py --data-dir target/release/artifacts\")",
-      "Bash(cmd.exe /c \"cd c:\\\\Users\\\\Dan\\\\TrendLab & python scripts\\\\analyze_yolo.py --data-dir .\\\\target\\\\release\\\\artifacts\")"
+      "Bash(cmd.exe /c \"cd c:\\\\Users\\\\Dan\\\\TrendLab & python scripts\\\\analyze_yolo.py --data-dir .\\\\target\\\\release\\\\artifacts\")",
+      "Bash(cmd.exe /c \"cd /d c:\\\\Users\\\\Dan\\\\TrendLab && python scripts\\\\analyze_yolo.py --data-dir target\\\\release\\\\artifacts\")",
+      "Bash(powershell.exe -Command \"cd ''c:\\\\Users\\\\Dan\\\\TrendLab''; python scripts\\\\analyze_yolo.py --data-dir ''.\\\\target\\\\release\\\\artifacts''\")",
+      "Bash(powershell.exe -NoProfile -Command \"& { cd ''C:\\\\Users\\\\Dan\\\\TrendLab''; python scripts\\\\analyze_yolo.py --data-dir target\\\\release\\\\artifacts 2>&1 }\")",
+      "Bash(powershell.exe -NoProfile -Command \"cd ''C:\\\\Users\\\\Dan\\\\TrendLab''; python scripts\\\\analyze_yolo.py --data-dir target\\\\release\\\\artifacts 2>&1 | Out-String\")",
+      "Bash(powershell.exe -NoProfile -Command \"python --version\")",
+      "Bash(powershell.exe -NoProfile -Command \"Get-ChildItem ''C:\\\\Users\\\\Dan\\\\TrendLab\\\\reports\\\\analysis'' | Format-Table Name, LastWriteTime, Length\")",
+      "Bash(powershell.exe -NoProfile -Command \"cd ''C:\\\\Users\\\\Dan\\\\TrendLab''; python scripts\\\\analyze_yolo.py --data-dir target\\\\release\\\\artifacts --export-csv --charts --output-dir reports\\\\analysis 2>&1 | Out-File -Encoding utf8 analysis_run.log; Write-Host ''Done''; Get-ChildItem reports\\\\analysis -Filter ''*.csv'' | Select-Object Name, LastWriteTime | Format-Table\")",
+      "Bash(powershell.exe -NoProfile -Command \"Get-Content ''C:\\\\Users\\\\Dan\\\\TrendLab\\\\analysis_run.log'' -Tail 50\")",
+      "Bash(powershell.exe -NoProfile -Command \"cd ''C:\\\\Users\\\\Dan\\\\TrendLab''; Remove-Item reports\\\\analysis\\\\*.csv -ErrorAction SilentlyContinue; python scripts\\\\analyze_yolo.py --data-dir target\\\\release\\\\artifacts --export-csv --output-dir reports\\\\analysis 2>&1\")",
+      "Bash(powershell.exe -NoProfile -Command \"Get-ChildItem ''C:\\\\Users\\\\Dan\\\\TrendLab\\\\reports\\\\analysis\\\\*.csv'' | Select-Object Name, LastWriteTime | Format-Table\")",
+      "Bash(powershell.exe -NoProfile -Command \"cd ''C:\\\\Users\\\\Dan\\\\TrendLab''; python scripts\\\\analyze_yolo.py --data-dir target\\\\release\\\\artifacts --charts --output-dir reports\\\\analysis 2>&1 | Select-Object -Last 5\")",
+      "Bash(powershell.exe -NoProfile -Command \"Get-ChildItem ''C:\\\\Users\\\\Dan\\\\TrendLab\\\\reports\\\\analysis\\\\*.png'' | Select-Object Name, LastWriteTime | Format-Table\")"
     ]
   }
 }

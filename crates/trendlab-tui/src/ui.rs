@@ -519,10 +519,7 @@ fn draw_yolo_config_modal(f: &mut Frame, app: &App) {
     lines.push(Line::from(vec![
         Span::styled(wf_marker, wf_style),
         Span::styled("WF Sharpe:  ", Style::default().fg(colors::FG_DARK)),
-        Span::styled(
-            format!("{:.2}", config.wf_sharpe_threshold),
-            wf_style,
-        ),
+        Span::styled(format!("{:.2}", config.wf_sharpe_threshold), wf_style),
     ]));
 
     // Sweep depth

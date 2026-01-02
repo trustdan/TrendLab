@@ -261,10 +261,12 @@ pub fn parse_strategy(s: &str) -> Result<(StrategySpec, String, String)> {
 // =============================================================================
 
 /// Compute the current signal for a ticker-strategy pair.
+/// Only returns Entry/Exit if it's a fresh transition (signal just fired in last `freshness_bars`).
 fn compute_signal(
     symbol: &str,
     strategy_str: &str,
     data_config: &DataConfig,
+    freshness_bars: usize,
 ) -> Result<TickerSignal> {
     // Parse strategy
     let (spec, strategy_type, params_str) = parse_strategy(strategy_str)?;
@@ -290,36 +292,102 @@ fn compute_signal(
     let strategy = create_strategy_v2(&spec);
     let warmup = strategy.warmup_period();
 
-    if bars.len() <= warmup {
+    if bars.len() <= warmup + freshness_bars {
         return Err(anyhow!(
             "Insufficient data for {}: {} bars, need > {}",
             symbol,
             bars.len(),
-            warmup
+            warmup + freshness_bars
         ));
     }
 
-    // For simplicity, assume flat position (we don't track state across scans yet)
-    // TODO: Add position state file for accurate entry/hold distinction
-    let signal = strategy.signal(&bars, Position::Flat);
-
     let last_bar = bars.last().unwrap();
+
+    // Get current signal
+    let current_signal = strategy.signal(&bars, Position::Flat);
+    let current_type: SignalType = current_signal.into();
+
+    // For Entry/Exit signals, check if this is a fresh transition
+    // by looking at where the signal first appeared
+    let final_signal = match current_type {
+        SignalType::Entry => {
+            // Find how many bars back this entry signal started
+            let bars_since_entry = find_signal_age(&bars, &strategy, true);
+            if bars_since_entry <= freshness_bars {
+                SignalType::Entry
+            } else {
+                SignalType::Hold // Stale entry, already in position
+            }
+        }
+        SignalType::Exit => {
+            // Find how many bars back this exit signal started
+            let bars_since_exit = find_signal_age(&bars, &strategy, false);
+            if bars_since_exit <= freshness_bars {
+                SignalType::Exit
+            } else {
+                SignalType::Hold // Stale exit, already exited
+            }
+        }
+        SignalType::Hold => SignalType::Hold,
+    };
 
     Ok(TickerSignal {
         symbol: symbol.to_string(),
         strategy: strategy_type,
         params: params_str,
-        signal: signal.into(),
+        signal: final_signal,
         close_price: last_bar.close,
         timestamp: last_bar.ts.to_rfc3339(),
     })
 }
 
+/// Find how many bars ago the current signal type first appeared.
+/// Returns 1 if it just fired on the current bar, 2 if it fired yesterday, etc.
+fn find_signal_age(
+    bars: &[trendlab_core::Bar],
+    strategy: &Box<dyn trendlab_core::StrategyV2>,
+    is_entry: bool,
+) -> usize {
+    let n = bars.len();
+    let max_lookback = 60.min(n - strategy.warmup_period()); // Don't look back more than 60 bars
+
+    for i in 1..max_lookback {
+        let check_idx = n - i;
+        let slice = &bars[..check_idx];
+
+        if slice.len() <= strategy.warmup_period() {
+            break;
+        }
+
+        let signal = strategy.signal(slice, Position::Flat);
+        let signal_type: SignalType = signal.into();
+
+        let matches = if is_entry {
+            signal_type == SignalType::Entry
+        } else {
+            signal_type == SignalType::Exit
+        };
+
+        if !matches {
+            // Signal changed, so the current signal started at bar (i)
+            return i;
+        }
+    }
+
+    // Signal has been active for the entire lookback period
+    max_lookback
+}
+
 /// Execute the full scan across all tickers and strategies.
+///
+/// # Arguments
+/// * `freshness_bars` - Only report Entry/Exit signals that fired within this many bars.
+///                      Default is 2 (today or yesterday). Set to 0 to disable freshness check.
 pub async fn execute_scan(
     watchlist_path: &Path,
     lookback_days: usize,
     actionable_only: bool,
+    freshness_bars: usize,
     data_config: &DataConfig,
 ) -> Result<ScanOutput> {
     // Load watchlist
@@ -340,13 +408,25 @@ pub async fn execute_scan(
     let mut errors = Vec::new();
     let mut total_checks = 0;
 
+    // Use freshness_bars if set, otherwise use a large value to disable
+    let effective_freshness = if freshness_bars == 0 {
+        9999
+    } else {
+        freshness_bars
+    };
+
     for ticker in &watchlist.tickers {
         let strategies = watchlist.strategies_for_ticker(ticker);
 
         for strategy_str in strategies {
             total_checks += 1;
 
-            match compute_signal(&ticker.symbol, strategy_str, data_config) {
+            match compute_signal(
+                &ticker.symbol,
+                strategy_str,
+                data_config,
+                effective_freshness,
+            ) {
                 Ok(signal) => {
                     // Skip holds if actionable_only is set
                     if actionable_only && signal.signal == SignalType::Hold {

@@ -19,15 +19,14 @@ use trendlab_core::{
     create_artifact_from_config, dataframe_to_bars, export_artifact_to_file,
     get_parquet_date_range, one_sided_mean_pvalue, parse_yahoo_chart_json,
     run_donchian_sweep_polars, run_strategy_sweep_polars_cached,
-    run_strategy_sweep_polars_parallel, scan_symbol_parquet_lazy,
-    write_partitioned_parquet, AggregatedConfigResult, AggregatedMetrics,
-    AggregatedPortfolioResult, AnalysisConfig, BacktestConfig, BacktestResult, Bar, CostModel,
-    CrossSymbolLeaderboard, CrossSymbolRankMetric, DataQualityChecker, DataQualityReport,
-    DonchianBacktestConfig, HistoryLogger, IntoLazy, Leaderboard, LeaderboardEntry, Metrics,
-    MultiStrategyGrid, MultiStrategySweepResult, MultiSweepResult, OpeningPeriod,
-    PolarsBacktestConfig, RankMetric, StatisticalAnalysis, StrategyBestResult, StrategyConfigId,
-    StrategyGridConfig, StrategyParams, StrategyTypeId, SweepConfigResult, SweepGrid, SweepResult,
-    VotingMethod, WalkForwardConfig, WalkForwardResult,
+    run_strategy_sweep_polars_parallel, scan_symbol_parquet_lazy, write_partitioned_parquet,
+    AggregatedConfigResult, AggregatedMetrics, AggregatedPortfolioResult, AnalysisConfig,
+    BacktestConfig, BacktestResult, Bar, CostModel, CrossSymbolLeaderboard, CrossSymbolRankMetric,
+    DataQualityChecker, DataQualityReport, DonchianBacktestConfig, HistoryLogger, IntoLazy,
+    Leaderboard, LeaderboardEntry, Metrics, MultiStrategyGrid, MultiStrategySweepResult,
+    MultiSweepResult, OpeningPeriod, PolarsBacktestConfig, RankMetric, StatisticalAnalysis,
+    StrategyBestResult, StrategyConfigId, StrategyGridConfig, StrategyParams, StrategyTypeId,
+    SweepConfigResult, SweepGrid, SweepResult, VotingMethod, WalkForwardConfig, WalkForwardResult,
 };
 
 /// Commands sent from TUI thread to worker thread.
@@ -1901,11 +1900,11 @@ async fn handle_yolo_mode(
     cross_symbol_leaderboard.set_requested_range(start, end);
 
     // Initialize append-only history logger for all tested configs
-    let session_id_for_history = session_id.clone().unwrap_or_else(|| {
-        trendlab_core::generate_session_id()
-    });
-    let history_path = Path::new("artifacts/yolo_history")
-        .join(format!("{}.jsonl", &session_id_for_history));
+    let session_id_for_history = session_id
+        .clone()
+        .unwrap_or_else(|| trendlab_core::generate_session_id());
+    let history_path =
+        Path::new("artifacts/yolo_history").join(format!("{}.jsonl", &session_id_for_history));
     let mut history_logger = match HistoryLogger::new(&history_path, &session_id_for_history) {
         Ok(logger) => Some(logger),
         Err(e) => {
@@ -2285,8 +2284,7 @@ async fn handle_yolo_mode(
                         }
                     }
 
-                    let done = completed_configs
-                        .fetch_add(configs_per_symbol, Ordering::SeqCst)
+                    let done = completed_configs.fetch_add(configs_per_symbol, Ordering::SeqCst)
                         + configs_per_symbol;
 
                     if idx % 3 == 0 {
@@ -2331,12 +2329,16 @@ async fn handle_yolo_mode(
                         continue;
                     }
                     let sym_start = sym_dates.first().map(|d| d.date_naive()).unwrap_or(start);
-                    let sym_end = sym_dates.last().map(|d| d.date_naive()).unwrap_or(sym_start);
+                    let sym_end = sym_dates
+                        .last()
+                        .map(|d| d.date_naive())
+                        .unwrap_or(sym_start);
                     let sym_span_days = (sym_end - sym_start).num_days().abs().max(1) as f64;
                     let coverage_ratio = sym_span_days / requested_span_days;
                     let start_lag = (sym_start - start).num_days();
 
-                    if start_lag > YOLO_MAX_START_LAG_DAYS || coverage_ratio < YOLO_MIN_COVERAGE_RATIO
+                    if start_lag > YOLO_MAX_START_LAG_DAYS
+                        || coverage_ratio < YOLO_MIN_COVERAGE_RATIO
                     {
                         to_prune.push(sym.clone());
                     }
@@ -2364,13 +2366,11 @@ async fn handle_yolo_mode(
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .and_then(|(sym, metrics)| {
-                    per_symbol_equity
-                        .get(sym)
-                        .and_then(|eq| {
-                            per_symbol_dates
-                                .get(sym)
-                                .map(|dates| (sym.clone(), metrics.clone(), eq.clone(), dates.clone()))
-                        })
+                    per_symbol_equity.get(sym).and_then(|eq| {
+                        per_symbol_dates
+                            .get(sym)
+                            .map(|dates| (sym.clone(), metrics.clone(), eq.clone(), dates.clone()))
+                    })
                 });
 
             // Aggregate metrics across all symbols for this config
@@ -2438,7 +2438,8 @@ async fn handle_yolo_mode(
                 .as_ref()
                 .map(|b| {
                     aggregated_result.aggregate_metrics.avg_sharpe
-                        > b.aggregate_metrics.rank_value(CrossSymbolRankMetric::AvgSharpe)
+                        > b.aggregate_metrics
+                            .rank_value(CrossSymbolRankMetric::AvgSharpe)
                 })
                 .unwrap_or(true);
 
@@ -2660,7 +2661,6 @@ fn yolo_try_insert_best_per_strategy(
 ) -> bool {
     yolo_try_insert_top_n_per_strategy(lb, entry)
 }
-
 
 /// Generate all config IDs for a strategy's parameter grid.
 fn generate_config_ids_for_strategy(strategy_config: &StrategyGridConfig) -> Vec<StrategyConfigId> {

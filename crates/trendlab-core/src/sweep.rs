@@ -1070,105 +1070,444 @@ fn hash_f64<H: std::hash::Hasher>(value: f64, state: &mut H) {
 impl PartialEq for StrategyConfigId {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Donchian { entry_lookback: e1, exit_lookback: x1 },
-             Self::Donchian { entry_lookback: e2, exit_lookback: x2 }) => e1 == e2 && x1 == x2,
+            (
+                Self::Donchian {
+                    entry_lookback: e1,
+                    exit_lookback: x1,
+                },
+                Self::Donchian {
+                    entry_lookback: e2,
+                    exit_lookback: x2,
+                },
+            ) => e1 == e2 && x1 == x2,
             (Self::TurtleS1, Self::TurtleS1) => true,
             (Self::TurtleS2, Self::TurtleS2) => true,
-            (Self::MACrossover { fast: f1, slow: s1, ma_type: m1 },
-             Self::MACrossover { fast: f2, slow: s2, ma_type: m2 }) => f1 == f2 && s1 == s2 && m1 == m2,
+            (
+                Self::MACrossover {
+                    fast: f1,
+                    slow: s1,
+                    ma_type: m1,
+                },
+                Self::MACrossover {
+                    fast: f2,
+                    slow: s2,
+                    ma_type: m2,
+                },
+            ) => f1 == f2 && s1 == s2 && m1 == m2,
             (Self::Tsmom { lookback: l1 }, Self::Tsmom { lookback: l2 }) => l1 == l2,
-            (Self::DmiAdx { di_period: d1, adx_period: a1, adx_threshold: t1 },
-             Self::DmiAdx { di_period: d2, adx_period: a2, adx_threshold: t2 }) =>
-                d1 == d2 && a1 == a2 && t1.to_bits() == t2.to_bits(),
+            (
+                Self::DmiAdx {
+                    di_period: d1,
+                    adx_period: a1,
+                    adx_threshold: t1,
+                },
+                Self::DmiAdx {
+                    di_period: d2,
+                    adx_period: a2,
+                    adx_threshold: t2,
+                },
+            ) => d1 == d2 && a1 == a2 && t1.to_bits() == t2.to_bits(),
             (Self::Aroon { period: p1 }, Self::Aroon { period: p2 }) => p1 == p2,
-            (Self::BollingerSqueeze { period: p1, std_mult: s1, squeeze_threshold: t1 },
-             Self::BollingerSqueeze { period: p2, std_mult: s2, squeeze_threshold: t2 }) =>
-                p1 == p2 && s1.to_bits() == s2.to_bits() && t1.to_bits() == t2.to_bits(),
-            (Self::Keltner { ema_period: e1, atr_period: a1, multiplier: m1 },
-             Self::Keltner { ema_period: e2, atr_period: a2, multiplier: m2 }) =>
-                e1 == e2 && a1 == a2 && m1.to_bits() == m2.to_bits(),
-            (Self::STARC { sma_period: s1, atr_period: a1, multiplier: m1 },
-             Self::STARC { sma_period: s2, atr_period: a2, multiplier: m2 }) =>
-                s1 == s2 && a1 == a2 && m1.to_bits() == m2.to_bits(),
-            (Self::Supertrend { atr_period: a1, multiplier: m1 },
-             Self::Supertrend { atr_period: a2, multiplier: m2 }) =>
-                a1 == a2 && m1.to_bits() == m2.to_bits(),
-            (Self::SupertrendVolume { atr_period: a1, multiplier: m1, volume_lookback: v1, volume_threshold_pct: t1 },
-             Self::SupertrendVolume { atr_period: a2, multiplier: m2, volume_lookback: v2, volume_threshold_pct: t2 }) =>
-                a1 == a2 && m1.to_bits() == m2.to_bits() && v1 == v2 && t1.to_bits() == t2.to_bits(),
-            (Self::SupertrendConfirmed { atr_period: a1, multiplier: m1, confirmation_bars: c1 },
-             Self::SupertrendConfirmed { atr_period: a2, multiplier: m2, confirmation_bars: c2 }) =>
-                a1 == a2 && m1.to_bits() == m2.to_bits() && c1 == c2,
-            (Self::SupertrendAsymmetric { atr_period: a1, entry_multiplier: e1, exit_multiplier: x1 },
-             Self::SupertrendAsymmetric { atr_period: a2, entry_multiplier: e2, exit_multiplier: x2 }) =>
-                a1 == a2 && e1.to_bits() == e2.to_bits() && x1.to_bits() == x2.to_bits(),
-            (Self::SupertrendCooldown { atr_period: a1, multiplier: m1, cooldown_bars: c1 },
-             Self::SupertrendCooldown { atr_period: a2, multiplier: m2, cooldown_bars: c2 }) =>
-                a1 == a2 && m1.to_bits() == m2.to_bits() && c1 == c2,
-            (Self::FiftyTwoWeekHigh { period: p1, entry_pct: e1, exit_pct: x1 },
-             Self::FiftyTwoWeekHigh { period: p2, entry_pct: e2, exit_pct: x2 }) =>
-                p1 == p2 && e1.to_bits() == e2.to_bits() && x1.to_bits() == x2.to_bits(),
-            (Self::FiftyTwoWeekHighMomentum { period: p1, entry_pct: e1, exit_pct: x1, momentum_period: mp1, momentum_threshold: mt1 },
-             Self::FiftyTwoWeekHighMomentum { period: p2, entry_pct: e2, exit_pct: x2, momentum_period: mp2, momentum_threshold: mt2 }) =>
-                p1 == p2 && e1.to_bits() == e2.to_bits() && x1.to_bits() == x2.to_bits() && mp1 == mp2 && mt1.to_bits() == mt2.to_bits(),
-            (Self::FiftyTwoWeekHighTrailing { period: p1, entry_pct: e1, trailing_stop_pct: t1 },
-             Self::FiftyTwoWeekHighTrailing { period: p2, entry_pct: e2, trailing_stop_pct: t2 }) =>
-                p1 == p2 && e1.to_bits() == e2.to_bits() && t1.to_bits() == t2.to_bits(),
-            (Self::DarvasBox { box_confirmation_bars: b1 },
-             Self::DarvasBox { box_confirmation_bars: b2 }) => b1 == b2,
-            (Self::LarryWilliams { range_multiplier: r1, atr_stop_mult: a1 },
-             Self::LarryWilliams { range_multiplier: r2, atr_stop_mult: a2 }) =>
-                r1.to_bits() == r2.to_bits() && a1.to_bits() == a2.to_bits(),
-            (Self::HeikinAshi { confirmation_bars: c1 },
-             Self::HeikinAshi { confirmation_bars: c2 }) => c1 == c2,
-            (Self::ParabolicSar { af_start: s1, af_step: st1, af_max: m1 },
-             Self::ParabolicSar { af_start: s2, af_step: st2, af_max: m2 }) =>
-                s1.to_bits() == s2.to_bits() && st1.to_bits() == st2.to_bits() && m1.to_bits() == m2.to_bits(),
-            (Self::ParabolicSarFiltered { af_start: s1, af_step: st1, af_max: m1, trend_ma_period: t1 },
-             Self::ParabolicSarFiltered { af_start: s2, af_step: st2, af_max: m2, trend_ma_period: t2 }) =>
-                s1.to_bits() == s2.to_bits() && st1.to_bits() == st2.to_bits() && m1.to_bits() == m2.to_bits() && t1 == t2,
-            (Self::ParabolicSarDelayed { af_start: s1, af_step: st1, af_max: m1, delay_bars: d1 },
-             Self::ParabolicSarDelayed { af_start: s2, af_step: st2, af_max: m2, delay_bars: d2 }) =>
-                s1.to_bits() == s2.to_bits() && st1.to_bits() == st2.to_bits() && m1.to_bits() == m2.to_bits() && d1 == d2,
-            (Self::OpeningRangeBreakout { range_bars: r1, period: p1 },
-             Self::OpeningRangeBreakout { range_bars: r2, period: p2 }) => r1 == r2 && p1 == p2,
-            (Self::Ensemble { base_strategy: b1, horizons: h1, voting: v1 },
-             Self::Ensemble { base_strategy: b2, horizons: h2, voting: v2 }) =>
-                b1 == b2 && h1 == h2 && v1 == v2,
-            (Self::Rsi { period: p1, oversold: o1, overbought: b1 },
-             Self::Rsi { period: p2, oversold: o2, overbought: b2 }) =>
-                p1 == p2 && o1.to_bits() == o2.to_bits() && b1.to_bits() == b2.to_bits(),
-            (Self::Macd { fast_period: f1, slow_period: s1, signal_period: sg1, entry_mode: e1 },
-             Self::Macd { fast_period: f2, slow_period: s2, signal_period: sg2, entry_mode: e2 }) =>
-                f1 == f2 && s1 == s2 && sg1 == sg2 && e1 == e2,
-            (Self::Stochastic { k_period: k1, k_smooth: ks1, d_period: d1, oversold: o1, overbought: b1 },
-             Self::Stochastic { k_period: k2, k_smooth: ks2, d_period: d2, oversold: o2, overbought: b2 }) =>
-                k1 == k2 && ks1 == ks2 && d1 == d2 && o1.to_bits() == o2.to_bits() && b1.to_bits() == b2.to_bits(),
-            (Self::WilliamsR { period: p1, oversold: o1, overbought: b1 },
-             Self::WilliamsR { period: p2, oversold: o2, overbought: b2 }) =>
-                p1 == p2 && o1.to_bits() == o2.to_bits() && b1.to_bits() == b2.to_bits(),
-            (Self::Cci { period: p1, entry_threshold: e1, exit_threshold: x1 },
-             Self::Cci { period: p2, entry_threshold: e2, exit_threshold: x2 }) =>
-                p1 == p2 && e1.to_bits() == e2.to_bits() && x1.to_bits() == x2.to_bits(),
+            (
+                Self::BollingerSqueeze {
+                    period: p1,
+                    std_mult: s1,
+                    squeeze_threshold: t1,
+                },
+                Self::BollingerSqueeze {
+                    period: p2,
+                    std_mult: s2,
+                    squeeze_threshold: t2,
+                },
+            ) => p1 == p2 && s1.to_bits() == s2.to_bits() && t1.to_bits() == t2.to_bits(),
+            (
+                Self::Keltner {
+                    ema_period: e1,
+                    atr_period: a1,
+                    multiplier: m1,
+                },
+                Self::Keltner {
+                    ema_period: e2,
+                    atr_period: a2,
+                    multiplier: m2,
+                },
+            ) => e1 == e2 && a1 == a2 && m1.to_bits() == m2.to_bits(),
+            (
+                Self::STARC {
+                    sma_period: s1,
+                    atr_period: a1,
+                    multiplier: m1,
+                },
+                Self::STARC {
+                    sma_period: s2,
+                    atr_period: a2,
+                    multiplier: m2,
+                },
+            ) => s1 == s2 && a1 == a2 && m1.to_bits() == m2.to_bits(),
+            (
+                Self::Supertrend {
+                    atr_period: a1,
+                    multiplier: m1,
+                },
+                Self::Supertrend {
+                    atr_period: a2,
+                    multiplier: m2,
+                },
+            ) => a1 == a2 && m1.to_bits() == m2.to_bits(),
+            (
+                Self::SupertrendVolume {
+                    atr_period: a1,
+                    multiplier: m1,
+                    volume_lookback: v1,
+                    volume_threshold_pct: t1,
+                },
+                Self::SupertrendVolume {
+                    atr_period: a2,
+                    multiplier: m2,
+                    volume_lookback: v2,
+                    volume_threshold_pct: t2,
+                },
+            ) => {
+                a1 == a2 && m1.to_bits() == m2.to_bits() && v1 == v2 && t1.to_bits() == t2.to_bits()
+            }
+            (
+                Self::SupertrendConfirmed {
+                    atr_period: a1,
+                    multiplier: m1,
+                    confirmation_bars: c1,
+                },
+                Self::SupertrendConfirmed {
+                    atr_period: a2,
+                    multiplier: m2,
+                    confirmation_bars: c2,
+                },
+            ) => a1 == a2 && m1.to_bits() == m2.to_bits() && c1 == c2,
+            (
+                Self::SupertrendAsymmetric {
+                    atr_period: a1,
+                    entry_multiplier: e1,
+                    exit_multiplier: x1,
+                },
+                Self::SupertrendAsymmetric {
+                    atr_period: a2,
+                    entry_multiplier: e2,
+                    exit_multiplier: x2,
+                },
+            ) => a1 == a2 && e1.to_bits() == e2.to_bits() && x1.to_bits() == x2.to_bits(),
+            (
+                Self::SupertrendCooldown {
+                    atr_period: a1,
+                    multiplier: m1,
+                    cooldown_bars: c1,
+                },
+                Self::SupertrendCooldown {
+                    atr_period: a2,
+                    multiplier: m2,
+                    cooldown_bars: c2,
+                },
+            ) => a1 == a2 && m1.to_bits() == m2.to_bits() && c1 == c2,
+            (
+                Self::FiftyTwoWeekHigh {
+                    period: p1,
+                    entry_pct: e1,
+                    exit_pct: x1,
+                },
+                Self::FiftyTwoWeekHigh {
+                    period: p2,
+                    entry_pct: e2,
+                    exit_pct: x2,
+                },
+            ) => p1 == p2 && e1.to_bits() == e2.to_bits() && x1.to_bits() == x2.to_bits(),
+            (
+                Self::FiftyTwoWeekHighMomentum {
+                    period: p1,
+                    entry_pct: e1,
+                    exit_pct: x1,
+                    momentum_period: mp1,
+                    momentum_threshold: mt1,
+                },
+                Self::FiftyTwoWeekHighMomentum {
+                    period: p2,
+                    entry_pct: e2,
+                    exit_pct: x2,
+                    momentum_period: mp2,
+                    momentum_threshold: mt2,
+                },
+            ) => {
+                p1 == p2
+                    && e1.to_bits() == e2.to_bits()
+                    && x1.to_bits() == x2.to_bits()
+                    && mp1 == mp2
+                    && mt1.to_bits() == mt2.to_bits()
+            }
+            (
+                Self::FiftyTwoWeekHighTrailing {
+                    period: p1,
+                    entry_pct: e1,
+                    trailing_stop_pct: t1,
+                },
+                Self::FiftyTwoWeekHighTrailing {
+                    period: p2,
+                    entry_pct: e2,
+                    trailing_stop_pct: t2,
+                },
+            ) => p1 == p2 && e1.to_bits() == e2.to_bits() && t1.to_bits() == t2.to_bits(),
+            (
+                Self::DarvasBox {
+                    box_confirmation_bars: b1,
+                },
+                Self::DarvasBox {
+                    box_confirmation_bars: b2,
+                },
+            ) => b1 == b2,
+            (
+                Self::LarryWilliams {
+                    range_multiplier: r1,
+                    atr_stop_mult: a1,
+                },
+                Self::LarryWilliams {
+                    range_multiplier: r2,
+                    atr_stop_mult: a2,
+                },
+            ) => r1.to_bits() == r2.to_bits() && a1.to_bits() == a2.to_bits(),
+            (
+                Self::HeikinAshi {
+                    confirmation_bars: c1,
+                },
+                Self::HeikinAshi {
+                    confirmation_bars: c2,
+                },
+            ) => c1 == c2,
+            (
+                Self::ParabolicSar {
+                    af_start: s1,
+                    af_step: st1,
+                    af_max: m1,
+                },
+                Self::ParabolicSar {
+                    af_start: s2,
+                    af_step: st2,
+                    af_max: m2,
+                },
+            ) => {
+                s1.to_bits() == s2.to_bits()
+                    && st1.to_bits() == st2.to_bits()
+                    && m1.to_bits() == m2.to_bits()
+            }
+            (
+                Self::ParabolicSarFiltered {
+                    af_start: s1,
+                    af_step: st1,
+                    af_max: m1,
+                    trend_ma_period: t1,
+                },
+                Self::ParabolicSarFiltered {
+                    af_start: s2,
+                    af_step: st2,
+                    af_max: m2,
+                    trend_ma_period: t2,
+                },
+            ) => {
+                s1.to_bits() == s2.to_bits()
+                    && st1.to_bits() == st2.to_bits()
+                    && m1.to_bits() == m2.to_bits()
+                    && t1 == t2
+            }
+            (
+                Self::ParabolicSarDelayed {
+                    af_start: s1,
+                    af_step: st1,
+                    af_max: m1,
+                    delay_bars: d1,
+                },
+                Self::ParabolicSarDelayed {
+                    af_start: s2,
+                    af_step: st2,
+                    af_max: m2,
+                    delay_bars: d2,
+                },
+            ) => {
+                s1.to_bits() == s2.to_bits()
+                    && st1.to_bits() == st2.to_bits()
+                    && m1.to_bits() == m2.to_bits()
+                    && d1 == d2
+            }
+            (
+                Self::OpeningRangeBreakout {
+                    range_bars: r1,
+                    period: p1,
+                },
+                Self::OpeningRangeBreakout {
+                    range_bars: r2,
+                    period: p2,
+                },
+            ) => r1 == r2 && p1 == p2,
+            (
+                Self::Ensemble {
+                    base_strategy: b1,
+                    horizons: h1,
+                    voting: v1,
+                },
+                Self::Ensemble {
+                    base_strategy: b2,
+                    horizons: h2,
+                    voting: v2,
+                },
+            ) => b1 == b2 && h1 == h2 && v1 == v2,
+            (
+                Self::Rsi {
+                    period: p1,
+                    oversold: o1,
+                    overbought: b1,
+                },
+                Self::Rsi {
+                    period: p2,
+                    oversold: o2,
+                    overbought: b2,
+                },
+            ) => p1 == p2 && o1.to_bits() == o2.to_bits() && b1.to_bits() == b2.to_bits(),
+            (
+                Self::Macd {
+                    fast_period: f1,
+                    slow_period: s1,
+                    signal_period: sg1,
+                    entry_mode: e1,
+                },
+                Self::Macd {
+                    fast_period: f2,
+                    slow_period: s2,
+                    signal_period: sg2,
+                    entry_mode: e2,
+                },
+            ) => f1 == f2 && s1 == s2 && sg1 == sg2 && e1 == e2,
+            (
+                Self::Stochastic {
+                    k_period: k1,
+                    k_smooth: ks1,
+                    d_period: d1,
+                    oversold: o1,
+                    overbought: b1,
+                },
+                Self::Stochastic {
+                    k_period: k2,
+                    k_smooth: ks2,
+                    d_period: d2,
+                    oversold: o2,
+                    overbought: b2,
+                },
+            ) => {
+                k1 == k2
+                    && ks1 == ks2
+                    && d1 == d2
+                    && o1.to_bits() == o2.to_bits()
+                    && b1.to_bits() == b2.to_bits()
+            }
+            (
+                Self::WilliamsR {
+                    period: p1,
+                    oversold: o1,
+                    overbought: b1,
+                },
+                Self::WilliamsR {
+                    period: p2,
+                    oversold: o2,
+                    overbought: b2,
+                },
+            ) => p1 == p2 && o1.to_bits() == o2.to_bits() && b1.to_bits() == b2.to_bits(),
+            (
+                Self::Cci {
+                    period: p1,
+                    entry_threshold: e1,
+                    exit_threshold: x1,
+                },
+                Self::Cci {
+                    period: p2,
+                    entry_threshold: e2,
+                    exit_threshold: x2,
+                },
+            ) => p1 == p2 && e1.to_bits() == e2.to_bits() && x1.to_bits() == x2.to_bits(),
             (Self::Roc { period: p1 }, Self::Roc { period: p2 }) => p1 == p2,
-            (Self::RsiBollinger { rsi_period: rp1, rsi_oversold: ro1, rsi_exit: re1, bb_period: bp1, bb_std_mult: bm1 },
-             Self::RsiBollinger { rsi_period: rp2, rsi_oversold: ro2, rsi_exit: re2, bb_period: bp2, bb_std_mult: bm2 }) =>
-                rp1 == rp2 && ro1.to_bits() == ro2.to_bits() && re1.to_bits() == re2.to_bits() && bp1 == bp2 && bm1.to_bits() == bm2.to_bits(),
-            (Self::MacdAdx { fast_period: f1, slow_period: s1, signal_period: sg1, adx_period: ap1, adx_threshold: at1 },
-             Self::MacdAdx { fast_period: f2, slow_period: s2, signal_period: sg2, adx_period: ap2, adx_threshold: at2 }) =>
-                f1 == f2 && s1 == s2 && sg1 == sg2 && ap1 == ap2 && at1.to_bits() == at2.to_bits(),
-            (Self::OscillatorConfluence { rsi_period: rp1, rsi_oversold: ro1, rsi_overbought: rb1,
-                                          stoch_k_period: sk1, stoch_k_smooth: sks1, stoch_d_period: sd1,
-                                          stoch_oversold: so1, stoch_overbought: sb1 },
-             Self::OscillatorConfluence { rsi_period: rp2, rsi_oversold: ro2, rsi_overbought: rb2,
-                                          stoch_k_period: sk2, stoch_k_smooth: sks2, stoch_d_period: sd2,
-                                          stoch_oversold: so2, stoch_overbought: sb2 }) =>
-                rp1 == rp2 && ro1.to_bits() == ro2.to_bits() && rb1.to_bits() == rb2.to_bits() &&
-                sk1 == sk2 && sks1 == sks2 && sd1 == sd2 &&
-                so1.to_bits() == so2.to_bits() && sb1.to_bits() == sb2.to_bits(),
-            (Self::Ichimoku { tenkan_period: t1, kijun_period: k1, senkou_b_period: s1 },
-             Self::Ichimoku { tenkan_period: t2, kijun_period: k2, senkou_b_period: s2 }) =>
-                t1 == t2 && k1 == k2 && s1 == s2,
+            (
+                Self::RsiBollinger {
+                    rsi_period: rp1,
+                    rsi_oversold: ro1,
+                    rsi_exit: re1,
+                    bb_period: bp1,
+                    bb_std_mult: bm1,
+                },
+                Self::RsiBollinger {
+                    rsi_period: rp2,
+                    rsi_oversold: ro2,
+                    rsi_exit: re2,
+                    bb_period: bp2,
+                    bb_std_mult: bm2,
+                },
+            ) => {
+                rp1 == rp2
+                    && ro1.to_bits() == ro2.to_bits()
+                    && re1.to_bits() == re2.to_bits()
+                    && bp1 == bp2
+                    && bm1.to_bits() == bm2.to_bits()
+            }
+            (
+                Self::MacdAdx {
+                    fast_period: f1,
+                    slow_period: s1,
+                    signal_period: sg1,
+                    adx_period: ap1,
+                    adx_threshold: at1,
+                },
+                Self::MacdAdx {
+                    fast_period: f2,
+                    slow_period: s2,
+                    signal_period: sg2,
+                    adx_period: ap2,
+                    adx_threshold: at2,
+                },
+            ) => f1 == f2 && s1 == s2 && sg1 == sg2 && ap1 == ap2 && at1.to_bits() == at2.to_bits(),
+            (
+                Self::OscillatorConfluence {
+                    rsi_period: rp1,
+                    rsi_oversold: ro1,
+                    rsi_overbought: rb1,
+                    stoch_k_period: sk1,
+                    stoch_k_smooth: sks1,
+                    stoch_d_period: sd1,
+                    stoch_oversold: so1,
+                    stoch_overbought: sb1,
+                },
+                Self::OscillatorConfluence {
+                    rsi_period: rp2,
+                    rsi_oversold: ro2,
+                    rsi_overbought: rb2,
+                    stoch_k_period: sk2,
+                    stoch_k_smooth: sks2,
+                    stoch_d_period: sd2,
+                    stoch_oversold: so2,
+                    stoch_overbought: sb2,
+                },
+            ) => {
+                rp1 == rp2
+                    && ro1.to_bits() == ro2.to_bits()
+                    && rb1.to_bits() == rb2.to_bits()
+                    && sk1 == sk2
+                    && sks1 == sks2
+                    && sd1 == sd2
+                    && so1.to_bits() == so2.to_bits()
+                    && sb1.to_bits() == sb2.to_bits()
+            }
+            (
+                Self::Ichimoku {
+                    tenkan_period: t1,
+                    kijun_period: k1,
+                    senkou_b_period: s1,
+                },
+                Self::Ichimoku {
+                    tenkan_period: t2,
+                    kijun_period: k2,
+                    senkou_b_period: s2,
+                },
+            ) => t1 == t2 && k1 == k2 && s1 == s2,
             _ => false,
         }
     }
@@ -1182,98 +1521,174 @@ impl std::hash::Hash for StrategyConfigId {
         std::mem::discriminant(self).hash(state);
 
         match self {
-            Self::Donchian { entry_lookback, exit_lookback } => {
+            Self::Donchian {
+                entry_lookback,
+                exit_lookback,
+            } => {
                 entry_lookback.hash(state);
                 exit_lookback.hash(state);
             }
             Self::TurtleS1 | Self::TurtleS2 => {}
-            Self::MACrossover { fast, slow, ma_type } => {
+            Self::MACrossover {
+                fast,
+                slow,
+                ma_type,
+            } => {
                 fast.hash(state);
                 slow.hash(state);
                 ma_type.hash(state);
             }
             Self::Tsmom { lookback } => lookback.hash(state),
-            Self::DmiAdx { di_period, adx_period, adx_threshold } => {
+            Self::DmiAdx {
+                di_period,
+                adx_period,
+                adx_threshold,
+            } => {
                 di_period.hash(state);
                 adx_period.hash(state);
                 hash_f64(*adx_threshold, state);
             }
             Self::Aroon { period } => period.hash(state),
-            Self::BollingerSqueeze { period, std_mult, squeeze_threshold } => {
+            Self::BollingerSqueeze {
+                period,
+                std_mult,
+                squeeze_threshold,
+            } => {
                 period.hash(state);
                 hash_f64(*std_mult, state);
                 hash_f64(*squeeze_threshold, state);
             }
-            Self::Keltner { ema_period, atr_period, multiplier } => {
+            Self::Keltner {
+                ema_period,
+                atr_period,
+                multiplier,
+            } => {
                 ema_period.hash(state);
                 atr_period.hash(state);
                 hash_f64(*multiplier, state);
             }
-            Self::STARC { sma_period, atr_period, multiplier } => {
+            Self::STARC {
+                sma_period,
+                atr_period,
+                multiplier,
+            } => {
                 sma_period.hash(state);
                 atr_period.hash(state);
                 hash_f64(*multiplier, state);
             }
-            Self::Supertrend { atr_period, multiplier } => {
+            Self::Supertrend {
+                atr_period,
+                multiplier,
+            } => {
                 atr_period.hash(state);
                 hash_f64(*multiplier, state);
             }
-            Self::SupertrendVolume { atr_period, multiplier, volume_lookback, volume_threshold_pct } => {
+            Self::SupertrendVolume {
+                atr_period,
+                multiplier,
+                volume_lookback,
+                volume_threshold_pct,
+            } => {
                 atr_period.hash(state);
                 hash_f64(*multiplier, state);
                 volume_lookback.hash(state);
                 hash_f64(*volume_threshold_pct, state);
             }
-            Self::SupertrendConfirmed { atr_period, multiplier, confirmation_bars } => {
+            Self::SupertrendConfirmed {
+                atr_period,
+                multiplier,
+                confirmation_bars,
+            } => {
                 atr_period.hash(state);
                 hash_f64(*multiplier, state);
                 confirmation_bars.hash(state);
             }
-            Self::SupertrendAsymmetric { atr_period, entry_multiplier, exit_multiplier } => {
+            Self::SupertrendAsymmetric {
+                atr_period,
+                entry_multiplier,
+                exit_multiplier,
+            } => {
                 atr_period.hash(state);
                 hash_f64(*entry_multiplier, state);
                 hash_f64(*exit_multiplier, state);
             }
-            Self::SupertrendCooldown { atr_period, multiplier, cooldown_bars } => {
+            Self::SupertrendCooldown {
+                atr_period,
+                multiplier,
+                cooldown_bars,
+            } => {
                 atr_period.hash(state);
                 hash_f64(*multiplier, state);
                 cooldown_bars.hash(state);
             }
-            Self::FiftyTwoWeekHigh { period, entry_pct, exit_pct } => {
+            Self::FiftyTwoWeekHigh {
+                period,
+                entry_pct,
+                exit_pct,
+            } => {
                 period.hash(state);
                 hash_f64(*entry_pct, state);
                 hash_f64(*exit_pct, state);
             }
-            Self::FiftyTwoWeekHighMomentum { period, entry_pct, exit_pct, momentum_period, momentum_threshold } => {
+            Self::FiftyTwoWeekHighMomentum {
+                period,
+                entry_pct,
+                exit_pct,
+                momentum_period,
+                momentum_threshold,
+            } => {
                 period.hash(state);
                 hash_f64(*entry_pct, state);
                 hash_f64(*exit_pct, state);
                 momentum_period.hash(state);
                 hash_f64(*momentum_threshold, state);
             }
-            Self::FiftyTwoWeekHighTrailing { period, entry_pct, trailing_stop_pct } => {
+            Self::FiftyTwoWeekHighTrailing {
+                period,
+                entry_pct,
+                trailing_stop_pct,
+            } => {
                 period.hash(state);
                 hash_f64(*entry_pct, state);
                 hash_f64(*trailing_stop_pct, state);
             }
-            Self::DarvasBox { box_confirmation_bars } => box_confirmation_bars.hash(state),
-            Self::LarryWilliams { range_multiplier, atr_stop_mult } => {
+            Self::DarvasBox {
+                box_confirmation_bars,
+            } => box_confirmation_bars.hash(state),
+            Self::LarryWilliams {
+                range_multiplier,
+                atr_stop_mult,
+            } => {
                 hash_f64(*range_multiplier, state);
                 hash_f64(*atr_stop_mult, state);
             }
             Self::HeikinAshi { confirmation_bars } => confirmation_bars.hash(state),
-            Self::ParabolicSar { af_start, af_step, af_max } => {
+            Self::ParabolicSar {
+                af_start,
+                af_step,
+                af_max,
+            } => {
                 hash_f64(*af_start, state);
                 hash_f64(*af_step, state);
                 hash_f64(*af_max, state);
             }
-            Self::ParabolicSarFiltered { af_start, af_step, af_max, trend_ma_period } => {
+            Self::ParabolicSarFiltered {
+                af_start,
+                af_step,
+                af_max,
+                trend_ma_period,
+            } => {
                 hash_f64(*af_start, state);
                 hash_f64(*af_step, state);
                 hash_f64(*af_max, state);
                 trend_ma_period.hash(state);
             }
-            Self::ParabolicSarDelayed { af_start, af_step, af_max, delay_bars } => {
+            Self::ParabolicSarDelayed {
+                af_start,
+                af_step,
+                af_max,
+                delay_bars,
+            } => {
                 hash_f64(*af_start, state);
                 hash_f64(*af_step, state);
                 hash_f64(*af_max, state);
@@ -1283,57 +1698,103 @@ impl std::hash::Hash for StrategyConfigId {
                 range_bars.hash(state);
                 period.hash(state);
             }
-            Self::Ensemble { base_strategy, horizons, voting } => {
+            Self::Ensemble {
+                base_strategy,
+                horizons,
+                voting,
+            } => {
                 base_strategy.hash(state);
                 horizons.hash(state);
                 voting.hash(state);
             }
-            Self::Rsi { period, oversold, overbought } => {
+            Self::Rsi {
+                period,
+                oversold,
+                overbought,
+            } => {
                 period.hash(state);
                 hash_f64(*oversold, state);
                 hash_f64(*overbought, state);
             }
-            Self::Macd { fast_period, slow_period, signal_period, entry_mode } => {
+            Self::Macd {
+                fast_period,
+                slow_period,
+                signal_period,
+                entry_mode,
+            } => {
                 fast_period.hash(state);
                 slow_period.hash(state);
                 signal_period.hash(state);
                 entry_mode.hash(state);
             }
-            Self::Stochastic { k_period, k_smooth, d_period, oversold, overbought } => {
+            Self::Stochastic {
+                k_period,
+                k_smooth,
+                d_period,
+                oversold,
+                overbought,
+            } => {
                 k_period.hash(state);
                 k_smooth.hash(state);
                 d_period.hash(state);
                 hash_f64(*oversold, state);
                 hash_f64(*overbought, state);
             }
-            Self::WilliamsR { period, oversold, overbought } => {
+            Self::WilliamsR {
+                period,
+                oversold,
+                overbought,
+            } => {
                 period.hash(state);
                 hash_f64(*oversold, state);
                 hash_f64(*overbought, state);
             }
-            Self::Cci { period, entry_threshold, exit_threshold } => {
+            Self::Cci {
+                period,
+                entry_threshold,
+                exit_threshold,
+            } => {
                 period.hash(state);
                 hash_f64(*entry_threshold, state);
                 hash_f64(*exit_threshold, state);
             }
             Self::Roc { period } => period.hash(state),
-            Self::RsiBollinger { rsi_period, rsi_oversold, rsi_exit, bb_period, bb_std_mult } => {
+            Self::RsiBollinger {
+                rsi_period,
+                rsi_oversold,
+                rsi_exit,
+                bb_period,
+                bb_std_mult,
+            } => {
                 rsi_period.hash(state);
                 hash_f64(*rsi_oversold, state);
                 hash_f64(*rsi_exit, state);
                 bb_period.hash(state);
                 hash_f64(*bb_std_mult, state);
             }
-            Self::MacdAdx { fast_period, slow_period, signal_period, adx_period, adx_threshold } => {
+            Self::MacdAdx {
+                fast_period,
+                slow_period,
+                signal_period,
+                adx_period,
+                adx_threshold,
+            } => {
                 fast_period.hash(state);
                 slow_period.hash(state);
                 signal_period.hash(state);
                 adx_period.hash(state);
                 hash_f64(*adx_threshold, state);
             }
-            Self::OscillatorConfluence { rsi_period, rsi_oversold, rsi_overbought,
-                                          stoch_k_period, stoch_k_smooth, stoch_d_period,
-                                          stoch_oversold, stoch_overbought } => {
+            Self::OscillatorConfluence {
+                rsi_period,
+                rsi_oversold,
+                rsi_overbought,
+                stoch_k_period,
+                stoch_k_smooth,
+                stoch_d_period,
+                stoch_oversold,
+                stoch_overbought,
+            } => {
                 rsi_period.hash(state);
                 hash_f64(*rsi_oversold, state);
                 hash_f64(*rsi_overbought, state);
@@ -1343,7 +1804,11 @@ impl std::hash::Hash for StrategyConfigId {
                 hash_f64(*stoch_oversold, state);
                 hash_f64(*stoch_overbought, state);
             }
-            Self::Ichimoku { tenkan_period, kijun_period, senkou_b_period } => {
+            Self::Ichimoku {
+                tenkan_period,
+                kijun_period,
+                senkou_b_period,
+            } => {
                 tenkan_period.hash(state);
                 kijun_period.hash(state);
                 senkou_b_period.hash(state);

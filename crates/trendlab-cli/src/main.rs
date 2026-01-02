@@ -107,6 +107,12 @@ enum Commands {
         /// Only show entry/exit signals (filter out holds)
         #[arg(long, default_value = "false")]
         actionable_only: bool,
+
+        /// Only show signals that fired within this many bars (default: 2 = today/yesterday).
+        /// Filters out stale signals where the entry/exit already occurred days ago.
+        /// Set to 0 to disable freshness filtering.
+        #[arg(long, default_value = "2")]
+        freshness: usize,
     },
 }
 
@@ -318,6 +324,7 @@ async fn main() -> Result<()> {
             lookback,
             output,
             actionable_only,
+            freshness,
         } => {
             let watchlist_path = std::path::Path::new(&watchlist);
             let config = DataConfig::default();
@@ -325,10 +332,20 @@ async fn main() -> Result<()> {
             println!("Running daily signal scan...");
             println!("  Watchlist: {}", watchlist);
             println!("  Lookback: {} days", lookback);
+            println!(
+                "  Freshness: {} bars (only signals from last {} trading days)",
+                freshness, freshness
+            );
             println!();
 
-            let result =
-                scan::execute_scan(watchlist_path, lookback, actionable_only, &config).await?;
+            let result = scan::execute_scan(
+                watchlist_path,
+                lookback,
+                actionable_only,
+                freshness,
+                &config,
+            )
+            .await?;
 
             // Output to file or stdout
             if let Some(output_path) = output {

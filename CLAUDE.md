@@ -148,6 +148,47 @@ Assumptions and contracts are documented in `docs/`:
 
 ---
 
+## YOLO Analysis & Reports
+
+After running YOLO mode sweeps, analyze results and update reports using the Polars Python script.
+
+### Running Analysis
+
+```bash
+# From project root - analyze and update all reports
+python scripts/analyze_yolo.py --data-dir target/release/artifacts --export-csv --charts --output-dir reports/analysis
+```
+
+### Output Files
+
+| File | Description |
+|------|-------------|
+| `reports/analysis/strategy_comparison.csv` | Performance by strategy type (Sharpe, CAGR, drawdown) |
+| `reports/analysis/sector_performance.csv` | Performance by sector |
+| `reports/analysis/strategy_sector_combos.csv` | Best strategy+sector combinations |
+| `reports/analysis/robustness_scores.csv` | Configs ranked by cross-symbol consistency |
+| `reports/analysis/universal_winners.csv` | Configs that rank well across most symbols |
+| `reports/analysis/params_*.csv` | Parameter analysis per strategy type |
+| `reports/analysis/*.png` | Visualization charts (requires matplotlib) |
+
+### When to Update Reports
+
+**IMPORTANT**: Always run the analysis script after significant YOLO sessions to keep reports current:
+
+1. After extended YOLO runs (100+ iterations)
+2. When adding new strategy types
+3. Before generating Pine Scripts (to identify best configs)
+4. When reviewing overall system performance
+
+### Quick Analysis (No File Export)
+
+```bash
+# Just print analysis to console
+python scripts/analyze_yolo.py --data-dir target/release/artifacts
+```
+
+---
+
 ## Documentation Sync Requirements
 
 **IMPORTANT**: When adding new features, update BOTH documentation sources:
@@ -248,6 +289,53 @@ Rules:
 - Do not weaken tests to make code "pass"
 - Add invariants (no lookahead, accounting identities, determinism)
 - Use fixtures from `fixtures/` for deterministic, fast tests
+
+---
+
+## Research Findings (Validated Configs)
+
+Research conducted across ~500 symbols with comprehensive parameter sweeps identified these robust configurations:
+
+### Strategy Rankings (by median Sharpe)
+
+| Strategy | Median Sharpe | Best Sector |
+|----------|---------------|-------------|
+| ParabolicSar | 0.279 | Utilities (0.314) |
+| Supertrend | 0.264 | Real Estate (0.324) |
+| FiftyTwoWeekHigh | 0.259 | Real Estate (0.306) |
+| LarryWilliams | 0.238 | Industrials (0.280) |
+| MACrossover | 0.214 | Real Estate (0.298) |
+
+### Robust Configs (100% Symbol Win Ratio)
+
+These configs achieved positive Sharpe on every tested symbol:
+
+| Strategy | Config | Notes |
+|----------|--------|-------|
+| 52-Week High | `50, 0.95, 0.80` | Conservative exit prevents whipsaws |
+| Supertrend | `10, 3.0` | Standard ATR multiplier |
+| Parabolic SAR | `0.02, 0.02, 0.2` | Default parameters work best |
+
+### Top Sector-Strategy Combinations
+
+| Combination | Median Sharpe | Std Sharpe |
+|-------------|---------------|------------|
+| Supertrend + Real Estate | 0.324 | 0.081 |
+| ParabolicSar + Utilities | 0.314 | 0.071 |
+| FiftyTwoWeekHigh + Real Estate | 0.306 | 0.071 |
+| MACrossover + Real Estate | 0.298 | 0.042 |
+| Supertrend + Industrials | 0.297 | 0.067 |
+
+### Key Insights
+
+- **Real Estate sector** outperforms across most trend strategies
+- **Conservative parameters** beat aggressive optimization (avoid YOLO configs)
+- **Signal freshness** matters: filter signals to last 1-2 bars to avoid stale entries
+
+Research data lives in `reports/analysis/`:
+- `robustness_scores.csv` — Win ratios and robust configs
+- `strategy_sector_combos.csv` — Sector-strategy performance matrix
+- `sector_performance.csv` — Aggregate sector rankings
 
 ---
 

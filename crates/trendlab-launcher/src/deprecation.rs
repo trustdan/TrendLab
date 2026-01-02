@@ -40,7 +40,10 @@ fn show_deprecation_message() -> io::Result<()> {
     writeln!(stdout, "The TUI provides the complete feature set.")?;
     writeln!(stdout, "Use: trendlab --tui")?;
     writeln!(stdout)?;
-    writeln!(stdout, "GUI code remains intact for potential resurrection.")?;
+    writeln!(
+        stdout,
+        "GUI code remains intact for potential resurrection."
+    )?;
     writeln!(stdout, "Opening resurrection roadmap...")?;
     writeln!(stdout)?;
 

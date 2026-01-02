@@ -786,21 +786,54 @@ TrendLab includes a daily signal scanner for automated watchlist monitoring with
 1. **Watchlist Configuration**: Define tickers and strategies in `configs/watchlist.toml`
 2. **Data Refresh**: Automatically fetches recent data from Yahoo Finance
 3. **Signal Generation**: Runs each strategy against each ticker to detect entry/exit signals
-4. **Email Alerts**: Sends HTML email via Resend when actionable signals are found
-5. **GitHub Actions**: Runs automatically after market close (9:05 PM ET, Mon-Fri)
+4. **Freshness Filtering**: Only surfaces signals that fired within the last N bars (default: 2)
+5. **Email Alerts**: Sends HTML email via Resend when actionable signals are found
+6. **GitHub Actions**: Runs automatically after market close (9:05 PM ET, Mon-Fri)
+
+### Research-Backed Default Strategies
+
+The scanner uses **robust configs** validated by research (100% symbol win ratio = positive Sharpe on every tested symbol):
+
+| Strategy | Robust Config | Median Sharpe | Notes |
+|----------|---------------|---------------|-------|
+| 52-Week High | `50,0.95,0.80` | 0.259 | Most consistent across all sectors |
+| Supertrend | `10,3.0` | 0.264 | Best in Real Estate (0.324 Sharpe) |
+| Parabolic SAR | `0.02,0.02,0.2` | 0.279 | Best in Utilities (0.314 Sharpe) |
+
+**Best Sector Combinations** (from research):
+- Supertrend + Real Estate: 0.324 median Sharpe
+- ParabolicSar + Utilities: 0.314 median Sharpe
+- FiftyTwoWeekHigh + Real Estate: 0.306 median Sharpe
+- MACrossover + Real Estate: 0.298 median Sharpe
 
 ### CLI Usage
 
 ```bash
 # Run a scan with default watchlist
-trendlab scan --watchlist configs/watchlist.toml --lookback 300
+trendlab scan --watchlist configs/watchlist.toml --lookback 90
 
 # Output to JSON file
 trendlab scan --watchlist configs/watchlist.toml --output reports/scans/2025-01-15.json
 
 # Only show actionable signals (entries/exits, no holds)
 trendlab scan --actionable-only
+
+# Filter by signal freshness (only signals from last 2 bars)
+trendlab scan --freshness 2
+
+# Full daily scan command (used by GitHub Actions)
+trendlab scan --watchlist configs/watchlist.toml --lookback 90 --actionable-only --freshness 2
 ```
+
+### Signal Freshness
+
+The `--freshness` flag filters out stale signals that have been active for too long:
+
+- **`--freshness 2`** (default): Only shows signals that fired within the last 2 bars (today/yesterday)
+- **`--freshness 1`**: Only the current bar (most recent day)
+- **`--freshness 5`**: Within the last week of trading
+
+This prevents alert fatigue from signals that fired days ago where the opportunity may have passed.
 
 ### Watchlist Configuration
 
@@ -811,9 +844,9 @@ Create a TOML file with your tickers and default strategies:
 name = "Daily Alerts"
 description = "Personal watchlist for signal notifications"
 default_strategies = [
-    "donchian:55,20",
-    "52wk_high:252,0.95,0.90",
-    "supertrend:10,3.0",
+    "52wk_high:50,0.95,0.80",   # Research-backed robust config
+    "supertrend:10,3.0",        # Research-backed robust config
+    "psar:0.02,0.02,0.2",       # Research-backed robust config
 ]
 
 [[tickers]]
@@ -832,11 +865,11 @@ strategies = ["donchian:20,10"]  # Override for this ticker
 | Strategy | Format | Example |
 |----------|--------|---------|
 | Donchian | `donchian:entry,exit` | `donchian:55,20` |
-| 52-Week High | `52wk_high:period,entry_pct,exit_pct` | `52wk_high:252,0.95,0.90` |
+| 52-Week High | `52wk_high:period,entry_pct,exit_pct` | `52wk_high:50,0.95,0.80` |
 | Supertrend | `supertrend:period,multiplier` | `supertrend:10,3.0` |
 | MA Crossover | `ma_cross:fast,slow` | `ma_cross:50,200` |
 | TSMOM | `tsmom:lookback` | `tsmom:126` |
-| Parabolic SAR | `psar:start,step,max` | `psar:0.02,0.02,0.20` |
+| Parabolic SAR | `psar:start,step,max` | `psar:0.02,0.02,0.2` |
 
 ### JSON Output
 

@@ -1737,7 +1737,9 @@ pub struct MACDValue {
 }
 
 /// Entry mode for MACD strategy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Default,
+)]
 pub enum MACDEntryMode {
     /// Entry when MACD crosses above signal line.
     #[default]
