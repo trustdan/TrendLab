@@ -1902,7 +1902,7 @@ async fn handle_yolo_mode(
     // Initialize append-only history logger for all tested configs
     let session_id_for_history = session_id
         .clone()
-        .unwrap_or_else(|| trendlab_core::generate_session_id());
+        .unwrap_or_else(trendlab_core::generate_session_id);
     let history_path =
         Path::new("artifacts/yolo_history").join(format!("{}.jsonl", &session_id_for_history));
     let mut history_logger = match HistoryLogger::new(&history_path, &session_id_for_history) {
@@ -2229,6 +2229,7 @@ async fn handle_yolo_mode(
                         None => return,
                     };
 
+                    #[allow(clippy::type_complexity)]
                     let mut local_results: Vec<(
                         (StrategyTypeId, StrategyConfigId),
                         (String, Metrics, Vec<f64>, Vec<DateTime<Utc>>),
@@ -2277,7 +2278,7 @@ async fn handle_yolo_mode(
                     {
                         let mut guard = accum.lock().unwrap();
                         for (key, (sym, metrics, equity, dates)) in local_results {
-                            let entry = guard.entry(key).or_insert_with(PerConfigAccum::default);
+                            let entry = guard.entry(key).or_default();
                             entry.per_symbol_metrics.insert(sym.clone(), metrics);
                             entry.per_symbol_equity.insert(sym.clone(), equity);
                             entry.per_symbol_dates.insert(sym, dates);

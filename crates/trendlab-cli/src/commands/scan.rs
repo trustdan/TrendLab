@@ -312,7 +312,7 @@ fn compute_signal(
     let final_signal = match current_type {
         SignalType::Entry => {
             // Find how many bars back this entry signal started
-            let bars_since_entry = find_signal_age(&bars, &strategy, true);
+            let bars_since_entry = find_signal_age(&bars, strategy.as_ref(), true);
             if bars_since_entry <= freshness_bars {
                 SignalType::Entry
             } else {
@@ -321,7 +321,7 @@ fn compute_signal(
         }
         SignalType::Exit => {
             // Find how many bars back this exit signal started
-            let bars_since_exit = find_signal_age(&bars, &strategy, false);
+            let bars_since_exit = find_signal_age(&bars, strategy.as_ref(), false);
             if bars_since_exit <= freshness_bars {
                 SignalType::Exit
             } else {
@@ -345,7 +345,7 @@ fn compute_signal(
 /// Returns 1 if it just fired on the current bar, 2 if it fired yesterday, etc.
 fn find_signal_age(
     bars: &[trendlab_core::Bar],
-    strategy: &Box<dyn trendlab_core::StrategyV2>,
+    strategy: &dyn trendlab_core::StrategyV2,
     is_entry: bool,
 ) -> usize {
     let n = bars.len();
@@ -382,7 +382,7 @@ fn find_signal_age(
 ///
 /// # Arguments
 /// * `freshness_bars` - Only report Entry/Exit signals that fired within this many bars.
-///                      Default is 2 (today or yesterday). Set to 0 to disable freshness check.
+///   Default is 2 (today or yesterday). Set to 0 to disable freshness check.
 pub async fn execute_scan(
     watchlist_path: &Path,
     lookback_days: usize,
