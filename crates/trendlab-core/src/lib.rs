@@ -18,6 +18,7 @@ pub mod bar;
 pub mod clustering;
 pub mod data;
 pub mod error;
+pub mod exploration;
 pub mod indicator_cache;
 pub mod indicators;
 pub mod indicators_polars;
@@ -78,6 +79,11 @@ pub use data::{
     QualityIssue,
 };
 pub use error::TrendLabError;
+pub use exploration::{
+    build_exploration_state_from_history, denormalize_to_params, generate_random_config,
+    get_param_bounds, normalize_config, record_history_entry, select_exploration_mode,
+    ExplorationMode, ExplorationState, NormalizedConfig, ParamBounds, StrategyCoverage,
+};
 pub use indicator_cache::{
     collect_indicator_requirements, extract_indicator_requirements, CacheStats, IndicatorCache,
     IndicatorKey, LazyIndicatorCache,

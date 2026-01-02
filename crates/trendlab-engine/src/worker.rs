@@ -15,14 +15,15 @@ use chrono::{NaiveDate, Utc};
 use std::collections::HashMap;
 use tracing::{debug, info, trace};
 use trendlab_core::{
-    bars_to_dataframe, build_yahoo_chart_url, combine_equity_curves_simple, compute_analysis,
-    create_artifact_from_config, dataframe_to_bars, export_artifact_to_file,
-    get_parquet_date_range, one_sided_mean_pvalue, parse_yahoo_chart_json,
-    run_donchian_sweep_polars, run_strategy_sweep_polars_cached,
-    run_strategy_sweep_polars_parallel, scan_symbol_parquet_lazy, write_partitioned_parquet,
-    AggregatedConfigResult, AggregatedMetrics, AggregatedPortfolioResult, AnalysisConfig,
-    BacktestConfig, BacktestResult, Bar, CostModel, CrossSymbolLeaderboard, CrossSymbolRankMetric,
-    DataQualityChecker, DataQualityReport, DonchianBacktestConfig, HistoryLogger, IntoLazy,
+    bars_to_dataframe, build_exploration_state_from_history, build_yahoo_chart_url,
+    combine_equity_curves_simple, compute_analysis, create_artifact_from_config, dataframe_to_bars,
+    export_artifact_to_file, get_parquet_date_range, normalize_config, one_sided_mean_pvalue,
+    parse_yahoo_chart_json, run_donchian_sweep_polars, run_strategy_sweep_polars_cached,
+    run_strategy_sweep_polars_parallel, scan_symbol_parquet_lazy, select_exploration_mode,
+    write_partitioned_parquet, AggregatedConfigResult, AggregatedMetrics,
+    AggregatedPortfolioResult, AnalysisConfig, BacktestConfig, BacktestResult, Bar, CostModel,
+    CrossSymbolLeaderboard, CrossSymbolRankMetric, DataQualityChecker, DataQualityReport,
+    DonchianBacktestConfig, ExplorationMode, ExplorationState, HistoryLogger, IntoLazy,
     Leaderboard, LeaderboardEntry, Metrics, MultiStrategyGrid, MultiStrategySweepResult,
     MultiSweepResult, OpeningPeriod, PolarsBacktestConfig, RankMetric, StatisticalAnalysis,
     StrategyBestResult, StrategyConfigId, StrategyGridConfig, StrategyParams, StrategyTypeId,
@@ -1885,6 +1886,12 @@ async fn handle_yolo_mode(
         randomization_pct = %randomization_pct,
         "Starting YOLO mode"
     );
+    
+    // Debug: Log first few symbols to verify they're correct
+    if !symbols.is_empty() {
+        let sample: Vec<String> = symbols.iter().take(10).cloned().collect();
+        tracing::debug!(sample = ?sample, "YOLO: Sample symbols received");
+    }
 
     let parquet_dir = Path::new("data/parquet");
     let per_symbol_path = Path::new("artifacts/leaderboard.json");
@@ -1912,6 +1919,37 @@ async fn handle_yolo_mode(
             None
         }
     };
+
+    // Load or build exploration state for history-informed coverage
+    let exploration_path = Path::new("artifacts/exploration_state.json");
+    let mut exploration_state = ExplorationState::load_or_default(exploration_path);
+    if exploration_state.coverage.is_empty() {
+        // No saved state - try to build from history logs
+        let history_dir = Path::new("artifacts/yolo_history");
+        match build_exploration_state_from_history(history_dir) {
+            Ok(state) if !state.coverage.is_empty() => {
+                info!(
+                    sessions = state.contributing_sessions.len(),
+                    "Built exploration state from {} historical sessions",
+                    state.contributing_sessions.len()
+                );
+                exploration_state = state;
+            }
+            Ok(_) => {
+                info!("Starting fresh exploration state (no history found)");
+            }
+            Err(e) => {
+                info!(error = %e, "Failed to load history, starting fresh exploration state");
+            }
+        }
+    } else {
+        info!(
+            sessions = exploration_state.contributing_sessions.len(),
+            "Loaded exploration state from disk"
+        );
+    }
+    // Register this session
+    exploration_state.add_session(&session_id_for_history);
 
     // Track the intended span once so we can drop short-history symbols later.
     let requested_span_days = (end - start).num_days().abs().max(1) as f64;
@@ -1970,8 +2008,16 @@ async fn handle_yolo_mode(
                 // Check if cached range covers the requested range
                 // We need data from `start` to `end`
                 // Cached data should start at or before `start` and end at or after `end`
-                let needs_earlier = cached_start > start;
-                let needs_later = cached_end < end;
+                //
+                // TOLERANCE: Allow up to 10 days gap at start (for market closures like New Year's,
+                // weekends, holidays) and 2 days gap at end (for very recent data not yet available).
+                // This prevents unnecessary re-fetches when Yahoo's first trading day differs
+                // slightly from the requested start date.
+                let start_tolerance = chrono::Duration::days(10);
+                let end_tolerance = chrono::Duration::days(2);
+
+                let needs_earlier = cached_start > start + start_tolerance;
+                let needs_later = cached_end < end - end_tolerance;
 
                 if needs_earlier || needs_later {
                     info!(
@@ -1984,6 +2030,12 @@ async fn handle_yolo_mode(
                     );
                     true
                 } else {
+                    trace!(
+                        symbol = %symbol,
+                        cached_start = %cached_start,
+                        cached_end = %cached_end,
+                        "Cached data covers requested range (within tolerance)"
+                    );
                     false
                 }
             }
@@ -1998,6 +2050,7 @@ async fn handle_yolo_mode(
     if !symbols_needing_refresh.is_empty() {
         info!(
             count = symbols_needing_refresh.len(),
+            total_symbols = symbols.len(),
             "Fetching data for symbols missing coverage"
         );
 
@@ -2144,6 +2197,8 @@ async fn handle_yolo_mode(
         if cancel_flag.load(Ordering::SeqCst) {
             let _ = per_symbol_leaderboard.save(per_symbol_path);
             let _ = cross_symbol_leaderboard.save(cross_symbol_path);
+            // Save exploration state on cancellation
+            let _ = exploration_state.save(exploration_path);
             let total_configs = cross_symbol_leaderboard.total_configs_tested;
             if let Some(ref logger) = history_logger {
                 info!(
@@ -2167,29 +2222,60 @@ async fn handle_yolo_mode(
 
         debug!(iteration = iteration, "Starting YOLO iteration");
 
-        // 1. Jitter the grid parameters (with occasional "wide" exploration iterations)
+        // 1. Select exploration mode based on coverage history
+        // Pick a representative strategy to determine mode (use first enabled)
+        let primary_strategy = enabled_strategies
+            .first()
+            .map(|s| s.strategy_type)
+            .unwrap_or(StrategyTypeId::Supertrend);
+        let exploration_mode =
+            select_exploration_mode(&mut rng, &exploration_state, primary_strategy);
+
+        // 2. Determine jitter percentage based on exploration mode
+        // Different modes benefit from different jitter strengths:
+        // - LocalJitter: use configured randomization (occasionally wide)
+        // - ExploitWinner: tighter jitter to refine around winners
+        // - PureRandom: wider jitter for true exploration
+        // - MaximizeCoverage: moderate jitter to cover gaps
         let wide = rng.gen_bool(0.20);
-        let iter_pct = if wide {
-            (randomization_pct * 3.0).min(0.90)
-        } else {
-            randomization_pct
+        let iter_pct = match exploration_mode {
+            ExplorationMode::LocalJitter => {
+                if wide {
+                    (randomization_pct * 3.0).min(0.90)
+                } else {
+                    randomization_pct
+                }
+            }
+            ExplorationMode::ExploitWinner => {
+                // Tighter jitter to refine around known good configs
+                (randomization_pct * 0.5).max(0.10)
+            }
+            ExplorationMode::PureRandom => {
+                // Wider jitter for maximum exploration
+                (randomization_pct * 2.0).min(0.80)
+            }
+            ExplorationMode::MaximizeCoverage => {
+                // Moderate jitter to fill gaps
+                randomization_pct * 1.5
+            }
         };
         let jittered_grid = jitter_multi_strategy_grid(base_grid, iter_pct, &mut rng);
 
         trace!(
             iteration = iteration,
+            mode = %exploration_mode.short_name(),
             jitter_pct = %iter_pct,
             wide = wide,
             configs = jittered_grid.total_configs(),
-            "Jittered grid created"
+            "Jittered grid created with exploration mode"
         );
 
-        // Send progress update (include current jitter strength for visibility)
-        let phase = if wide {
-            format!("sweeping (wide ±{:.0}%)", iter_pct * 100.0)
-        } else {
-            format!("sweeping (±{:.0}%)", iter_pct * 100.0)
-        };
+        // Send progress update (include mode and jitter strength for visibility)
+        let phase = format!(
+            "[{}] sweeping (±{:.0}%)",
+            exploration_mode.short_name(),
+            iter_pct * 100.0
+        );
 
         // Generate jitter summary showing what parameters were jittered
         let jitter_summary = summarize_jittered_grid(base_grid, &jittered_grid);
@@ -2474,6 +2560,12 @@ async fn handle_yolo_mode(
                 }
             }
 
+            // Update exploration state with this config
+            if let Some(normalized) = normalize_config(config_id) {
+                let is_winner = aggregated_result.aggregate_metrics.avg_sharpe > 0.0;
+                exploration_state.record_test(*strategy_type, &normalized, is_winner);
+            }
+
             // Try to insert into cross-symbol leaderboard
             yolo_try_insert_best_per_strategy(&mut cross_symbol_leaderboard, aggregated_result);
         }
@@ -2491,6 +2583,8 @@ async fn handle_yolo_mode(
         if cancel_flag.load(Ordering::SeqCst) {
             let _ = per_symbol_leaderboard.save(per_symbol_path);
             let _ = cross_symbol_leaderboard.save(cross_symbol_path);
+            // Save exploration state on cancellation
+            let _ = exploration_state.save(exploration_path);
             let total_configs = cross_symbol_leaderboard.total_configs_tested;
             if let Some(ref logger) = history_logger {
                 info!(
@@ -2559,6 +2653,23 @@ async fn handle_yolo_mode(
         // 6. Persist leaderboards (every iteration for crash safety)
         let _ = per_symbol_leaderboard.save(per_symbol_path);
         let _ = cross_symbol_leaderboard.save(cross_symbol_path);
+
+        // 6b. Save exploration state periodically (every 5 iterations to reduce I/O)
+        if iteration % 5 == 0 {
+            if let Err(e) = exploration_state.save(exploration_path) {
+                trace!(error = %e, "Failed to save exploration state (non-fatal)");
+            } else {
+                trace!(
+                    iteration = iteration,
+                    total_tested = exploration_state
+                        .coverage
+                        .values()
+                        .map(|c| c.total_tested)
+                        .sum::<u64>(),
+                    "Saved exploration state"
+                );
+            }
+        }
 
         // 7. Auto-export artifact for new cross-symbol aggregate best
         // This exports artifacts for strategies that work well across multiple symbols,

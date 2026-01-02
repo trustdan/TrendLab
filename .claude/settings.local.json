@@ -109,7 +109,19 @@
       "Bash(powershell.exe -NoProfile -Command \"Get-ChildItem ''C:\\\\Users\\\\Dan\\\\TrendLab\\\\reports\\\\analysis\\\\*.csv'' | Select-Object Name, LastWriteTime | Format-Table\")",
       "Bash(powershell.exe -NoProfile -Command \"cd ''C:\\\\Users\\\\Dan\\\\TrendLab''; python scripts\\\\analyze_yolo.py --data-dir target\\\\release\\\\artifacts --charts --output-dir reports\\\\analysis 2>&1 | Select-Object -Last 5\")",
       "Bash(powershell.exe -NoProfile -Command \"Get-ChildItem ''C:\\\\Users\\\\Dan\\\\TrendLab\\\\reports\\\\analysis\\\\*.png'' | Select-Object Name, LastWriteTime | Format-Table\")",
-      "Bash(git commit -m \"$\\(cat <<''EOF''\nFix clippy warnings for CI compliance\n\n- Replace &Box<dyn StrategyV2> with &dyn StrategyV2 and use .as_ref\\(\\) at call sites\n- Fix doc comment overindentation\n- Remove redundant closure in unwrap_or_else\n- Use or_default\\(\\) instead of or_insert_with\\(Default::default\\)\n- Allow type_complexity for local variable\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nFix clippy warnings for CI compliance\n\n- Replace &Box<dyn StrategyV2> with &dyn StrategyV2 and use .as_ref\\(\\) at call sites\n- Fix doc comment overindentation\n- Remove redundant closure in unwrap_or_else\n- Use or_default\\(\\) instead of or_insert_with\\(Default::default\\)\n- Allow type_complexity for local variable\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(where /r . leaderboard.json)",
+      "Bash(dir /b \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\data\\\\parquet\\\\1d\\\\symbol=AAPL\")",
+      "Bash(dir /b \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\data\\\\parquet\\\\1d\\\\symbol=UBER\")",
+      "Bash(dir /b \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\data\\\\parquet\\\\1d\\\\symbol=ABNB\")",
+      "Bash(dir /b \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\data\\\\parquet\\\\1d\\\\symbol=MSFT\")",
+      "Bash(Get-ChildItem \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\data\\\\logs\\\\trendlab.log.*\" -ErrorAction SilentlyContinue)",
+      "Bash(Sort-Object LastWriteTime -Descending)",
+      "Bash(Select-Object -First 1)",
+      "Bash(ForEach-Object { Get-Content $_FullName)",
+      "Bash(Select-String -Pattern \"YOLO.*Starting|start_date|end_date|date range\" -Context 0,2)",
+      "Bash(Select-Object -First 20 })",
+      "Bash(sort:*)"
     ]
   }
 }

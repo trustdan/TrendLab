@@ -22,11 +22,27 @@ pub fn launch_tui() -> io::Result<()> {
 
     #[cfg(windows)]
     {
-        let status = Command::new(&tui_bin)
-            .stdin(Stdio::inherit())
+        // Get current working directory to ensure TUI runs from the same location
+        let cwd = std::env::current_dir()?;
+
+        let mut cmd = Command::new(&tui_bin);
+        cmd.stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
-            .status()?;
+            .current_dir(&cwd);
+
+        // Explicitly pass logging environment variables (Windows sometimes has issues with inheritance)
+        if let Ok(val) = std::env::var("TRENDLAB_LOG_ENABLED") {
+            cmd.env("TRENDLAB_LOG_ENABLED", val);
+        }
+        if let Ok(val) = std::env::var("TRENDLAB_LOG_FILTER") {
+            cmd.env("TRENDLAB_LOG_FILTER", val);
+        }
+        if let Ok(val) = std::env::var("TRENDLAB_LOG_DIR") {
+            cmd.env("TRENDLAB_LOG_DIR", val);
+        }
+
+        let status = cmd.status()?;
 
         if !status.success() {
             return Err(io::Error::other(format!(

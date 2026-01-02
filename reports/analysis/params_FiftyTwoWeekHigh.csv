@@ -1,9 +1,3 @@
 param,all_median,all_min,all_max,top25_median,top25_min,top25_max,corr_with_sharpe
-period,100.0,50.0,160.0,100.0,50.0,160.0,-0.030543892112478783
-entry_pct,0.95,0.95,0.95,0.95,0.95,0.95,-0.009076773598275823
-exit_pct,0.8,0.8,0.8,0.8,0.8,0.8,1.0050148113666955e-16
 atr_period,,,,,,,0.0
 multiplier,,,,,,,0.0
-af_start,,,,,,,0.0
-af_step,,,,,,,0.0
-af_max,,,,,,,0.0

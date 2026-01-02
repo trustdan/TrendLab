@@ -18,6 +18,7 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use trendlab_logging::LogConfig;
@@ -161,6 +162,27 @@ enum KeyResult {
     Continue,
 }
 
+/// Save all-time leaderboards to disk before exiting.
+/// This ensures leaderboard data persists across TUI sessions.
+fn save_leaderboards_on_exit(yolo: &trendlab_engine::app::YoloState) {
+    let per_symbol_path = Path::new("artifacts/leaderboard.json");
+    let cross_symbol_path = Path::new("artifacts/cross_symbol_leaderboard.json");
+
+    if let Err(e) = yolo.all_time_leaderboard.save(per_symbol_path) {
+        tracing::warn!("Failed to save all-time per-symbol leaderboard: {}", e);
+    } else {
+        tracing::info!("Saved all-time per-symbol leaderboard on exit");
+    }
+
+    if let Some(ref cross) = yolo.all_time_cross_symbol_leaderboard {
+        if let Err(e) = cross.save(cross_symbol_path) {
+            tracing::warn!("Failed to save all-time cross-symbol leaderboard: {}", e);
+        } else {
+            tracing::info!("Saved all-time cross-symbol leaderboard on exit");
+        }
+    }
+}
+
 /// Handle a key press event.
 fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyResult {
     // Handle startup modal
@@ -184,7 +206,11 @@ fn handle_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) -> KeyRes
     }
 
     match code {
-        KeyCode::Char('q') => KeyResult::Quit,
+        KeyCode::Char('q') => {
+            // Save all-time leaderboards before quitting to ensure persistence
+            save_leaderboards_on_exit(&app.yolo);
+            KeyResult::Quit
+        }
 
         KeyCode::Esc => {
             // Signal cancellation to worker (stops YOLO mode and any running sweep)
@@ -1312,7 +1338,7 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             index,
             total,
         } => {
-            app.status_message = format!("YOLO: Fetching {} ({}/{})...", symbol, index + 1, total);
+            app.status_message = format!("YOLO: Refreshing {} ({}/{} need data)...", symbol, index + 1, total);
         }
 
         WorkerUpdate::YoloDataRefreshComplete {

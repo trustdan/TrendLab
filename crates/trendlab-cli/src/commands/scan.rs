@@ -226,6 +226,16 @@ pub fn parse_strategy(s: &str) -> Result<(StrategySpec, String, String)> {
             let period = params.first().and_then(|s| s.parse().ok()).unwrap_or(25);
             StrategySpec::Aroon { period }
         }
+        "larry" | "larry_williams" | "larrywilliams" => {
+            let range_mult = params.first().and_then(|s| s.parse().ok()).unwrap_or(2.0);
+            let atr_stop_mult = params.get(1).and_then(|s| s.parse().ok()).unwrap_or(1.5);
+            let atr_period = params.get(2).and_then(|s| s.parse().ok()).unwrap_or(14);
+            StrategySpec::LarryWilliams {
+                range_mult,
+                atr_stop_mult,
+                atr_period,
+            }
+        }
         "keltner" => {
             let ema_period = params.first().and_then(|s| s.parse().ok()).unwrap_or(20);
             let atr_period = params.get(1).and_then(|s| s.parse().ok()).unwrap_or(10);
@@ -617,6 +627,20 @@ mod tests {
         assert!(matches!(
             spec,
             StrategySpec::Supertrend { atr_period: 10, .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_larry_williams() {
+        let (spec, name, _) = parse_strategy("larry:2.0,1.5").unwrap();
+        assert_eq!(name, "larry");
+        assert!(matches!(
+            spec,
+            StrategySpec::LarryWilliams {
+                range_mult,
+                atr_stop_mult,
+                ..
+            } if (range_mult - 2.0).abs() < 0.001 && (atr_stop_mult - 1.5).abs() < 0.001
         ));
     }
 

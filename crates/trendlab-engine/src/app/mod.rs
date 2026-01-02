@@ -2009,10 +2009,45 @@ impl App {
     /// Runs multi-strategy sweeps in a loop, applying parameter randomization each iteration,
     /// maintaining a top-4 leaderboard ranked by Sharpe, and persisting to JSON.
     /// Press Escape to stop.
+    ///
+    /// Always uses all tickers from the universe for comprehensive exploration.
     pub fn start_yolo_mode(&mut self, channels: &WorkerChannels) {
-        let selected = self.data.selected_tickers_sorted();
+        // Always use all tickers from universe for YOLO mode
+        let mut selected: Vec<String> = Vec::new();
+        for sector in self.data.universe.sectors.iter() {
+            selected.extend(sector.tickers.iter().cloned());
+        }
+        selected.sort();
+        selected.dedup();
+
+        // Debug: Log universe size and verify count
+        let universe_total: usize = self.data.universe.sectors.iter()
+            .map(|s| s.tickers.len())
+            .sum();
+        tracing::info!(
+            universe_sectors = self.data.universe.sectors.len(),
+            universe_total_tickers = universe_total,
+            selected_after_dedup = selected.len(),
+            "YOLO: Collected tickers from universe"
+        );
+        
+        // Warn if count doesn't match expected
+        if selected.len() < 400 {
+            tracing::warn!(
+                selected_count = selected.len(),
+                expected_min = 450,
+                "YOLO: Unexpectedly low ticker count! Universe may be filtered."
+            );
+        }
+
+        // Update selected_tickers to match
+        self.data.selected_tickers.clear();
+        for sym in &selected {
+            self.data.selected_tickers.insert(sym.clone());
+        }
+
         if selected.is_empty() {
-            self.status_message = "YOLO Mode: No tickers selected.".to_string();
+            self.status_message = "YOLO Mode: Universe has no tickers.".to_string();
             return;
         }
 
@@ -2075,8 +2110,8 @@ impl App {
         let cmd = WorkerCommand::StartYoloMode {
             symbols: selected.clone(),
             symbol_sector_ids,
-            start: self.fetch_range.0,
-            end: self.fetch_range.1,
+            start: self.yolo.config.start_date,
+            end: self.yolo.config.end_date,
             strategy_grid,
             backtest_config,
             randomization_pct: self.yolo.randomization_pct,
@@ -2088,13 +2123,20 @@ impl App {
             outer_threads: self.yolo.outer_threads,
         };
 
+        let symbols_count = selected.len();
         if channels.command_tx.send(cmd).is_ok() {
             self.yolo.enabled = true;
             self.yolo.started_at = Some(Utc::now());
             self.sweep.is_running = true;
             self.status_message = format!(
                 "YOLO Mode starting: {} symbols (press ESC to stop)...",
-                selected.len()
+                symbols_count
+            );
+            tracing::info!(
+                symbols_sent_to_worker = symbols_count,
+                start_date = %self.yolo.config.start_date,
+                end_date = %self.yolo.config.end_date,
+                "YOLO: Starting with symbol count and date range"
             );
         } else {
             self.status_message = "Failed to start YOLO Mode.".to_string();

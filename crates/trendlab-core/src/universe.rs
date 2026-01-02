@@ -198,18 +198,19 @@ impl Universe {
     }
 
     /// Create a default universe with the built-in sector/ticker mapping.
+    /// Matches the watchlist.toml configuration (~500 tickers).
     pub fn default_universe() -> Self {
         Self {
             name: "US Equities".to_string(),
-            description: "Default curated list of US equities by sector".to_string(),
+            description: "Default curated list of US equities by sector (matches watchlist.toml)".to_string(),
             sectors: vec![
                 // Individual Stocks by Sector
                 Sector::new(
                     "basic_materials",
                     "Basic Materials",
                     vec![
-                        "LIN", "SCCO", "NEM", "CF", "FCX", "APD", "SHW", "DOW", "NUE", "ECL", "DD",
-                        "PPG", "ALB", "CTVA",
+                        "LIN", "NEM", "CRH", "SHW", "ECL", "FCX", "APD", "CTVA", "NUE", "PPG",
+                        "IFF", "DD", "ALB", "DOW", "LYB", "HL", "CF", "CDE", "MOS", "SSRM",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -219,8 +220,8 @@ impl Universe {
                     "comms_services",
                     "Communication Services",
                     vec![
-                        "GOOG", "META", "RDDT", "NFLX", "DIS", "T", "VZ", "CMCSA", "TMUS", "SPOT",
-                        "ROKU", "CHTR", "EA", "TTWO",
+                        "GOOGL", "GOOG", "META", "NFLX", "APP", "TMUS", "DIS", "T", "VZ", "CMCSA",
+                        "WBD", "EA", "TTWO", "LYV", "SATS", "FOXA", "CHTR", "OMC", "TTD", "NWSA",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -230,8 +231,9 @@ impl Universe {
                     "consumer_cyclical",
                     "Consumer Cyclical",
                     vec![
-                        "AMZN", "TJX", "DASH", "HD", "BABA", "TSLA", "MCD", "NKE", "SBUX", "LOW",
-                        "GM", "F", "CMG", "BKNG", "ABNB",
+                        "AMZN", "TSLA", "HD", "MCD", "TJX", "PDD", "LOW", "DASH", "SBUX", "CVNA",
+                        "NKE", "ABNB", "ORLY", "GM", "RCL", "ROST", "F", "CMG", "LVS", "DHI",
+                        "YUM", "CCL", "EBAY", "ROL", "TSCO", "TPR", "LEN", "LULU", "PHM", "DRI",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -241,8 +243,10 @@ impl Universe {
                     "consumer_defensive",
                     "Consumer Defensive",
                     vec![
-                        "WMT", "PM", "UL", "COST", "PG", "MDLZ", "KO", "PEP", "MO", "CL", "GIS",
-                        "KHC", "STZ", "SYY", "KR", "HSY",
+                        "WMT", "COST", "PG", "KO", "PM", "PEP", "MO", "MNST", "MDLZ", "CL",
+                        "TGT", "KR", "EL", "KDP", "HSY", "SYY", "KMB", "KVUE", "DG", "KHC",
+                        "ADM", "GIS", "DLTR", "STZ", "CHD", "TSN", "MKC", "BG", "HRL", "CLX",
+                        "BF-B", "SJM", "TAP", "CPB", "CAG",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -252,8 +256,9 @@ impl Universe {
                     "energy",
                     "Energy",
                     vec![
-                        "XOM", "CVX", "SHEL", "COP", "SLB", "EOG", "MPC", "VLO", "PSX", "OXY",
-                        "BP", "HAL", "DVN", "KMI",
+                        "XOM", "CVX", "COP", "WMB", "KMI", "EOG", "SLB", "PSX", "VLO", "MPC",
+                        "OKE", "BKR", "FANG", "OXY", "EQT", "EXE", "HAL", "DVN", "CTRA", "APA",
+                        "CRK", "UEC", "CNX", "AROC", "MUR", "NE", "RIG", "MGY", "BTU", "UUUU",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -263,8 +268,10 @@ impl Universe {
                     "financial",
                     "Financial",
                     vec![
-                        "BRK-B", "JPM", "MS", "COIN", "PYPL", "IBKR", "BAC", "WFC", "GS", "C", "V",
-                        "MA", "BLK", "SCHW", "AXP", "CME", "ICE",
+                        "BRK-B", "JPM", "V", "MA", "BAC", "WFC", "MS", "GS", "AXP", "C",
+                        "BX", "SCHW", "SPGI", "COF", "PGR", "KKR", "HOOD", "ICE", "MMC", "APO",
+                        "USB", "PNC", "BK", "AJG", "TFC", "COIN", "AFL", "NDAQ", "PYPL", "ARES",
+                        "MET", "AIG", "PRU", "STT", "ACGL", "FITB", "SYF", "IBKR", "HBAN", "BRO",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -274,8 +281,10 @@ impl Universe {
                     "healthcare",
                     "Healthcare",
                     vec![
-                        "LLY", "JNJ", "ABBV", "UNH", "PFE", "MRK", "TMO", "ABT", "BMY", "AMGN",
-                        "GILD", "CVS", "ISRG", "DHR", "VRTX",
+                        "LLY", "JNJ", "ABBV", "UNH", "AZN", "MRK", "TMO", "ABT", "AMGN", "DHR",
+                        "GILD", "PFE", "BSX", "SYK", "MDT", "BMY", "CVS", "ELV", "BDX", "ZTS",
+                        "EW", "A", "GEHC", "INSM", "DXCM", "CNC", "INCY", "HOLX", "COO", "BBIO",
+                        "VTRS", "MRNA", "BAX", "HIMS", "PRAX",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -285,8 +294,12 @@ impl Universe {
                     "industrials",
                     "Industrials",
                     vec![
-                        "GE", "RTX", "BA", "ETN", "MMM", "CAT", "HON", "UNP", "DE", "LMT", "UPS",
-                        "NOC", "GD", "WM", "FDX", "EMR",
+                        "GE", "RTX", "BA", "ETN", "MMM", "CAT", "HON", "UNP", "DE", "LMT",
+                        "UPS", "NOC", "GD", "WM", "FDX", "EMR", "GEV", "HWM", "JCI", "ITW",
+                        "CSX", "PCAR", "AME", "FAST", "FER", "DAL", "CARR", "CPRT", "UAL", "OTIS",
+                        "ODFL", "IR", "VRSK", "VLTO", "LUV", "BE", "MAS", "KTOS", "JOBY", "BLDR",
+                        "GTLS", "AOS", "FLR", "CWST", "PL", "MIR", "ACHR", "LGN", "SMR", "FLY",
+                        "EOSE", "LUNR", "PLUG", "DNOW",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -297,7 +310,8 @@ impl Universe {
                     "Real Estate",
                     vec![
                         "PLD", "AMT", "O", "EQIX", "CCI", "SPG", "PSA", "WELL", "DLR", "AVB",
-                        "EQR", "SBAC", "VTR",
+                        "EQR", "SBAC", "VTR", "VICI", "CSGP", "IRM", "UDR", "WY", "INVH", "KIM",
+                        "HST", "DOC", "ARE", "CTRE", "COMP",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -307,8 +321,16 @@ impl Universe {
                     "technology",
                     "Technology",
                     vec![
-                        "NVDA", "AAPL", "PLTR", "CSCO", "MSFT", "AMD", "AVGO", "CRM", "ORCL",
-                        "ADBE", "INTC", "QCOM", "TXN", "NOW", "MU", "AMAT", "IBM",
+                        "NVDA", "AAPL", "PLTR", "CSCO", "MSFT", "AMD", "AVGO", "CRM", "ORCL", "ADBE",
+                        "INTC", "QCOM", "TXN", "NOW", "MU", "AMAT", "IBM", "LRCX", "SHOP", "UBER",
+                        "ANET", "APH", "ACN", "ADI", "PANW", "CRWD", "ARM", "ADP", "SNPS", "DELL",
+                        "GLW", "MRVL", "WDC", "FTNT", "STX", "WDAY", "NXPI", "DDOG", "MSTR", "TEAM",
+                        "CTSH", "PAYX", "XYZ", "FISV", "SNDK", "MCHP", "FIS", "HPE", "TER", "FSLR",
+                        "CRDO", "ON", "NTAP", "HPQ", "GPN", "CDW", "SMCI", "FTV", "Q", "GEN",
+                        "IONQ", "AKAM", "DAY", "SWKS", "QBTS", "RGTI", "CWAN", "APLD", "ZETA", "CORZ",
+                        "RUN", "DOCN", "BOX", "SOUN", "NAVN", "BULL", "VIAV", "STNE", "COMM", "BRZE",
+                        "VRNS", "FRSH", "ASAN", "PAGS", "AVPT", "RELY", "TENB", "BTDR", "AAOI", "BBAI",
+                        "QUBT", "MQ", "SONO", "PAYO", "POWI", "AI", "CXM", "ADEA", "SEMR",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -318,8 +340,10 @@ impl Universe {
                     "utilities",
                     "Utilities",
                     vec![
-                        "EIX", "NEE", "DUK", "AEP", "SO", "D", "SRE", "XEL", "ED", "EXC", "WEC",
-                        "CEG", "PEG", "AWK", "ES",
+                        "EIX", "NEE", "DUK", "AEP", "SO", "D", "SRE", "XEL", "ED", "EXC",
+                        "WEC", "CEG", "PEG", "AWK", "ES", "VST", "ETR", "PCG", "NRG", "DTE",
+                        "PPL", "FE", "CNP", "CMS", "NI", "EVRG", "LNT", "OKLO", "PNW", "AES",
+                        "FLNC", "CTRI", "HE", "NXXT", "SAFX",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -496,8 +520,8 @@ tickers = ["JPM", "GS"]
         let universe = Universe::default_universe();
         // 11 individual stock sectors + 12 ETF sectors = 23 total
         assert_eq!(universe.sector_count(), 23);
-        // Expanded to ~200 tickers
-        assert!(universe.ticker_count() > 180);
+        // Expanded to match watchlist.toml (~500 tickers)
+        assert!(universe.ticker_count() > 450);
     }
 
     #[test]

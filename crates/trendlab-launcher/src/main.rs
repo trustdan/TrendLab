@@ -50,10 +50,22 @@ async fn main() -> anyhow::Result<()> {
         prompt::show_logging_prompt()?
     };
 
-    // Create log config
+    // Compute project root from binary location (binary is in target/release or target/debug)
+    // This ensures logs go to the right place regardless of working directory
+    let project_root = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.to_path_buf())) // target/release
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))     // target
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))     // project root
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+    let log_dir = project_root.join("data").join("logs");
+
+    // Create log config with explicit log directory
     let log_config = LogConfig {
         enabled: logging_enabled,
         filter: args.log_filter.clone(),
+        log_dir,
         ..LogConfig::default()
     };
 
