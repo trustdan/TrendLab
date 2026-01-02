@@ -261,7 +261,8 @@ pub fn parse_strategy(s: &str) -> Result<(StrategySpec, String, String)> {
 // =============================================================================
 
 /// Compute the current signal for a ticker-strategy pair.
-/// Only returns Entry/Exit if it's a fresh transition (signal just fired in last `freshness_bars`).
+/// Properly simulates position state through bars and only returns Entry/Exit
+/// if a fresh transition occurred within `freshness_bars`.
 fn compute_signal(
     symbol: &str,
     strategy_str: &str,
@@ -303,32 +304,41 @@ fn compute_signal(
 
     let last_bar = bars.last().unwrap();
 
-    // Get current signal
-    let current_signal = strategy.signal(&bars, Position::Flat);
-    let current_type: SignalType = current_signal.into();
+    // Simulate position state through all bars to find actual entry/exit transitions
+    let (current_position, last_entry_bar, last_exit_bar) =
+        simulate_position_history(&bars, strategy.as_ref());
 
-    // For Entry/Exit signals, check if this is a fresh transition
-    // by looking at where the signal first appeared
-    let final_signal = match current_type {
-        SignalType::Entry => {
-            // Find how many bars back this entry signal started
-            let bars_since_entry = find_signal_age(&bars, strategy.as_ref(), true);
-            if bars_since_entry <= freshness_bars {
-                SignalType::Entry
+    let n = bars.len();
+
+    // Determine signal based on actual position state and transition freshness
+    let final_signal = match current_position {
+        Position::Long => {
+            // We're in a position - check if entry was recent
+            if let Some(entry_idx) = last_entry_bar {
+                let bars_since_entry = n - 1 - entry_idx;
+                if bars_since_entry < freshness_bars {
+                    SignalType::Entry
+                } else {
+                    SignalType::Hold // In position but entry was not recent
+                }
             } else {
-                SignalType::Hold // Stale entry, already in position
+                SignalType::Hold
             }
         }
-        SignalType::Exit => {
-            // Find how many bars back this exit signal started
-            let bars_since_exit = find_signal_age(&bars, strategy.as_ref(), false);
-            if bars_since_exit <= freshness_bars {
-                SignalType::Exit
+        Position::Flat => {
+            // We're flat - check if exit was recent
+            if let Some(exit_idx) = last_exit_bar {
+                let bars_since_exit = n - 1 - exit_idx;
+                if bars_since_exit < freshness_bars {
+                    SignalType::Exit
+                } else {
+                    SignalType::Hold // Flat but exit was not recent
+                }
             } else {
-                SignalType::Hold // Stale exit, already exited
+                SignalType::Hold // Never entered or very old history
             }
         }
-        SignalType::Hold => SignalType::Hold,
+        Position::Short => SignalType::Hold, // Not supported for long-only strategies
     };
 
     Ok(TickerSignal {
@@ -341,41 +351,42 @@ fn compute_signal(
     })
 }
 
-/// Find how many bars ago the current signal type first appeared.
-/// Returns 1 if it just fired on the current bar, 2 if it fired yesterday, etc.
-fn find_signal_age(
+/// Simulate position state through bar history, tracking position and transition points.
+/// Returns (current_position, last_entry_bar_index, last_exit_bar_index).
+fn simulate_position_history(
     bars: &[trendlab_core::Bar],
     strategy: &dyn trendlab_core::StrategyV2,
-    is_entry: bool,
-) -> usize {
-    let n = bars.len();
-    let max_lookback = 60.min(n - strategy.warmup_period()); // Don't look back more than 60 bars
+) -> (Position, Option<usize>, Option<usize>) {
+    let warmup = strategy.warmup_period();
+    let mut position = Position::Flat;
+    let mut last_entry_idx: Option<usize> = None;
+    let mut last_exit_idx: Option<usize> = None;
 
-    for i in 1..max_lookback {
-        let check_idx = n - i;
-        let slice = &bars[..check_idx];
+    // Start after warmup period
+    for i in warmup..bars.len() {
+        let slice = &bars[..=i];
+        let signal = strategy.signal(slice, position);
 
-        if slice.len() <= strategy.warmup_period() {
-            break;
-        }
-
-        let signal = strategy.signal(slice, Position::Flat);
-        let signal_type: SignalType = signal.into();
-
-        let matches = if is_entry {
-            signal_type == SignalType::Entry
-        } else {
-            signal_type == SignalType::Exit
-        };
-
-        if !matches {
-            // Signal changed, so the current signal started at bar (i)
-            return i;
+        match signal {
+            Signal::EnterLong | Signal::EnterShort => {
+                if position == Position::Flat {
+                    position = Position::Long;
+                    last_entry_idx = Some(i);
+                }
+            }
+            Signal::ExitLong | Signal::ExitShort => {
+                if position != Position::Flat {
+                    position = Position::Flat;
+                    last_exit_idx = Some(i);
+                }
+            }
+            Signal::AddLong | Signal::AddShort | Signal::Hold => {
+                // No position change
+            }
         }
     }
 
-    // Signal has been active for the entire lookback period
-    max_lookback
+    (position, last_entry_idx, last_exit_idx)
 }
 
 /// Execute the full scan across all tickers and strategies.

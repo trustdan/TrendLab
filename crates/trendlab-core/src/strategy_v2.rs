@@ -1324,7 +1324,7 @@ impl StrategyV2 for FiftyTwoWeekHighV2 {
     }
 
     fn signal(&self, bars: &[Bar], current_position: Position) -> Signal {
-        use crate::indicators::rolling_max_close;
+        use crate::indicators::rolling_max_high;
 
         if bars.is_empty() {
             return Signal::Hold;
@@ -1335,7 +1335,8 @@ impl StrategyV2 for FiftyTwoWeekHighV2 {
             return Signal::Hold;
         }
 
-        let rolling_max = rolling_max_close(bars, self.period);
+        // Use rolling max of HIGH prices to match Pine's ta.highest(high, period)
+        let rolling_max = rolling_max_high(bars, self.period);
         let period_high = match rolling_max[current_idx] {
             Some(h) => h,
             None => return Signal::Hold,
@@ -1364,8 +1365,8 @@ impl StrategyV2 for FiftyTwoWeekHighV2 {
     }
 
     fn add_indicators_to_lf(&self, lf: LazyFrame) -> LazyFrame {
-        // Add rolling max of close over the period
-        let period_high = col("close")
+        // Add rolling max of HIGH over the period (matches Pine's ta.highest(high, period))
+        let period_high = col("high")
             .rolling_max(RollingOptionsFixedWindow {
                 window_size: self.period,
                 min_periods: self.period,

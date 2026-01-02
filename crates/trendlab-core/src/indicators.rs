@@ -601,6 +601,35 @@ pub fn rolling_max_close(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
     out
 }
 
+/// Compute rolling maximum of high prices over a lookback period.
+///
+/// Returns `None` until there are enough bars to fill the lookback.
+/// The value at index `i` is the maximum high over bars `[i-period+1, i]` (inclusive).
+///
+/// This matches TradingView's `ta.highest(high, period)` function.
+pub fn rolling_max_high(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
+    if period == 0 || bars.is_empty() {
+        return vec![None; bars.len()];
+    }
+
+    let mut out = vec![None; bars.len()];
+
+    for i in 0..bars.len() {
+        if i + 1 < period {
+            continue;
+        }
+
+        let start = i + 1 - period;
+        let max_val = bars[start..=i]
+            .iter()
+            .map(|b| b.high)
+            .fold(f64::NEG_INFINITY, f64::max);
+        out[i] = Some(max_val);
+    }
+
+    out
+}
+
 /// Compute rolling minimum of close prices over a lookback period.
 ///
 /// Returns `None` until there are enough bars to fill the lookback.
@@ -628,31 +657,6 @@ pub fn rolling_min_close(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
     out
 }
 
-/// Compute rolling maximum of high prices over a lookback period.
-///
-/// Returns `None` until there are enough bars to fill the lookback.
-pub fn rolling_max_high(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
-    if period == 0 || bars.is_empty() {
-        return vec![None; bars.len()];
-    }
-
-    let mut out = vec![None; bars.len()];
-
-    for i in 0..bars.len() {
-        if i + 1 < period {
-            continue;
-        }
-
-        let start = i + 1 - period;
-        let max_val = bars[start..=i]
-            .iter()
-            .map(|b| b.high)
-            .fold(f64::NEG_INFINITY, f64::max);
-        out[i] = Some(max_val);
-    }
-
-    out
-}
 
 /// Compute rolling minimum of low prices over a lookback period.
 ///

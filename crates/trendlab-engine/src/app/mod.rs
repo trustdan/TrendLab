@@ -1642,13 +1642,19 @@ impl App {
                     let config_display = entry.config_id.display();
 
                     // Build config filename from display (e.g., "52wk High 80/70%/59%" -> "80_70_59")
-                    let config_filename = config_display
+                    // Include Sharpe in filename for uniqueness across different runs
+                    let config_params = config_display
                         .split_whitespace()
                         .last()
                         .unwrap_or("default")
                         .replace('/', "_")
                         .replace('%', "")
                         .replace('.', "_");
+
+                    // Add Sharpe to filename (e.g., "8_3_0_s0.42")
+                    // Same params + same Sharpe = truly identical config, safe to overwrite
+                    let sharpe = entry.aggregate_metrics.avg_sharpe;
+                    let config_filename = format!("{}_s{:.2}", config_params, sharpe);
 
                     let output_dir =
                         std::path::PathBuf::from("pine-scripts/strategies").join(strategy_id);
@@ -1657,13 +1663,6 @@ impl App {
                     // Create directory if needed
                     if let Err(e) = std::fs::create_dir_all(&output_dir) {
                         self.status_message = format!("Failed to create directory: {}", e);
-                        return;
-                    }
-
-                    // Check if file already exists
-                    if output_file.exists() {
-                        self.status_message =
-                            format!("Pine script already exists: {}", output_file.display());
                         return;
                     }
 
