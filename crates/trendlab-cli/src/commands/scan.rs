@@ -403,14 +403,19 @@ fn simulate_position_history(
 ///
 /// # Arguments
 /// * `freshness_bars` - Only report Entry/Exit signals that fired within this many bars.
-///   Default is 2 (today or yesterday). Set to 0 to disable freshness check.
+///   Default is 1 (today only). Set to 0 to disable freshness check.
+/// * `min_confirmations` - Minimum number of strategies that must agree for a signal.
+///   Default is 2 (requires 2+ strategies to confirm). Set to 1 to disable.
 pub async fn execute_scan(
     watchlist_path: &Path,
     lookback_days: usize,
     actionable_only: bool,
     freshness_bars: usize,
+    min_confirmations: usize,
     data_config: &DataConfig,
 ) -> Result<ScanOutput> {
+    use std::collections::HashMap;
+
     // Load watchlist
     let watchlist = WatchlistConfig::load(watchlist_path)?;
 
@@ -424,8 +429,8 @@ pub async fn execute_scan(
     refresh_yahoo(&tickers, start, today, false, data_config).await?;
     println!();
 
-    // Run signal computation
-    let mut signals = Vec::new();
+    // Run signal computation - collect ALL signals first
+    let mut all_signals = Vec::new();
     let mut errors = Vec::new();
     let mut total_checks = 0;
 
@@ -449,11 +454,7 @@ pub async fn execute_scan(
                 effective_freshness,
             ) {
                 Ok(signal) => {
-                    // Skip holds if actionable_only is set
-                    if actionable_only && signal.signal == SignalType::Hold {
-                        continue;
-                    }
-                    signals.push(signal);
+                    all_signals.push(signal);
                 }
                 Err(e) => {
                     errors.push(ScanError {
@@ -466,16 +467,70 @@ pub async fn execute_scan(
         }
     }
 
+    // Apply confirmation filter: group by (symbol, signal_type) and count
+    let mut entry_counts: HashMap<String, Vec<TickerSignal>> = HashMap::new();
+    let mut exit_counts: HashMap<String, Vec<TickerSignal>> = HashMap::new();
+    let mut hold_signals: Vec<TickerSignal> = Vec::new();
+
+    for signal in all_signals {
+        match signal.signal {
+            SignalType::Entry => {
+                entry_counts
+                    .entry(signal.symbol.clone())
+                    .or_default()
+                    .push(signal);
+            }
+            SignalType::Exit => {
+                exit_counts
+                    .entry(signal.symbol.clone())
+                    .or_default()
+                    .push(signal);
+            }
+            SignalType::Hold => {
+                hold_signals.push(signal);
+            }
+        }
+    }
+
+    // Filter to only include signals with enough confirmations
+    // AND require at least one "slow" strategy (supertrend or 52wk_high) to confirm
+    let slow_strategies = ["supertrend", "52wk_high"];
+    let has_slow_confirmation = |signals: &[TickerSignal]| -> bool {
+        signals.iter().any(|s| slow_strategies.contains(&s.strategy.as_str()))
+    };
+
+    let mut confirmed_signals: Vec<TickerSignal> = Vec::new();
+
+    for (_symbol, signals) in entry_counts {
+        if signals.len() >= min_confirmations && has_slow_confirmation(&signals) {
+            confirmed_signals.extend(signals);
+        }
+    }
+
+    for (_symbol, signals) in exit_counts {
+        if signals.len() >= min_confirmations && has_slow_confirmation(&signals) {
+            confirmed_signals.extend(signals);
+        }
+    }
+
+    // Add hold signals if not filtering actionable only
+    if !actionable_only {
+        confirmed_signals.extend(hold_signals.clone());
+    }
+
+    // Sort by symbol for consistent output
+    confirmed_signals.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+
     // Build output
-    let entry_count = signals
+    let entry_count = confirmed_signals
         .iter()
         .filter(|s| s.signal == SignalType::Entry)
         .count();
-    let exit_count = signals
+    let exit_count = confirmed_signals
         .iter()
         .filter(|s| s.signal == SignalType::Exit)
         .count();
-    let hold_count = signals
+    let hold_count = confirmed_signals
         .iter()
         .filter(|s| s.signal == SignalType::Hold)
         .count();
@@ -484,7 +539,7 @@ pub async fn execute_scan(
         scan_date: today.to_string(),
         scan_timestamp: Utc::now().to_rfc3339(),
         watchlist_name: watchlist.watchlist.name.clone(),
-        signals,
+        signals: confirmed_signals,
         summary: ScanSummary {
             total_tickers: watchlist.tickers.len(),
             total_checks,
@@ -551,12 +606,15 @@ pub fn format_scan_output(output: &ScanOutput) -> String {
     if !entries.is_empty() {
         result.push_str(&format!("\n{}\n", "ENTRY SIGNALS".green().bold()));
         for sig in &entries {
+            // Extract just the date from the ISO timestamp
+            let signal_date = sig.timestamp.split('T').next().unwrap_or(&sig.timestamp);
             result.push_str(&format!(
-                "  {} - {} ({}) @ ${:.2}\n",
+                "  {} - {} ({}) @ ${:.2} [{}]\n",
                 sig.symbol.bright_white(),
                 sig.strategy,
                 sig.params,
-                sig.close_price
+                sig.close_price,
+                signal_date.bright_black()
             ));
         }
     }
@@ -564,12 +622,15 @@ pub fn format_scan_output(output: &ScanOutput) -> String {
     if !exits.is_empty() {
         result.push_str(&format!("\n{}\n", "EXIT SIGNALS".red().bold()));
         for sig in &exits {
+            // Extract just the date from the ISO timestamp
+            let signal_date = sig.timestamp.split('T').next().unwrap_or(&sig.timestamp);
             result.push_str(&format!(
-                "  {} - {} ({}) @ ${:.2}\n",
+                "  {} - {} ({}) @ ${:.2} [{}]\n",
                 sig.symbol.bright_white(),
                 sig.strategy,
                 sig.params,
-                sig.close_price
+                sig.close_price,
+                signal_date.bright_black()
             ));
         }
     }

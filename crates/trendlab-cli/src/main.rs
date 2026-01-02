@@ -96,8 +96,9 @@ enum Commands {
         #[arg(short, long, default_value = "configs/watchlist.toml")]
         watchlist: String,
 
-        /// Number of lookback days for data refresh (calendar days; 90 ≈ 60 trading days)
-        #[arg(long, default_value = "90")]
+        /// Number of lookback days for data refresh (calendar days; 270 ≈ 180 trading days)
+        /// Must be >= 250 to support 52-week high strategies (165 trading days warmup).
+        #[arg(long, default_value = "270")]
         lookback: usize,
 
         /// Output JSON file path (prints to stdout if not specified)
@@ -108,11 +109,16 @@ enum Commands {
         #[arg(long, default_value = "false")]
         actionable_only: bool,
 
-        /// Only show signals that fired within this many bars (default: 2 = today/yesterday).
-        /// Filters out stale signals where the entry/exit already occurred days ago.
-        /// Set to 0 to disable freshness filtering.
-        #[arg(long, default_value = "2")]
+        /// Only show signals that fired on the most recent bar (default: 1 = today only).
+        /// Set to 2 for today/yesterday, or 0 to disable freshness filtering.
+        #[arg(long, default_value = "1")]
         freshness: usize,
+
+        /// Minimum number of strategies that must agree for a signal to be shown.
+        /// Default: 2 (requires at least 2 strategies to confirm entry/exit).
+        /// Set to 1 to show all signals without confirmation filter.
+        #[arg(long, default_value = "2")]
+        min_confirm: usize,
     },
 }
 
@@ -325,6 +331,7 @@ async fn main() -> Result<()> {
             output,
             actionable_only,
             freshness,
+            min_confirm,
         } => {
             let watchlist_path = std::path::Path::new(&watchlist);
             let config = DataConfig::default();
@@ -336,6 +343,12 @@ async fn main() -> Result<()> {
                 "  Freshness: {} bars (only signals from last {} trading days)",
                 freshness, freshness
             );
+            if min_confirm > 1 {
+                println!(
+                    "  Confirmation: {}+ strategies must agree (including supertrend or 52wk_high)",
+                    min_confirm
+                );
+            }
             println!();
 
             let result = scan::execute_scan(
@@ -343,6 +356,7 @@ async fn main() -> Result<()> {
                 lookback,
                 actionable_only,
                 freshness,
+                min_confirm,
                 &config,
             )
             .await?;
