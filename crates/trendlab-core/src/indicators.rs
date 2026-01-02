@@ -657,7 +657,6 @@ pub fn rolling_min_close(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
     out
 }
 
-
 /// Compute rolling minimum of low prices over a lookback period.
 ///
 /// Returns `None` until there are enough bars to fill the lookback.
