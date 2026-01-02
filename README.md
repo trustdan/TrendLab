@@ -35,6 +35,8 @@ The project optimizes for:
 - **Explicit assumptions**: fill model, costs, data adjustments, missing bars policy are spelled out and tested.
 - **Parity is correctness, not polish**: Pine parity is part of validation, not a “nice to have.”
 
+<script src="https://asciinema.org/a/765292.js" id="asciicast-765292" async="true"></script>
+
 ## How it works (high level)
 
 TrendLab's "happy path" is:

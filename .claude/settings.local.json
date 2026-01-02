@@ -91,7 +91,12 @@
       "Bash(cargo flamegraph:*)",
       "Bash(./target/release/trendlab-cli.exe:*)",
       "Bash(time ./target/release/trendlab-cli.exe:*)",
-      "Bash(git rm:*)"
+      "Bash(git rm:*)",
+      "Bash(powershell.exe -Command \"cd c:/Users/Dan/TrendLab; python scripts/analyze_yolo.py --data-dir target/release/artifacts\")",
+      "Bash(powershell.exe -Command \"cd c:/Users/Dan/TrendLab; python -c ''import json; f=open\\(\"\"target/release/artifacts/cross_symbol_leaderboard.json\"\"\\); d=json.load\\(f\\); print\\(len\\(d.get\\(\"\"entries\"\", []\\)\\), \"\"entries\"\"\\)''\")",
+      "Bash(cmd.exe /c \"cd /d c:\\\\Users\\\\Dan\\\\TrendLab && python scripts/analyze_yolo.py --data-dir target/release/artifacts\")",
+      "Bash(cmd.exe /c \"cd /d c:/Users/Dan/TrendLab && python scripts/analyze_yolo.py --data-dir target/release/artifacts\")",
+      "Bash(cmd.exe /c \"cd c:\\\\Users\\\\Dan\\\\TrendLab & python scripts\\\\analyze_yolo.py --data-dir .\\\\target\\\\release\\\\artifacts\")"
     ]
   }
 }
