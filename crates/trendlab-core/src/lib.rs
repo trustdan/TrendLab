@@ -108,8 +108,8 @@ pub use leaderboard::{
     compute_cross_sector_confidence_from_metrics, compute_cross_symbol_confidence_from_metrics,
     generate_session_id, AggregatedConfigResult, AggregatedMetrics, CombinedEquityAggregation,
     CombinedEquityConfig, CombinedEquityResult, CombinedEquityWeighting, CrossSymbolLeaderboard,
-    CrossSymbolRankMetric, Leaderboard, LeaderboardEntry, LeaderboardScope, RankingWeights,
-    RiskProfile, RobustScoreConfig,
+    CrossSymbolRankMetric, HistoryEntry, HistoryLogger, Leaderboard, LeaderboardEntry,
+    LeaderboardScope, RankingWeights, RiskProfile, RobustScoreConfig,
 };
 pub use metrics::{compute_metrics, Metrics};
 pub use polars::prelude::IntoLazy;

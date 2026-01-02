@@ -86,7 +86,12 @@
       "Bash(if not exist \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\reports\\\\scans\" mkdir \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\reports\\\\scans\")",
       "Bash(powershell.exe -Command \"python scripts/analyze_yolo.py --charts --data-dir target/release/artifacts\")",
       "Bash(npx tauri --version)",
-      "Bash(git push)"
+      "Bash(git push)",
+      "Bash(./target/release/trendlab-cli.exe sweep:*)",
+      "Bash(cargo flamegraph:*)",
+      "Bash(./target/release/trendlab-cli.exe:*)",
+      "Bash(time ./target/release/trendlab-cli.exe:*)",
+      "Bash(git rm:*)"
     ]
   }
 }

@@ -13,6 +13,22 @@ path = "src/lib.rs"
 name = "trendlab-cli"
 path = "src/main.rs"
 
+[package.metadata.deb]
+maintainer = "TrendLab Contributors"
+copyright = "2024-2026"
+license-file = ["../../LICENSE", "0"]
+depends = "$auto"
+section = "utility"
+priority = "optional"
+assets = [
+    ["target/release/trendlab-cli", "usr/bin/", "755"],
+    ["target/release/trendlab-tui", "usr/bin/", "755"],
+]
+extended-description = """
+TrendLab is a research-grade trend-following backtesting lab.
+Includes both CLI and TUI interfaces for running parameter sweeps
+and analyzing trading strategies."""
+
 [dependencies]
 trendlab-core.workspace = true
 clap.workspace = true

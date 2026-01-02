@@ -37,6 +37,10 @@ pub struct YoloState {
 
     /// Randomization percentage (e.g., 0.15 = ±15%)
     pub randomization_pct: f64,
+    /// Optional cap for Polars threads (per backtest)
+    pub polars_max_threads: Option<usize>,
+    /// Optional cap for outer Rayon pool (symbol-level parallelism)
+    pub outer_threads: Option<usize>,
     /// Total configs tested this session
     pub session_configs_tested: u64,
     /// Total configs tested all-time (loaded from all_time_leaderboard)
@@ -62,6 +66,10 @@ pub struct YoloConfigState {
     pub randomization_pct: f64,
     /// Sweep depth for parameter coverage
     pub sweep_depth: SweepDepth,
+    /// Optional cap for Polars threads (per backtest)
+    pub polars_max_threads: Option<usize>,
+    /// Optional cap for outer Rayon pool (symbol-level parallelism)
+    pub outer_threads: Option<usize>,
 }
 
 /// Fields in the YOLO config modal
@@ -71,6 +79,8 @@ pub enum YoloConfigField {
     EndDate,
     Randomization,
     SweepDepth,
+    PolarsThreads,
+    OuterThreads,
 }
 
 impl Default for YoloConfigState {
@@ -82,6 +92,8 @@ impl Default for YoloConfigState {
             end_date: today,
             randomization_pct: 0.30,
             sweep_depth: SweepDepth::Quick,
+            polars_max_threads: None,
+            outer_threads: None,
         }
     }
 }
@@ -92,16 +104,20 @@ impl YoloConfigField {
             Self::StartDate => Self::EndDate,
             Self::EndDate => Self::Randomization,
             Self::Randomization => Self::SweepDepth,
-            Self::SweepDepth => Self::StartDate,
+            Self::SweepDepth => Self::PolarsThreads,
+            Self::PolarsThreads => Self::OuterThreads,
+            Self::OuterThreads => Self::StartDate,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Self::StartDate => Self::SweepDepth,
+            Self::StartDate => Self::OuterThreads,
             Self::EndDate => Self::StartDate,
             Self::Randomization => Self::EndDate,
             Self::SweepDepth => Self::Randomization,
+            Self::PolarsThreads => Self::SweepDepth,
+            Self::OuterThreads => Self::PolarsThreads,
         }
     }
 }
@@ -126,6 +142,8 @@ impl Default for YoloState {
             // Default exploration strength for YOLO mode. Kept moderate so it explores meaningfully
             // without completely thrashing parameter space each iteration.
             randomization_pct: 0.30,
+            polars_max_threads: None,
+            outer_threads: None,
             session_configs_tested: 0,
             total_configs_tested: 0,
             started_at: None,

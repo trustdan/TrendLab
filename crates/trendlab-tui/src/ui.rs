@@ -522,6 +522,52 @@ fn draw_yolo_config_modal(f: &mut Frame, app: &App) {
         Span::styled(format!(" {}", config.sweep_depth.name()), depth_style),
     ]));
 
+    // Polars threads
+    let polars_style = if focused == YoloConfigField::PolarsThreads {
+        Style::default()
+            .fg(colors::GREEN)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(colors::FG)
+    };
+    let polars_marker = if focused == YoloConfigField::PolarsThreads {
+        "▶ "
+    } else {
+        "  "
+    };
+    let polars_value = config
+        .polars_max_threads
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "auto".to_string());
+    lines.push(Line::from(vec![
+        Span::styled(polars_marker, polars_style),
+        Span::styled("Polars threads:", Style::default().fg(colors::FG_DARK)),
+        Span::styled(format!(" {}", polars_value), polars_style),
+    ]));
+
+    // Outer Rayon threads
+    let outer_style = if focused == YoloConfigField::OuterThreads {
+        Style::default()
+            .fg(colors::GREEN)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(colors::FG)
+    };
+    let outer_marker = if focused == YoloConfigField::OuterThreads {
+        "▶ "
+    } else {
+        "  "
+    };
+    let outer_value = config
+        .outer_threads
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "auto".to_string());
+    lines.push(Line::from(vec![
+        Span::styled(outer_marker, outer_style),
+        Span::styled("Outer threads: ", Style::default().fg(colors::FG_DARK)),
+        Span::styled(format!(" {}", outer_value), outer_style),
+    ]));
+
     lines.push(Line::from(""));
 
     // Show sweep depth options horizontally when focused

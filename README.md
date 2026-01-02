@@ -503,9 +503,42 @@ Press `Tab` or `→` to switch to parameter editing:
 
 ## Desktop GUI
 
-> **DEPRECATED**: The Desktop GUI has been deprecated due to feature gaps, architectural mismatch with the TUI, and runtime issues. The TUI (`trendlab --tui`) provides the complete feature set and is the recommended interface.
+> ⚠️ **DEPRECATED** as of 2026-01-01
 >
-> The GUI code remains intact for potential resurrection. See [docs/roadmap-gui-resurrection.md](docs/roadmap-gui-resurrection.md) for the detailed resurrection roadmap.
+> **Use the TUI instead:** `trendlab --tui`
+
+### Why the GUI Was Deprecated
+
+#### 1. Feature Gaps
+
+The GUI was missing critical features available in the TUI:
+
+| Feature | TUI Status | GUI Status |
+|---------|------------|------------|
+| YOLO Mode config | Full (dates, randomization %, sweep depth) | Basic controls only |
+| Risk profile cycling | 4 profiles via `p` key | Not connected |
+| Statistical analysis | Regime splits, OOS testing, significance | Commands exist, no UI |
+| Help panel | Tab 6, context-sensitive, searchable | Missing entirely |
+| Pine Script export | `P` key in Leaderboard mode | Not implemented |
+| Per-strategy parameters | Full customization per strategy | Stub returns empty |
+
+#### 2. Architectural Mismatch
+
+The GUI evolved into a parallel implementation rather than a shared-logic wrapper:
+
+- **Duplicate state management**: GUI has its own `AppState` wrapping the engine instead of sharing state with TUI
+- **Duplicate business logic**: Many features were re-implemented rather than reused
+- **Divergent behavior**: Same inputs could produce different results in TUI vs GUI
+
+#### 3. Runtime Issues
+
+- Startup crashes in certain configurations
+- Event handling inconsistencies between Tauri events and TUI worker updates
+- Memory leaks in long-running YOLO sessions
+
+### Resurrection
+
+All GUI code remains intact in `apps/trendlab-gui/` for potential resurrection. See [docs/roadmap-gui-resurrection.md](docs/roadmap-gui-resurrection.md) for the detailed 7-phase resurrection plan covering stabilization, Help panel, YOLO mode completion, statistical analysis, Pine export, and parameter editing.
 
 <details>
 <summary>Archived GUI Documentation (click to expand)</summary>
@@ -1550,6 +1583,36 @@ TrendLab/
 ## Performance Tuning
 
 Tips for running large parameter sweeps efficiently:
+
+### Large Sweep Optimization (43k+ Configs)
+
+TrendLab is optimized for massive parameter sweeps without stack overflow:
+
+| Optimization                    | Technique                                       | Benefit                                          |
+| ------------------------------- | ----------------------------------------------- | ------------------------------------------------ |
+| **Arc\<DataFrame\> sharing**    | DataFrame wrapped in Arc for parallel tasks     | Eliminates 43k clones, prevents stack overflow   |
+| **Chunked parallelism**         | Process configs in 2000-config chunks           | Limits rayon queue depth                         |
+| **In-place mutations**          | Column additions without intermediate clones    | 11 fewer allocations per backtest                |
+
+**Tested capacity:**
+
+```bash
+# 43,808 configurations completed in 11 seconds (previously caused stack overflow)
+./target/release/trendlab-cli.exe sweep -s donchian -t SPY \
+  --start 2010-01-01 --end 2024-12-31 \
+  -g "entry:5..300:1;exit:3..150:1"
+```
+
+### YOLO Mode Parallelization
+
+YOLO mode processes symbols in parallel for faster iteration:
+
+| Component           | Before          | After                              |
+| ------------------- | --------------- | ---------------------------------- |
+| Symbol loop         | Sequential      | Parallel via `par_iter()`          |
+| Result collection   | Direct HashMap  | `Arc<RwLock<HashMap>>`             |
+| Best tracking       | Mutable Option  | `Arc<Mutex<Option>>`               |
+| Expected speedup    | 1x              | 6-10x (scales with CPU cores)      |
 
 ### Memory Management
 

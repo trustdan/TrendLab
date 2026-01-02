@@ -2084,6 +2084,8 @@ impl App {
             existing_per_symbol_leaderboard,
             existing_cross_symbol_leaderboard,
             session_id: Some(self.yolo.session_id.clone()),
+            polars_max_threads: self.yolo.polars_max_threads,
+            outer_threads: self.yolo.outer_threads,
         };
 
         if channels.command_tx.send(cmd).is_ok() {

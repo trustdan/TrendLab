@@ -767,51 +767,29 @@ fn apply_position_state_machine(
         }
     }
 
-    // Add computed columns to DataFrame
-    df = df
-        .with_column(Series::new("position_state".into(), position_state))
-        .map_err(TrendLabError::Polars)?
-        .clone();
-    df = df
-        .with_column(Series::new("entry_fill".into(), entry_fill))
-        .map_err(TrendLabError::Polars)?
-        .clone();
-    df = df
-        .with_column(Series::new("exit_fill".into(), exit_fill))
-        .map_err(TrendLabError::Polars)?
-        .clone();
-    df = df
-        .with_column(Series::new("entry_short_fill".into(), entry_short_fill))
-        .map_err(TrendLabError::Polars)?
-        .clone();
-    df = df
-        .with_column(Series::new("exit_short_fill".into(), exit_short_fill))
-        .map_err(TrendLabError::Polars)?
-        .clone();
-    df = df
-        .with_column(Series::new("fill_price".into(), fill_price))
-        .map_err(TrendLabError::Polars)?
-        .clone();
-    df = df
-        .with_column(Series::new("fill_fees".into(), fill_fees))
-        .map_err(TrendLabError::Polars)?
-        .clone();
-    df = df
-        .with_column(Series::new("fill_qty".into(), fill_qty))
-        .map_err(TrendLabError::Polars)?
-        .clone();
-    df = df
-        .with_column(Series::new("cash".into(), cash))
-        .map_err(TrendLabError::Polars)?
-        .clone();
-    df = df
-        .with_column(Series::new("position_qty".into(), position_qty))
-        .map_err(TrendLabError::Polars)?
-        .clone();
-    df = df
-        .with_column(Series::new("equity".into(), equity))
-        .map_err(TrendLabError::Polars)?
-        .clone();
+    // Add computed columns to DataFrame - mutate in place, no cloning needed
+    df.with_column(Series::new("position_state".into(), position_state))
+        .map_err(TrendLabError::Polars)?;
+    df.with_column(Series::new("entry_fill".into(), entry_fill))
+        .map_err(TrendLabError::Polars)?;
+    df.with_column(Series::new("exit_fill".into(), exit_fill))
+        .map_err(TrendLabError::Polars)?;
+    df.with_column(Series::new("entry_short_fill".into(), entry_short_fill))
+        .map_err(TrendLabError::Polars)?;
+    df.with_column(Series::new("exit_short_fill".into(), exit_short_fill))
+        .map_err(TrendLabError::Polars)?;
+    df.with_column(Series::new("fill_price".into(), fill_price))
+        .map_err(TrendLabError::Polars)?;
+    df.with_column(Series::new("fill_fees".into(), fill_fees))
+        .map_err(TrendLabError::Polars)?;
+    df.with_column(Series::new("fill_qty".into(), fill_qty))
+        .map_err(TrendLabError::Polars)?;
+    df.with_column(Series::new("cash".into(), cash))
+        .map_err(TrendLabError::Polars)?;
+    df.with_column(Series::new("position_qty".into(), position_qty))
+        .map_err(TrendLabError::Polars)?;
+    df.with_column(Series::new("equity".into(), equity))
+        .map_err(TrendLabError::Polars)?;
 
     Ok(df)
 }
@@ -984,20 +962,58 @@ pub fn run_strategy_sweep_polars(
     })
 }
 
+/// Helper function to process a single config in a parallel sweep.
+/// Extracted to reduce closure size and stack usage in rayon tasks.
+fn process_single_config(
+    strategy_config_id: &crate::sweep::StrategyConfigId,
+    df_arc: &std::sync::Arc<polars::frame::DataFrame>,
+    config: &PolarsBacktestConfig,
+) -> Option<crate::sweep::SweepConfigResult> {
+    use crate::metrics::compute_metrics;
+    use crate::strategy_v2::create_strategy_v2_from_config;
+    use crate::sweep::{ConfigId, SweepConfigResult};
+
+    // Skip strategies without V2 implementations
+    let strategy = create_strategy_v2_from_config(strategy_config_id).ok()?;
+
+    // Run Polars backtest - Arc deref is cheap, .lazy() creates the LazyFrame
+    let polars_result =
+        run_backtest_polars(df_arc.as_ref().clone().lazy(), strategy.as_ref(), config).ok()?;
+
+    // Convert to traditional BacktestResult
+    let backtest_result = polars_result.to_backtest_result().ok()?;
+
+    // Compute metrics
+    let metrics = compute_metrics(&backtest_result, config.initial_cash);
+
+    // Create legacy ConfigId for compatibility
+    let legacy_config_id = strategy_config_id.to_legacy_config_id();
+
+    Some(SweepConfigResult {
+        config_id: ConfigId::new(
+            legacy_config_id.entry_lookback,
+            legacy_config_id.exit_lookback,
+        ),
+        backtest_result,
+        metrics,
+    })
+}
+
 /// Run a Polars-native sweep using parallel execution.
 ///
 /// This is the parallelized version of `run_strategy_sweep_polars()`.
 /// For large sweeps, this provides significant performance improvements.
+///
+/// Uses chunked parallelism to avoid stack overflow with very large config counts (>10k).
 pub fn run_strategy_sweep_polars_parallel(
     df: &DataFrame,
     strategy_config: &crate::sweep::StrategyGridConfig,
     config: &PolarsBacktestConfig,
 ) -> Result<crate::sweep::SweepResult> {
-    use crate::metrics::compute_metrics;
-    use crate::strategy_v2::create_strategy_v2_from_config;
-    use crate::sweep::{ConfigId, SweepConfigResult, SweepResult};
+    use crate::sweep::{SweepConfigResult, SweepResult};
     use chrono::Utc;
     use rayon::prelude::*;
+    use std::sync::Arc;
 
     let sweep_id = format!(
         "polars_{}_{}_{}",
@@ -1009,37 +1025,35 @@ pub fn run_strategy_sweep_polars_parallel(
 
     let configs = strategy_config.generate_configs();
 
-    // Run each config through the Polars backtest in parallel
-    // Strategies without V2 implementations are gracefully skipped
-    let config_results: Vec<SweepConfigResult> = configs
-        .par_iter()
-        .filter_map(|strategy_config_id| {
-            // Skip strategies without V2 implementations
-            let strategy = create_strategy_v2_from_config(strategy_config_id).ok()?;
+    // Use Arc to share DataFrame across parallel tasks (avoids deep cloning)
+    let df_arc = Arc::new(df.clone());
 
-            // Run Polars backtest
-            let polars_result =
-                run_backtest_polars(df.clone().lazy(), strategy.as_ref(), config).ok()?;
+    // Process in chunks to avoid rayon work-stealing stack overflow with large config counts
+    // Each chunk is processed in parallel, chunks are processed sequentially
+    const CHUNK_SIZE: usize = 2000;
 
-            // Convert to traditional BacktestResult
-            let backtest_result = polars_result.to_backtest_result().ok()?;
-
-            // Compute metrics
-            let metrics = compute_metrics(&backtest_result, config.initial_cash);
-
-            // Create legacy ConfigId for compatibility
-            let legacy_config_id = strategy_config_id.to_legacy_config_id();
-
-            Some(SweepConfigResult {
-                config_id: ConfigId::new(
-                    legacy_config_id.entry_lookback,
-                    legacy_config_id.exit_lookback,
-                ),
-                backtest_result,
-                metrics,
+    let config_results: Vec<SweepConfigResult> = if configs.len() <= CHUNK_SIZE {
+        // Small sweep: process all at once
+        configs
+            .par_iter()
+            .filter_map(|strategy_config_id| {
+                process_single_config(strategy_config_id, &df_arc, config)
             })
-        })
-        .collect();
+            .collect()
+    } else {
+        // Large sweep: process in chunks to limit rayon queue depth
+        configs
+            .chunks(CHUNK_SIZE)
+            .flat_map(|chunk| {
+                chunk
+                    .par_iter()
+                    .filter_map(|strategy_config_id| {
+                        process_single_config(strategy_config_id, &df_arc, config)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
 
     let completed_at = Utc::now();
 

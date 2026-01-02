@@ -743,6 +743,20 @@ fn handle_yolo_config_key(app: &mut App, code: KeyCode, channels: &WorkerChannel
                         app.yolo.config.sweep_depth = depths[current_idx - 1];
                     }
                 }
+                YoloConfigField::PolarsThreads => {
+                    // Decrease or clear to auto
+                    app.yolo.config.polars_max_threads = match app.yolo.config.polars_max_threads {
+                        Some(v) if v > 1 => Some(v - 1),
+                        _ => None,
+                    };
+                }
+                YoloConfigField::OuterThreads => {
+                    // Decrease or clear to auto
+                    app.yolo.config.outer_threads = match app.yolo.config.outer_threads {
+                        Some(v) if v > 1 => Some(v - 1),
+                        _ => None,
+                    };
+                }
             }
             KeyResult::Continue
         }
@@ -783,6 +797,20 @@ fn handle_yolo_config_key(app: &mut App, code: KeyCode, channels: &WorkerChannel
                         app.yolo.config.sweep_depth = depths[current_idx + 1];
                     }
                 }
+                YoloConfigField::PolarsThreads => {
+                    let max_threads = std::thread::available_parallelism()
+                        .map(|n| n.get())
+                        .unwrap_or(128);
+                    let base = app.yolo.config.polars_max_threads.unwrap_or(4);
+                    app.yolo.config.polars_max_threads = Some((base + 1).min(max_threads));
+                }
+                YoloConfigField::OuterThreads => {
+                    let max_threads = std::thread::available_parallelism()
+                        .map(|n| n.get())
+                        .unwrap_or(256);
+                    let base = app.yolo.config.outer_threads.unwrap_or(8);
+                    app.yolo.config.outer_threads = Some((base + 1).min(max_threads));
+                }
             }
             KeyResult::Continue
         }
@@ -791,6 +819,8 @@ fn handle_yolo_config_key(app: &mut App, code: KeyCode, channels: &WorkerChannel
             // Apply config and start YOLO mode
             app.fetch_range = (app.yolo.config.start_date, app.yolo.config.end_date);
             app.yolo.randomization_pct = app.yolo.config.randomization_pct;
+            app.yolo.polars_max_threads = app.yolo.config.polars_max_threads;
+            app.yolo.outer_threads = app.yolo.config.outer_threads;
             app.yolo.show_config = false;
             app.start_yolo_mode(channels);
             KeyResult::Continue

@@ -1860,6 +1860,11 @@ pub struct CrossSymbolLeaderboard {
     /// Maximum number of entries to keep
     pub max_entries: usize,
 
+    /// Maximum configs to keep per strategy type (default: 5)
+    /// When set, leaderboard keeps top N configs for EACH strategy type
+    #[serde(default = "default_max_per_strategy")]
+    pub max_per_strategy: usize,
+
     /// Ranking metric being used
     pub rank_by: CrossSymbolRankMetric,
 
@@ -1884,6 +1889,10 @@ pub struct CrossSymbolLeaderboard {
     pub requested_end: Option<chrono::NaiveDate>,
 }
 
+fn default_max_per_strategy() -> usize {
+    5
+}
+
 impl Default for CrossSymbolLeaderboard {
     fn default() -> Self {
         Self::new(4, CrossSymbolRankMetric::AvgSharpe)
@@ -1893,10 +1902,20 @@ impl Default for CrossSymbolLeaderboard {
 impl CrossSymbolLeaderboard {
     /// Create a new empty cross-symbol leaderboard.
     pub fn new(max_entries: usize, rank_by: CrossSymbolRankMetric) -> Self {
+        Self::with_max_per_strategy(max_entries, rank_by, 5)
+    }
+
+    /// Create a new leaderboard with custom max_per_strategy.
+    pub fn with_max_per_strategy(
+        max_entries: usize,
+        rank_by: CrossSymbolRankMetric,
+        max_per_strategy: usize,
+    ) -> Self {
         let now = Utc::now();
         Self {
             entries: Vec::with_capacity(max_entries),
             max_entries,
+            max_per_strategy,
             rank_by,
             total_iterations: 0,
             started_at: now,
@@ -2002,6 +2021,85 @@ impl CrossSymbolLeaderboard {
             "CrossSymbolLeaderboard: rejected (worse than worst)"
         );
         false
+    }
+
+    /// Try to insert an entry, keeping top N configs per strategy type.
+    ///
+    /// Unlike `try_insert`, this method allows multiple configs per strategy type,
+    /// keeping up to `max_per_strategy` configs for each strategy. This is useful
+    /// in YOLO mode to understand parameter sensitivity within each strategy family.
+    ///
+    /// Returns true if the entry was added or replaced an existing entry.
+    pub fn try_insert_top_n_per_strategy(&mut self, entry: AggregatedConfigResult) -> bool {
+        let strategy_type = entry.strategy_type;
+        let hash = entry.config_hash();
+        let new_value = entry.aggregate_metrics.rank_value(self.rank_by);
+
+        // Check for duplicate config (same config_hash)
+        if let Some(pos) = self.entries.iter().position(|e| e.config_hash() == hash) {
+            let existing_value = self.entries[pos].aggregate_metrics.rank_value(self.rank_by);
+            if new_value > existing_value {
+                self.entries[pos] = entry;
+                self.sort_and_rerank();
+                self.last_updated = Utc::now();
+                return true;
+            }
+            return false;
+        }
+
+        // Count entries for this strategy type
+        let count_for_strategy = self
+            .entries
+            .iter()
+            .filter(|e| e.strategy_type == strategy_type)
+            .count();
+
+        if count_for_strategy < self.max_per_strategy {
+            // Room for more entries of this strategy type
+            self.entries.push(entry);
+            self.sort_and_rerank();
+            self.last_updated = Utc::now();
+            return true;
+        }
+
+        // Strategy has max entries - find the worst one for this strategy
+        let worst_for_strategy = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.strategy_type == strategy_type)
+            .min_by(|(_, a), (_, b)| {
+                let va = a.aggregate_metrics.rank_value(self.rank_by);
+                let vb = b.aggregate_metrics.rank_value(self.rank_by);
+                va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+        if let Some((worst_idx, worst_entry)) = worst_for_strategy {
+            let worst_value = worst_entry.aggregate_metrics.rank_value(self.rank_by);
+            if new_value > worst_value {
+                self.entries.remove(worst_idx);
+                self.entries.push(entry);
+                self.sort_and_rerank();
+                self.last_updated = Utc::now();
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Get entries grouped by strategy type, sorted by rank within each group.
+    pub fn entries_by_strategy(&self) -> std::collections::HashMap<crate::StrategyTypeId, Vec<&AggregatedConfigResult>> {
+        use std::collections::HashMap;
+        let mut grouped: HashMap<crate::StrategyTypeId, Vec<&AggregatedConfigResult>> = HashMap::new();
+        for entry in &self.entries {
+            grouped.entry(entry.strategy_type).or_default().push(entry);
+        }
+        // Sort each group by rank
+        for entries in grouped.values_mut() {
+            entries.sort_by_key(|e| e.rank);
+        }
+        grouped
     }
 
     /// Sort entries by rank metric (descending) and update ranks.
@@ -2142,6 +2240,162 @@ impl CrossSymbolLeaderboard {
         }
 
         n_significant
+    }
+}
+
+// =============================================================================
+// Append-Only History Logger (YOLO Mode)
+// =============================================================================
+
+/// A single history entry for append-only logging.
+/// Contains minimal but complete info about each tested config.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    /// Timestamp when this config was tested
+    pub tested_at: DateTime<Utc>,
+    /// YOLO iteration number
+    pub iteration: u32,
+    /// Strategy type
+    pub strategy_type: StrategyTypeId,
+    /// Configuration identifier
+    pub config_id: StrategyConfigId,
+    /// Hash for deduplication tracking
+    pub config_hash: u64,
+    /// Number of symbols tested
+    pub symbol_count: usize,
+    /// Average Sharpe ratio across symbols
+    pub avg_sharpe: f64,
+    /// Minimum Sharpe ratio across symbols
+    pub min_sharpe: f64,
+    /// Maximum Sharpe ratio across symbols
+    pub max_sharpe: f64,
+    /// Hit rate (% of symbols with positive CAGR)
+    pub hit_rate: f64,
+    /// Average CAGR across symbols
+    pub avg_cagr: f64,
+    /// Average max drawdown across symbols
+    pub avg_max_drawdown: f64,
+}
+
+impl HistoryEntry {
+    /// Create a history entry from an aggregated config result.
+    pub fn from_aggregated(result: &AggregatedConfigResult, iteration: u32) -> Self {
+        Self {
+            tested_at: Utc::now(),
+            iteration,
+            strategy_type: result.strategy_type,
+            config_id: result.config_id.clone(),
+            config_hash: result.config_hash(),
+            symbol_count: result.symbols.len(),
+            avg_sharpe: result.aggregate_metrics.avg_sharpe,
+            min_sharpe: result.aggregate_metrics.min_sharpe,
+            max_sharpe: result.aggregate_metrics.max_sharpe,
+            hit_rate: result.aggregate_metrics.hit_rate,
+            avg_cagr: result.aggregate_metrics.avg_cagr,
+            avg_max_drawdown: result.aggregate_metrics.avg_max_drawdown,
+        }
+    }
+}
+
+/// Append-only logger for YOLO mode history.
+///
+/// Logs every tested config (not just winners) to a JSONL file.
+/// Each line is a complete JSON object for easy analysis.
+#[derive(Debug)]
+pub struct HistoryLogger {
+    /// Path to the JSONL log file
+    path: std::path::PathBuf,
+    /// Session ID for this run
+    session_id: String,
+    /// Number of entries logged
+    entries_logged: u64,
+}
+
+impl HistoryLogger {
+    /// Create a new history logger.
+    ///
+    /// Creates the parent directory if it doesn't exist.
+    /// The file is opened in append mode for each write.
+    pub fn new(path: impl AsRef<Path>, session_id: &str) -> io::Result<Self> {
+        let path = path.as_ref().to_path_buf();
+
+        // Create parent directory if needed
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        Ok(Self {
+            path,
+            session_id: session_id.to_string(),
+            entries_logged: 0,
+        })
+    }
+
+    /// Log a single config result.
+    ///
+    /// Appends a single JSON line to the log file.
+    /// Thread-safe through OS-level atomic appends for small writes.
+    pub fn log(&mut self, result: &AggregatedConfigResult, iteration: u32) -> io::Result<()> {
+        use std::io::Write;
+
+        let entry = HistoryEntry::from_aggregated(result, iteration);
+        let json = serde_json::to_string(&entry)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
+
+        writeln!(file, "{}", json)?;
+        self.entries_logged += 1;
+
+        Ok(())
+    }
+
+    /// Log multiple config results in a batch.
+    ///
+    /// More efficient than individual calls for many results.
+    pub fn log_batch(
+        &mut self,
+        results: &[AggregatedConfigResult],
+        iteration: u32,
+    ) -> io::Result<()> {
+        use std::io::Write;
+
+        if results.is_empty() {
+            return Ok(());
+        }
+
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
+
+        for result in results {
+            let entry = HistoryEntry::from_aggregated(result, iteration);
+            let json = serde_json::to_string(&entry)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            writeln!(file, "{}", json)?;
+            self.entries_logged += 1;
+        }
+
+        Ok(())
+    }
+
+    /// Get the number of entries logged so far.
+    pub fn entries_logged(&self) -> u64 {
+        self.entries_logged
+    }
+
+    /// Get the path to the log file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Get the session ID.
+    pub fn session_id(&self) -> &str {
+        &self.session_id
     }
 }
 

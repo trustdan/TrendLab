@@ -127,6 +127,17 @@ jobs:
       - name: Build TUI
         run: cargo build --release --target ${{ matrix.target }} -p trendlab-tui
 
+      - name: Build .deb package (Linux only)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          cargo install cargo-deb
+          # cargo-deb expects binaries in target/release, not target/<target>/release
+          # So we copy them there first
+          mkdir -p target/release
+          cp target/${{ matrix.target }}/release/trendlab-cli target/release/
+          cp target/${{ matrix.target }}/release/trendlab-tui target/release/
+          cargo deb -p trendlab-cli --no-build --target ${{ matrix.target }}
+
       - name: Package (Unix)
         if: matrix.os != 'windows-latest'
         run: |
@@ -135,6 +146,11 @@ jobs:
           cp target/${{ matrix.target }}/release/trendlab-tui dist/
           cd dist
           tar -czvf trendlab-cli-${{ matrix.target }}.tar.gz trendlab-cli trendlab-tui
+
+      - name: Copy .deb to dist (Linux only)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          cp target/${{ matrix.target }}/debian/*.deb dist/
 
       - name: Package (Windows)
         if: matrix.os == 'windows-latest'
@@ -149,7 +165,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cli-${{ matrix.target }}
-          path: dist/trendlab-cli-*
+          path: |
+            dist/trendlab-cli-*
+            dist/*.deb
 
   upload-cli:
     name: Upload CLI to Release

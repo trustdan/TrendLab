@@ -8,7 +8,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use chrono::{NaiveDate, Utc};
@@ -18,15 +18,16 @@ use trendlab_core::{
     bars_to_dataframe, build_yahoo_chart_url, combine_equity_curves_simple, compute_analysis,
     create_artifact_from_config, dataframe_to_bars, export_artifact_to_file,
     get_parquet_date_range, one_sided_mean_pvalue, parse_yahoo_chart_json,
-    run_donchian_sweep_polars, run_strategy_sweep_polars_parallel, scan_symbol_parquet_lazy,
+    run_donchian_sweep_polars, run_strategy_sweep_polars_cached,
+    run_strategy_sweep_polars_parallel, scan_symbol_parquet_lazy,
     write_partitioned_parquet, AggregatedConfigResult, AggregatedMetrics,
     AggregatedPortfolioResult, AnalysisConfig, BacktestConfig, BacktestResult, Bar, CostModel,
     CrossSymbolLeaderboard, CrossSymbolRankMetric, DataQualityChecker, DataQualityReport,
-    DonchianBacktestConfig, IntoLazy, Leaderboard, LeaderboardEntry, Metrics, MultiStrategyGrid,
-    MultiStrategySweepResult, MultiSweepResult, OpeningPeriod, PolarsBacktestConfig, RankMetric,
-    StatisticalAnalysis, StrategyBestResult, StrategyConfigId, StrategyGridConfig, StrategyParams,
-    StrategyTypeId, SweepConfigResult, SweepGrid, SweepResult, VotingMethod, WalkForwardConfig,
-    WalkForwardResult,
+    DonchianBacktestConfig, HistoryLogger, IntoLazy, Leaderboard, LeaderboardEntry, Metrics,
+    MultiStrategyGrid, MultiStrategySweepResult, MultiSweepResult, OpeningPeriod,
+    PolarsBacktestConfig, RankMetric, StatisticalAnalysis, StrategyBestResult, StrategyConfigId,
+    StrategyGridConfig, StrategyParams, StrategyTypeId, SweepConfigResult, SweepGrid, SweepResult,
+    VotingMethod, WalkForwardConfig, WalkForwardResult,
 };
 
 /// Commands sent from TUI thread to worker thread.
@@ -140,6 +141,10 @@ pub enum WorkerCommand {
         existing_cross_symbol_leaderboard: Option<CrossSymbolLeaderboard>,
         /// Session identifier for tracking results from this YOLO run
         session_id: Option<String>,
+        /// Optional: cap Polars threads (env var POLARS_MAX_THREADS)
+        polars_max_threads: Option<usize>,
+        /// Optional: outer Rayon pool threads for symbol-level parallelism
+        outer_threads: Option<usize>,
     },
 }
 
@@ -513,6 +518,8 @@ fn worker_loop(
                 existing_per_symbol_leaderboard,
                 existing_cross_symbol_leaderboard,
                 session_id,
+                polars_max_threads,
+                outer_threads,
             } => {
                 rt.block_on(handle_yolo_mode(
                     &symbols,
@@ -525,6 +532,8 @@ fn worker_loop(
                     existing_per_symbol_leaderboard,
                     existing_cross_symbol_leaderboard,
                     session_id,
+                    polars_max_threads,
+                    outer_threads,
                     &update_tx,
                     &cancel_flag,
                 ));
@@ -1853,12 +1862,16 @@ async fn handle_yolo_mode(
     existing_per_symbol_leaderboard: Option<Leaderboard>,
     existing_cross_symbol_leaderboard: Option<CrossSymbolLeaderboard>,
     session_id: Option<String>,
+    polars_max_threads: Option<usize>,
+    outer_threads: Option<usize>,
     update_tx: &Sender<WorkerUpdate>,
     cancel_flag: &Arc<AtomicBool>,
 ) {
     use chrono::DateTime;
     use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
+    use rayon::prelude::*;
+    use rayon::ThreadPoolBuilder;
     use std::path::Path;
 
     info!(
@@ -1881,6 +1894,20 @@ async fn handle_yolo_mode(
 
     // Always set the requested date range (overrides any previous range stored)
     cross_symbol_leaderboard.set_requested_range(start, end);
+
+    // Initialize append-only history logger for all tested configs
+    let session_id_for_history = session_id.clone().unwrap_or_else(|| {
+        trendlab_core::generate_session_id()
+    });
+    let history_path = Path::new("artifacts/yolo_history")
+        .join(format!("{}.jsonl", &session_id_for_history));
+    let mut history_logger = match HistoryLogger::new(&history_path, &session_id_for_history) {
+        Ok(logger) => Some(logger),
+        Err(e) => {
+            info!(error = %e, "Failed to create history logger, continuing without history");
+            None
+        }
+    };
 
     // Track the intended span once so we can drop short-history symbols later.
     let requested_span_days = (end - start).num_days().abs().max(1) as f64;
@@ -2063,6 +2090,22 @@ async fn handle_yolo_mode(
     // =============================================================================
 
     // Polars backtest config
+    // Keep Polars from oversubscribing when the outer loop is parallelized.
+    // Bound thread counts to available parallelism to avoid oversubscription.
+    let available_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+
+    let polars_threads = polars_max_threads
+        .or_else(|| {
+            std::env::var("POLARS_MAX_THREADS")
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+        })
+        .map(|t| t.max(1).min(available_threads))
+        .unwrap_or(1);
+    std::env::set_var("POLARS_MAX_THREADS", polars_threads.to_string());
+
     let polars_config =
         PolarsBacktestConfig::new(config.initial_cash, config.qty).with_cost_model(CostModel {
             fees_bps_per_side: config.cost_model.fees_bps_per_side,
@@ -2098,6 +2141,13 @@ async fn handle_yolo_mode(
             let _ = per_symbol_leaderboard.save(per_symbol_path);
             let _ = cross_symbol_leaderboard.save(cross_symbol_path);
             let total_configs = cross_symbol_leaderboard.total_configs_tested;
+            if let Some(ref logger) = history_logger {
+                info!(
+                    entries = logger.entries_logged(),
+                    path = %logger.path().display(),
+                    "YOLO history log written"
+                );
+            }
             let _ = update_tx.send(WorkerUpdate::YoloStopped {
                 cross_symbol_leaderboard,
                 per_symbol_leaderboard,
@@ -2139,234 +2189,309 @@ async fn handle_yolo_mode(
 
         // Generate jitter summary showing what parameters were jittered
         let jitter_summary = summarize_jittered_grid(base_grid, &jittered_grid);
+        let total_configs_this_iter = jittered_grid.total_configs() * loaded_symbols.len();
 
         let _ = update_tx.send(WorkerUpdate::YoloProgress {
             iteration,
-            phase,
+            phase: phase.clone(),
             completed_configs: 0,
-            total_configs: jittered_grid.total_configs() * loaded_symbols.len(),
-            jitter_summary,
+            total_configs: total_configs_this_iter,
+            jitter_summary: jitter_summary.clone(),
         });
+
+        #[derive(Default)]
+        struct PerConfigAccum {
+            per_symbol_metrics: HashMap<String, Metrics>,
+            per_symbol_equity: HashMap<String, Vec<f64>>,
+            per_symbol_dates: HashMap<String, Vec<DateTime<Utc>>>,
+        }
+
+        let configs_per_symbol = jittered_grid.total_configs();
+        let completed_configs = Arc::new(AtomicUsize::new(0));
+        let accum: Arc<Mutex<HashMap<(StrategyTypeId, StrategyConfigId), PerConfigAccum>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
+        let run_symbol_parallel = || {
+            loaded_symbols
+                .par_iter()
+                .enumerate()
+                .for_each(|(idx, symbol)| {
+                    if cancel_flag.load(Ordering::Relaxed) {
+                        return;
+                    }
+
+                    let df = match symbol_dfs.get(symbol) {
+                        Some(df) => df,
+                        None => return,
+                    };
+
+                    let mut local_results: Vec<(
+                        (StrategyTypeId, StrategyConfigId),
+                        (String, Metrics, Vec<f64>, Vec<DateTime<Utc>>),
+                    )> = Vec::new();
+
+                    for strat in jittered_grid.strategies.iter().filter(|s| s.enabled) {
+                        if cancel_flag.load(Ordering::Relaxed) {
+                            return;
+                        }
+
+                        let sweep_res =
+                            match run_strategy_sweep_polars_cached(df, strat, &polars_config) {
+                                Ok(r) => r,
+                                Err(_) => continue,
+                            };
+
+                        for cfg_result in sweep_res.config_results {
+                            let scid = extract_strategy_config_id(
+                                strat.strategy_type,
+                                &cfg_result.config_id,
+                            );
+                            let equity: Vec<f64> = cfg_result
+                                .backtest_result
+                                .equity
+                                .iter()
+                                .map(|e| e.equity)
+                                .collect();
+                            let dates: Vec<DateTime<Utc>> = cfg_result
+                                .backtest_result
+                                .equity
+                                .iter()
+                                .map(|e| e.ts)
+                                .collect();
+
+                            local_results.push((
+                                (strat.strategy_type, scid),
+                                (symbol.clone(), cfg_result.metrics, equity, dates),
+                            ));
+                        }
+                    }
+
+                    if local_results.is_empty() {
+                        return;
+                    }
+
+                    {
+                        let mut guard = accum.lock().unwrap();
+                        for (key, (sym, metrics, equity, dates)) in local_results {
+                            let entry = guard.entry(key).or_insert_with(PerConfigAccum::default);
+                            entry.per_symbol_metrics.insert(sym.clone(), metrics);
+                            entry.per_symbol_equity.insert(sym.clone(), equity);
+                            entry.per_symbol_dates.insert(sym, dates);
+                        }
+                    }
+
+                    let done = completed_configs
+                        .fetch_add(configs_per_symbol, Ordering::SeqCst)
+                        + configs_per_symbol;
+
+                    if idx % 3 == 0 {
+                        let _ = update_tx.send(WorkerUpdate::YoloProgress {
+                            iteration,
+                            phase: phase.clone(),
+                            completed_configs: done.min(total_configs_this_iter),
+                            total_configs: total_configs_this_iter,
+                            jitter_summary: jitter_summary.clone(),
+                        });
+                    }
+                });
+        };
+
+        if let Some(threads) = outer_threads {
+            let capped = threads.max(1).min(available_threads);
+            if let Ok(pool) = ThreadPoolBuilder::new().num_threads(capped).build() {
+                pool.install(run_symbol_parallel);
+            } else {
+                run_symbol_parallel();
+            }
+        } else {
+            run_symbol_parallel();
+        }
 
         let mut configs_tested_this_round = 0usize;
         let mut best_aggregate_this_round: Option<AggregatedConfigResult> = None;
         let mut best_per_symbol_this_round: Option<StrategyBestResult> = None;
 
-        // 2. CONFIG-FIRST iteration: for each strategy config...
-        for strategy_config in &jittered_grid.strategies {
-            if !strategy_config.enabled {
+        let accum_guard = accum.lock().unwrap();
+        for ((strategy_type, config_id), acc) in accum_guard.iter() {
+            let mut per_symbol_metrics = acc.per_symbol_metrics.clone();
+            let mut per_symbol_equity = acc.per_symbol_equity.clone();
+            let mut per_symbol_dates = acc.per_symbol_dates.clone();
+
+            // Drop symbols that don't have enough coverage for the requested window
+            if !per_symbol_dates.is_empty() {
+                let mut to_prune: Vec<String> = Vec::new();
+                for (sym, sym_dates) in &per_symbol_dates {
+                    if sym_dates.is_empty() {
+                        to_prune.push(sym.clone());
+                        continue;
+                    }
+                    let sym_start = sym_dates.first().map(|d| d.date_naive()).unwrap_or(start);
+                    let sym_end = sym_dates.last().map(|d| d.date_naive()).unwrap_or(sym_start);
+                    let sym_span_days = (sym_end - sym_start).num_days().abs().max(1) as f64;
+                    let coverage_ratio = sym_span_days / requested_span_days;
+                    let start_lag = (sym_start - start).num_days();
+
+                    if start_lag > YOLO_MAX_START_LAG_DAYS || coverage_ratio < YOLO_MIN_COVERAGE_RATIO
+                    {
+                        to_prune.push(sym.clone());
+                    }
+                }
+
+                for sym in to_prune {
+                    per_symbol_metrics.remove(&sym);
+                    per_symbol_equity.remove(&sym);
+                    per_symbol_dates.remove(&sym);
+                }
+            }
+
+            // Skip if no symbols had valid results
+            if per_symbol_metrics.is_empty() {
                 continue;
             }
-            if cancel_flag.load(Ordering::SeqCst) {
-                break;
+
+            configs_tested_this_round += per_symbol_metrics.len();
+
+            let best_single_symbol = per_symbol_metrics
+                .iter()
+                .max_by(|a, b| {
+                    a.1.sharpe
+                        .partial_cmp(&b.1.sharpe)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .and_then(|(sym, metrics)| {
+                    per_symbol_equity
+                        .get(sym)
+                        .and_then(|eq| {
+                            per_symbol_dates
+                                .get(sym)
+                                .map(|dates| (sym.clone(), metrics.clone(), eq.clone(), dates.clone()))
+                        })
+                });
+
+            // Aggregate metrics across all symbols for this config
+            let aggregate_metrics = AggregatedMetrics::from_per_symbol_with_tail_risk(
+                &per_symbol_metrics,
+                &per_symbol_equity,
+            );
+
+            // Create combined equity curve
+            let (combined_equity, combined_dates) =
+                combine_equity_curves_simple(&per_symbol_equity, &per_symbol_dates, 100_000.0);
+
+            // Build per-symbol sector mapping
+            let mut per_symbol_sectors: HashMap<String, String> = HashMap::new();
+            for sym in per_symbol_metrics.keys() {
+                if let Some(sector_id) = symbol_sector_ids.get(sym) {
+                    per_symbol_sectors.insert(sym.clone(), sector_id.clone());
+                }
             }
 
-            // For each config generated by this strategy's param grid...
-            // (A strategy param grid can produce multiple configs, e.g., Donchian with multiple lookbacks)
-            // We need to enumerate all configs from the grid
-            let config_ids = generate_config_ids_for_strategy(strategy_config);
-
-            for strategy_config_id in config_ids {
-                if cancel_flag.load(Ordering::SeqCst) {
-                    break;
-                }
-
-                // Collect results across ALL symbols for this single config
-                let mut per_symbol_metrics: HashMap<String, Metrics> = HashMap::new();
-                let mut per_symbol_equity: HashMap<String, Vec<f64>> = HashMap::new();
-                let mut per_symbol_dates: HashMap<String, Vec<DateTime<Utc>>> = HashMap::new();
-
-                for symbol in &loaded_symbols {
-                    let df = match symbol_dfs.get(symbol) {
-                        Some(df) => df,
-                        None => continue,
-                    };
-
-                    // Create a single-config grid for this specific config
-                    let single_config_grid = create_single_config_grid(
-                        strategy_config.strategy_type,
-                        &strategy_config_id,
-                    );
-
-                    // Run sweep (will just test the single config)
-                    let sweep_res = match run_strategy_sweep_polars_parallel(
-                        df,
-                        &single_config_grid,
-                        &polars_config,
-                    ) {
-                        Ok(r) => r,
-                        Err(_) => continue,
-                    };
-
-                    configs_tested_this_round += 1;
-
-                    // Get the single result
-                    if let Some(result) = sweep_res.config_results.first() {
-                        per_symbol_metrics.insert(symbol.clone(), result.metrics.clone());
-
-                        let equity: Vec<f64> = result
-                            .backtest_result
-                            .equity
-                            .iter()
-                            .map(|e| e.equity)
-                            .collect();
-                        let dates: Vec<DateTime<Utc>> =
-                            result.backtest_result.equity.iter().map(|e| e.ts).collect();
-
-                        per_symbol_equity.insert(symbol.clone(), equity);
-                        per_symbol_dates.insert(symbol.clone(), dates);
-
-                        // Also track per-symbol best
-                        let is_per_symbol_best = best_per_symbol_this_round
-                            .as_ref()
-                            .map(|b| result.metrics.sharpe > b.metrics.sharpe)
-                            .unwrap_or(true);
-
-                        if is_per_symbol_best {
-                            best_per_symbol_this_round = Some(StrategyBestResult {
-                                strategy_type: strategy_config.strategy_type,
-                                config_id: strategy_config_id.clone(),
-                                symbol: Some(symbol.clone()),
-                                metrics: result.metrics.clone(),
-                                equity_curve: result
-                                    .backtest_result
-                                    .equity
-                                    .iter()
-                                    .map(|e| e.equity)
-                                    .collect(),
-                                dates: result.backtest_result.equity.iter().map(|e| e.ts).collect(),
-                            });
-                        }
-                    }
-                }
-
-                // Drop symbols that don't have enough coverage for the requested window.
-                if !per_symbol_dates.is_empty() {
-                    let mut to_prune: Vec<String> = Vec::new();
-                    for (sym, dates) in &per_symbol_dates {
-                        if dates.is_empty() {
-                            to_prune.push(sym.clone());
-                            continue;
-                        }
-                        let sym_start = dates.first().map(|d| d.date_naive()).unwrap_or(start);
-                        let sym_end = dates.last().map(|d| d.date_naive()).unwrap_or(sym_start);
-                        let sym_span_days = (sym_end - sym_start).num_days().abs().max(1) as f64;
-                        let coverage_ratio = sym_span_days / requested_span_days;
-                        let start_lag = (sym_start - start).num_days();
-
-                        if start_lag > YOLO_MAX_START_LAG_DAYS
-                            || coverage_ratio < YOLO_MIN_COVERAGE_RATIO
-                        {
-                            to_prune.push(sym.clone());
-                        }
-                    }
-
-                    for sym in to_prune {
-                        per_symbol_metrics.remove(&sym);
-                        per_symbol_equity.remove(&sym);
-                        per_symbol_dates.remove(&sym);
-                    }
-                }
-
-                // Skip if no symbols had valid results
-                if per_symbol_metrics.is_empty() {
-                    continue;
-                }
-
-                // 3. Aggregate metrics across all symbols for this config
-                // Use tail-risk aware aggregation when equity curves are available
-                let aggregate_metrics = AggregatedMetrics::from_per_symbol_with_tail_risk(
-                    &per_symbol_metrics,
-                    &per_symbol_equity,
-                );
-
-                // Create combined equity curve using Phase 3A improvements:
-                // - Proper date intersection handling
-                // - Equal-weighted (default), with fallback to legacy for backward compat
-                let (combined_equity, combined_dates) =
-                    combine_equity_curves_simple(&per_symbol_equity, &per_symbol_dates, 100_000.0);
-
-                // Build per-symbol sector mapping for this config (only for symbols that actually produced metrics)
-                let mut per_symbol_sectors: HashMap<String, String> = HashMap::new();
-                for sym in per_symbol_metrics.keys() {
-                    if let Some(sector_id) = symbol_sector_ids.get(sym) {
-                        per_symbol_sectors.insert(sym.clone(), sector_id.clone());
-                    }
-                }
-
-                // 4. Walk-forward validation for promising configs
-                // Only run WF for configs with sufficient in-sample performance
-                let (wf_grade, mean_oos, std_oos, pct_profitable, degradation, oos_pval) =
-                    if aggregate_metrics.avg_sharpe >= WF_SHARPE_THRESHOLD {
-                        // Run simplified walk-forward using equity curve returns
-                        compute_equity_based_wf(&per_symbol_equity)
-                    } else {
-                        (None, None, None, None, None, None)
-                    };
-
-                // Confidence for YOLO cross-symbol results:
-                // Prefer sector-aware robustness when we have enough sector coverage; otherwise fall back
-                // to cross-sectional (per-symbol) bootstrap.
-                let confidence_grade = Some(
-                    trendlab_core::compute_cross_sector_confidence_from_metrics(
-                        &per_symbol_metrics,
-                        &per_symbol_sectors,
-                    )
-                    .unwrap_or_else(|| {
-                        trendlab_core::compute_cross_symbol_confidence_from_metrics(
-                            &per_symbol_metrics,
-                        )
-                    }),
-                );
-
-                let aggregated_result = AggregatedConfigResult {
-                    rank: 0, // Will be set by leaderboard
-                    strategy_type: strategy_config.strategy_type,
-                    config_id: strategy_config_id.clone(),
-                    symbols: per_symbol_metrics.keys().cloned().collect(),
-                    per_symbol_sectors,
-                    per_symbol_metrics,
-                    aggregate_metrics: aggregate_metrics.clone(),
-                    combined_equity_curve: combined_equity,
-                    dates: combined_dates,
-                    discovered_at: Utc::now(),
-                    iteration,
-                    session_id: session_id.clone(),
-                    confidence_grade,
-                    // Walk-forward fields (computed from equity-based WF)
-                    walk_forward_grade: wf_grade,
-                    mean_oos_sharpe: mean_oos,
-                    std_oos_sharpe: std_oos,
-                    sharpe_degradation: degradation,
-                    pct_profitable_folds: pct_profitable,
-                    oos_p_value: oos_pval,
-                    fdr_adjusted_p_value: None, // Set by FDR correction at end of iteration
+            // Walk-forward validation for promising configs
+            let (wf_grade, mean_oos, std_oos, pct_profitable, degradation, oos_pval) =
+                if aggregate_metrics.avg_sharpe >= WF_SHARPE_THRESHOLD {
+                    compute_equity_based_wf(&per_symbol_equity)
+                } else {
+                    (None, None, None, None, None, None)
                 };
 
-                // Track best aggregate this round
-                let is_new_best_aggregate = best_aggregate_this_round
+            // Compute confidence grade
+            let confidence_grade = Some(
+                trendlab_core::compute_cross_sector_confidence_from_metrics(
+                    &per_symbol_metrics,
+                    &per_symbol_sectors,
+                )
+                .unwrap_or_else(|| {
+                    trendlab_core::compute_cross_symbol_confidence_from_metrics(&per_symbol_metrics)
+                }),
+            );
+
+            let aggregated_result = AggregatedConfigResult {
+                rank: 0,
+                strategy_type: *strategy_type,
+                config_id: config_id.clone(),
+                symbols: per_symbol_metrics.keys().cloned().collect(),
+                per_symbol_sectors,
+                per_symbol_metrics,
+                aggregate_metrics,
+                combined_equity_curve: combined_equity,
+                dates: combined_dates,
+                discovered_at: Utc::now(),
+                iteration,
+                session_id: session_id.clone(),
+                confidence_grade,
+                walk_forward_grade: wf_grade,
+                mean_oos_sharpe: mean_oos,
+                std_oos_sharpe: std_oos,
+                sharpe_degradation: degradation,
+                pct_profitable_folds: pct_profitable,
+                oos_p_value: oos_pval,
+                fdr_adjusted_p_value: None,
+            };
+
+            // Track best aggregate this round
+            let is_new_best_aggregate = best_aggregate_this_round
+                .as_ref()
+                .map(|b| {
+                    aggregated_result.aggregate_metrics.avg_sharpe
+                        > b.aggregate_metrics.rank_value(CrossSymbolRankMetric::AvgSharpe)
+                })
+                .unwrap_or(true);
+
+            if is_new_best_aggregate {
+                best_aggregate_this_round = Some(aggregated_result.clone());
+            }
+
+            // Track best per-symbol this round (pick best single-symbol Sharpe)
+            if let Some((best_sym, best_metrics, best_equity, best_dates)) = best_single_symbol {
+                let is_new_best = best_per_symbol_this_round
                     .as_ref()
-                    .map(|b| {
-                        aggregate_metrics.avg_sharpe
-                            > b.aggregate_metrics
-                                .rank_value(CrossSymbolRankMetric::AvgSharpe)
-                    })
+                    .map(|b| best_metrics.sharpe > b.metrics.sharpe)
                     .unwrap_or(true);
 
-                if is_new_best_aggregate {
-                    best_aggregate_this_round = Some(aggregated_result.clone());
+                if is_new_best {
+                    best_per_symbol_this_round = Some(StrategyBestResult {
+                        strategy_type: aggregated_result.strategy_type,
+                        config_id: aggregated_result.config_id.clone(),
+                        symbol: Some(best_sym.clone()),
+                        metrics: best_metrics,
+                        equity_curve: best_equity,
+                        dates: best_dates,
+                    });
                 }
-
-                // Try to insert into cross-symbol leaderboard (best per strategy)
-                yolo_try_insert_best_per_strategy(&mut cross_symbol_leaderboard, aggregated_result);
             }
+
+            // Log to append-only history (logs ALL configs, not just winners)
+            if let Some(ref mut logger) = history_logger {
+                if let Err(e) = logger.log(&aggregated_result, iteration) {
+                    trace!(error = %e, "Failed to write history entry");
+                }
+            }
+
+            // Try to insert into cross-symbol leaderboard
+            yolo_try_insert_best_per_strategy(&mut cross_symbol_leaderboard, aggregated_result);
         }
+
+        // Send a final per-iteration progress update
+        let _ = update_tx.send(WorkerUpdate::YoloProgress {
+            iteration,
+            phase: phase.clone(),
+            completed_configs: configs_tested_this_round.min(total_configs_this_iter),
+            total_configs: total_configs_this_iter,
+            jitter_summary: jitter_summary.clone(),
+        });
 
         // Check if we were cancelled during the sweep
         if cancel_flag.load(Ordering::SeqCst) {
             let _ = per_symbol_leaderboard.save(per_symbol_path);
             let _ = cross_symbol_leaderboard.save(cross_symbol_path);
             let total_configs = cross_symbol_leaderboard.total_configs_tested;
+            if let Some(ref logger) = history_logger {
+                info!(
+                    entries = logger.entries_logged(),
+                    path = %logger.path().display(),
+                    "YOLO history log written"
+                );
+            }
             let _ = update_tx.send(WorkerUpdate::YoloStopped {
                 cross_symbol_leaderboard,
                 per_symbol_leaderboard,
@@ -2464,58 +2589,49 @@ async fn handle_yolo_mode(
     }
 }
 
-/// YOLO-specific insertion: keep only the best aggregated config per strategy type.
+/// YOLO-specific insertion: keep top N configs per strategy type.
 ///
-/// This makes the leaderboard answer "which strategies are attractive?" rather than
-/// "which configs are attractive?" (which can be dominated by many configs of one strategy).
-fn yolo_try_insert_best_per_strategy(
+/// This makes the leaderboard answer "what are the best configs for each strategy?"
+/// while limiting each strategy to `max_per_strategy` entries to prevent one strategy
+/// from dominating the entire leaderboard.
+fn yolo_try_insert_top_n_per_strategy(
     lb: &mut CrossSymbolLeaderboard,
     entry: AggregatedConfigResult,
 ) -> bool {
-    let rank_by = lb.rank_by;
-    let new_value = entry.aggregate_metrics.rank_value(rank_by);
-
-    // If strategy already present, replace only if better.
-    if let Some(pos) = lb
-        .entries
-        .iter()
-        .position(|e| e.strategy_type == entry.strategy_type)
-    {
-        let existing_value = lb.entries[pos].aggregate_metrics.rank_value(rank_by);
-        if new_value > existing_value {
-            lb.entries[pos] = entry;
-            yolo_sort_and_rerank(lb);
-            lb.last_updated = Utc::now();
-            return true;
-        }
-        return false;
-    }
-
-    // New strategy
-    if lb.entries.len() < lb.max_entries {
-        lb.entries.push(entry);
-        yolo_sort_and_rerank(lb);
-        lb.last_updated = Utc::now();
-        return true;
-    }
-
-    // Full - check if better than worst and replace worst.
-    if let Some(worst) = lb.entries.last() {
-        let worst_value = worst.aggregate_metrics.rank_value(rank_by);
-        if new_value > worst_value {
-            lb.entries.pop();
-            lb.entries.push(entry);
-            yolo_sort_and_rerank(lb);
-            lb.last_updated = Utc::now();
-            return true;
-        }
-    }
-
-    false
+    // Delegate to the leaderboard's built-in method
+    lb.try_insert_top_n_per_strategy(entry)
 }
 
-fn yolo_sort_and_rerank(lb: &mut CrossSymbolLeaderboard) {
+fn yolo_compact_to_top_n_per_strategy(lb: &mut CrossSymbolLeaderboard) {
+    use std::collections::HashMap;
     let rank_by = lb.rank_by;
+    let max_per = lb.max_per_strategy;
+
+    // Group entries by strategy type
+    let mut by_strategy: HashMap<trendlab_core::StrategyTypeId, Vec<AggregatedConfigResult>> =
+        HashMap::new();
+
+    for entry in lb.entries.drain(..) {
+        by_strategy
+            .entry(entry.strategy_type)
+            .or_default()
+            .push(entry);
+    }
+
+    // Keep top N per strategy
+    for entries in by_strategy.values_mut() {
+        entries.sort_by(|a, b| {
+            let va = a.aggregate_metrics.rank_value(rank_by);
+            let vb = b.aggregate_metrics.rank_value(rank_by);
+            vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        entries.truncate(max_per);
+    }
+
+    // Flatten back into entries
+    lb.entries = by_strategy.into_values().flatten().collect();
+
+    // Sort globally and rerank
     lb.entries.sort_by(|a, b| {
         let va = a.aggregate_metrics.rank_value(rank_by);
         let vb = b.aggregate_metrics.rank_value(rank_by);
@@ -2526,32 +2642,20 @@ fn yolo_sort_and_rerank(lb: &mut CrossSymbolLeaderboard) {
     }
 }
 
+// Legacy function kept for backwards compatibility - now delegates to top-N
 fn yolo_compact_to_best_per_strategy(lb: &mut CrossSymbolLeaderboard) {
-    use std::collections::HashMap;
-    let rank_by = lb.rank_by;
-    let mut best: HashMap<trendlab_core::StrategyTypeId, AggregatedConfigResult> = HashMap::new();
-
-    for entry in lb.entries.drain(..) {
-        best.entry(entry.strategy_type)
-            .and_modify(|cur| {
-                let cur_v = cur.aggregate_metrics.rank_value(rank_by);
-                let new_v = entry.aggregate_metrics.rank_value(rank_by);
-                if new_v > cur_v {
-                    *cur = entry.clone();
-                }
-            })
-            .or_insert(entry);
-    }
-
-    lb.entries = best.into_values().collect();
-    if lb.entries.len() > lb.max_entries {
-        // If max_entries is smaller than the number of strategies (shouldn't happen after resize),
-        // truncate after sorting.
-        yolo_sort_and_rerank(lb);
-        lb.entries.truncate(lb.max_entries);
-    }
-    yolo_sort_and_rerank(lb);
+    // Use top-N compaction instead
+    yolo_compact_to_top_n_per_strategy(lb);
 }
+
+// Legacy compatibility alias
+fn yolo_try_insert_best_per_strategy(
+    lb: &mut CrossSymbolLeaderboard,
+    entry: AggregatedConfigResult,
+) -> bool {
+    yolo_try_insert_top_n_per_strategy(lb, entry)
+}
+
 
 /// Generate all config IDs for a strategy's parameter grid.
 fn generate_config_ids_for_strategy(strategy_config: &StrategyGridConfig) -> Vec<StrategyConfigId> {

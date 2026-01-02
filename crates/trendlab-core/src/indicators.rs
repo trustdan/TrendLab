@@ -141,7 +141,7 @@ pub fn ema_close(bars: &[Bar], window: usize) -> Vec<Option<f64>> {
 }
 
 /// Moving average type for strategy configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum MAType {
     SMA,
     EMA,
@@ -1049,7 +1049,7 @@ pub fn parabolic_sar(
 }
 
 /// Opening period type for Opening Range Breakout strategies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum OpeningPeriod {
     /// Weekly: Range is computed from the first N bars of each week.
     Weekly,
@@ -1737,7 +1737,7 @@ pub struct MACDValue {
 }
 
 /// Entry mode for MACD strategy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Default)]
 pub enum MACDEntryMode {
     /// Entry when MACD crosses above signal line.
     #[default]

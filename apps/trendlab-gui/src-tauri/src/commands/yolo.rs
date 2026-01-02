@@ -245,6 +245,7 @@ pub fn get_leaderboard(state: State<'_, AppState>) -> LeaderboardsResponse {
 pub fn start_yolo_mode(
     state: State<'_, AppState>,
     randomization_pct: f64,
+    parallel: Option<YoloParallelConfig>,
 ) -> Result<StartYoloResponse, GuiError> {
     // Check if already running
     if state.is_yolo_running() {
@@ -312,6 +313,8 @@ pub fn start_yolo_mode(
             existing_per_symbol_leaderboard: per_symbol_leaderboard,
             existing_cross_symbol_leaderboard: cross_symbol_leaderboard,
             session_id: Some(format!("yolo-{}", chrono::Utc::now().timestamp_millis())),
+            polars_max_threads: parallel.as_ref().and_then(|p| p.polars_max_threads),
+            outer_threads: parallel.as_ref().and_then(|p| p.outer_threads),
         })
         .map_err(|e| GuiError::Internal(format!("Failed to start YOLO mode: {}", e)))?;
 
@@ -319,6 +322,16 @@ pub fn start_yolo_mode(
         total_symbols,
         total_strategies,
     })
+}
+
+/// Optional parallelism tuning for YOLO sweeps.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct YoloParallelConfig {
+    /// Limits Polars internal threads per backtest. Leave None to auto/default.
+    pub polars_max_threads: Option<usize>,
+    /// Sets the outer Rayon pool threads for symbol-level parallelism. None = auto.
+    pub outer_threads: Option<usize>,
 }
 
 /// Stop YOLO mode.
