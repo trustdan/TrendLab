@@ -2655,7 +2655,7 @@ async fn handle_yolo_mode(
         let _ = cross_symbol_leaderboard.save(cross_symbol_path);
 
         // 6b. Save exploration state periodically (every 5 iterations to reduce I/O)
-        if iteration % 5 == 0 {
+        if iteration.is_multiple_of(5) {
             if let Err(e) = exploration_state.save(exploration_path) {
                 trace!(error = %e, "Failed to save exploration state (non-fatal)");
             } else {
