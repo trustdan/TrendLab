@@ -202,7 +202,8 @@ impl Universe {
     pub fn default_universe() -> Self {
         Self {
             name: "US Equities".to_string(),
-            description: "Default curated list of US equities by sector (matches watchlist.toml)".to_string(),
+            description: "Default curated list of US equities by sector (matches watchlist.toml)"
+                .to_string(),
             sectors: vec![
                 // Individual Stocks by Sector
                 Sector::new(
@@ -243,10 +244,10 @@ impl Universe {
                     "consumer_defensive",
                     "Consumer Defensive",
                     vec![
-                        "WMT", "COST", "PG", "KO", "PM", "PEP", "MO", "MNST", "MDLZ", "CL",
-                        "TGT", "KR", "EL", "KDP", "HSY", "SYY", "KMB", "KVUE", "DG", "KHC",
-                        "ADM", "GIS", "DLTR", "STZ", "CHD", "TSN", "MKC", "BG", "HRL", "CLX",
-                        "BF-B", "SJM", "TAP", "CPB", "CAG",
+                        "WMT", "COST", "PG", "KO", "PM", "PEP", "MO", "MNST", "MDLZ", "CL", "TGT",
+                        "KR", "EL", "KDP", "HSY", "SYY", "KMB", "KVUE", "DG", "KHC", "ADM", "GIS",
+                        "DLTR", "STZ", "CHD", "TSN", "MKC", "BG", "HRL", "CLX", "BF-B", "SJM",
+                        "TAP", "CPB", "CAG",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -268,10 +269,10 @@ impl Universe {
                     "financial",
                     "Financial",
                     vec![
-                        "BRK-B", "JPM", "V", "MA", "BAC", "WFC", "MS", "GS", "AXP", "C",
-                        "BX", "SCHW", "SPGI", "COF", "PGR", "KKR", "HOOD", "ICE", "MMC", "APO",
-                        "USB", "PNC", "BK", "AJG", "TFC", "COIN", "AFL", "NDAQ", "PYPL", "ARES",
-                        "MET", "AIG", "PRU", "STT", "ACGL", "FITB", "SYF", "IBKR", "HBAN", "BRO",
+                        "BRK-B", "JPM", "V", "MA", "BAC", "WFC", "MS", "GS", "AXP", "C", "BX",
+                        "SCHW", "SPGI", "COF", "PGR", "KKR", "HOOD", "ICE", "MMC", "APO", "USB",
+                        "PNC", "BK", "AJG", "TFC", "COIN", "AFL", "NDAQ", "PYPL", "ARES", "MET",
+                        "AIG", "PRU", "STT", "ACGL", "FITB", "SYF", "IBKR", "HBAN", "BRO",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -294,12 +295,12 @@ impl Universe {
                     "industrials",
                     "Industrials",
                     vec![
-                        "GE", "RTX", "BA", "ETN", "MMM", "CAT", "HON", "UNP", "DE", "LMT",
-                        "UPS", "NOC", "GD", "WM", "FDX", "EMR", "GEV", "HWM", "JCI", "ITW",
-                        "CSX", "PCAR", "AME", "FAST", "FER", "DAL", "CARR", "CPRT", "UAL", "OTIS",
-                        "ODFL", "IR", "VRSK", "VLTO", "LUV", "BE", "MAS", "KTOS", "JOBY", "BLDR",
-                        "GTLS", "AOS", "FLR", "CWST", "PL", "MIR", "ACHR", "LGN", "SMR", "FLY",
-                        "EOSE", "LUNR", "PLUG", "DNOW",
+                        "GE", "RTX", "BA", "ETN", "MMM", "CAT", "HON", "UNP", "DE", "LMT", "UPS",
+                        "NOC", "GD", "WM", "FDX", "EMR", "GEV", "HWM", "JCI", "ITW", "CSX", "PCAR",
+                        "AME", "FAST", "FER", "DAL", "CARR", "CPRT", "UAL", "OTIS", "ODFL", "IR",
+                        "VRSK", "VLTO", "LUV", "BE", "MAS", "KTOS", "JOBY", "BLDR", "GTLS", "AOS",
+                        "FLR", "CWST", "PL", "MIR", "ACHR", "LGN", "SMR", "FLY", "EOSE", "LUNR",
+                        "PLUG", "DNOW",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -321,16 +322,17 @@ impl Universe {
                     "technology",
                     "Technology",
                     vec![
-                        "NVDA", "AAPL", "PLTR", "CSCO", "MSFT", "AMD", "AVGO", "CRM", "ORCL", "ADBE",
-                        "INTC", "QCOM", "TXN", "NOW", "MU", "AMAT", "IBM", "LRCX", "SHOP", "UBER",
-                        "ANET", "APH", "ACN", "ADI", "PANW", "CRWD", "ARM", "ADP", "SNPS", "DELL",
-                        "GLW", "MRVL", "WDC", "FTNT", "STX", "WDAY", "NXPI", "DDOG", "MSTR", "TEAM",
-                        "CTSH", "PAYX", "XYZ", "FISV", "SNDK", "MCHP", "FIS", "HPE", "TER", "FSLR",
-                        "CRDO", "ON", "NTAP", "HPQ", "GPN", "CDW", "SMCI", "FTV", "Q", "GEN",
-                        "IONQ", "AKAM", "DAY", "SWKS", "QBTS", "RGTI", "CWAN", "APLD", "ZETA", "CORZ",
-                        "RUN", "DOCN", "BOX", "SOUN", "NAVN", "BULL", "VIAV", "STNE", "COMM", "BRZE",
-                        "VRNS", "FRSH", "ASAN", "PAGS", "AVPT", "RELY", "TENB", "BTDR", "AAOI", "BBAI",
-                        "QUBT", "MQ", "SONO", "PAYO", "POWI", "AI", "CXM", "ADEA", "SEMR",
+                        "NVDA", "AAPL", "PLTR", "CSCO", "MSFT", "AMD", "AVGO", "CRM", "ORCL",
+                        "ADBE", "INTC", "QCOM", "TXN", "NOW", "MU", "AMAT", "IBM", "LRCX", "SHOP",
+                        "UBER", "ANET", "APH", "ACN", "ADI", "PANW", "CRWD", "ARM", "ADP", "SNPS",
+                        "DELL", "GLW", "MRVL", "WDC", "FTNT", "STX", "WDAY", "NXPI", "DDOG",
+                        "MSTR", "TEAM", "CTSH", "PAYX", "XYZ", "FISV", "SNDK", "MCHP", "FIS",
+                        "HPE", "TER", "FSLR", "CRDO", "ON", "NTAP", "HPQ", "GPN", "CDW", "SMCI",
+                        "FTV", "Q", "GEN", "IONQ", "AKAM", "DAY", "SWKS", "QBTS", "RGTI", "CWAN",
+                        "APLD", "ZETA", "CORZ", "RUN", "DOCN", "BOX", "SOUN", "NAVN", "BULL",
+                        "VIAV", "STNE", "COMM", "BRZE", "VRNS", "FRSH", "ASAN", "PAGS", "AVPT",
+                        "RELY", "TENB", "BTDR", "AAOI", "BBAI", "QUBT", "MQ", "SONO", "PAYO",
+                        "POWI", "AI", "CXM", "ADEA", "SEMR",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -340,10 +342,10 @@ impl Universe {
                     "utilities",
                     "Utilities",
                     vec![
-                        "EIX", "NEE", "DUK", "AEP", "SO", "D", "SRE", "XEL", "ED", "EXC",
-                        "WEC", "CEG", "PEG", "AWK", "ES", "VST", "ETR", "PCG", "NRG", "DTE",
-                        "PPL", "FE", "CNP", "CMS", "NI", "EVRG", "LNT", "OKLO", "PNW", "AES",
-                        "FLNC", "CTRI", "HE", "NXXT", "SAFX",
+                        "EIX", "NEE", "DUK", "AEP", "SO", "D", "SRE", "XEL", "ED", "EXC", "WEC",
+                        "CEG", "PEG", "AWK", "ES", "VST", "ETR", "PCG", "NRG", "DTE", "PPL", "FE",
+                        "CNP", "CMS", "NI", "EVRG", "LNT", "OKLO", "PNW", "AES", "FLNC", "CTRI",
+                        "HE", "NXXT", "SAFX",
                     ]
                     .into_iter()
                     .map(String::from)

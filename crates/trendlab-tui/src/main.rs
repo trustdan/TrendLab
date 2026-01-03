@@ -1338,7 +1338,12 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             index,
             total,
         } => {
-            app.status_message = format!("YOLO: Refreshing {} ({}/{} need data)...", symbol, index + 1, total);
+            app.status_message = format!(
+                "YOLO: Refreshing {} ({}/{} need data)...",
+                symbol,
+                index + 1,
+                total
+            );
         }
 
         WorkerUpdate::YoloDataRefreshComplete {

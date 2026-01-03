@@ -2021,7 +2021,11 @@ impl App {
         selected.dedup();
 
         // Debug: Log universe size and verify count
-        let universe_total: usize = self.data.universe.sectors.iter()
+        let universe_total: usize = self
+            .data
+            .universe
+            .sectors
+            .iter()
             .map(|s| s.tickers.len())
             .sum();
         tracing::info!(
@@ -2030,7 +2034,7 @@ impl App {
             selected_after_dedup = selected.len(),
             "YOLO: Collected tickers from universe"
         );
-        
+
         // Warn if count doesn't match expected
         if selected.len() < 400 {
             tracing::warn!(

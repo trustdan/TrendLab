@@ -55,8 +55,8 @@ async fn main() -> anyhow::Result<()> {
     let project_root = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(|p| p.to_path_buf())) // target/release
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))     // target
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))     // project root
+        .and_then(|p| p.parent().map(|p| p.to_path_buf())) // target
+        .and_then(|p| p.parent().map(|p| p.to_path_buf())) // project root
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
     let log_dir = project_root.join("data").join("logs");

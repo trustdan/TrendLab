@@ -1886,7 +1886,7 @@ async fn handle_yolo_mode(
         randomization_pct = %randomization_pct,
         "Starting YOLO mode"
     );
-    
+
     // Debug: Log first few symbols to verify they're correct
     if !symbols.is_empty() {
         let sample: Vec<String> = symbols.iter().take(10).cloned().collect();

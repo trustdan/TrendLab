@@ -496,7 +496,9 @@ pub async fn execute_scan(
     // AND require at least one "slow" strategy (supertrend or 52wk_high) to confirm
     let slow_strategies = ["supertrend", "52wk_high"];
     let has_slow_confirmation = |signals: &[TickerSignal]| -> bool {
-        signals.iter().any(|s| slow_strategies.contains(&s.strategy.as_str()))
+        signals
+            .iter()
+            .any(|s| slow_strategies.contains(&s.strategy.as_str()))
     };
 
     let mut confirmed_signals: Vec<TickerSignal> = Vec::new();
