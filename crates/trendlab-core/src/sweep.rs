@@ -4817,21 +4817,20 @@ pub struct MultiStrategyGrid {
 impl MultiStrategyGrid {
     /// Create with all strategies using default parameters.
     ///
-    /// Note: The following strategies are disabled by default due to poor
-    /// backtesting performance (Sharpe < 0.15): TurtleS1, TurtleS2,
-    /// DmiAdx, BollingerSqueeze.
+    /// Note: All strategies are now enabled for comprehensive exploration.
+    /// Previously disabled strategies have been re-enabled.
     pub fn all_strategies_default() -> Self {
         Self {
             strategies: vec![
                 StrategyGridConfig::donchian_default(),
-                StrategyGridConfig::turtle_s1().disabled(), // Poor performance
-                StrategyGridConfig::turtle_s2().disabled(), // Poor performance
+                StrategyGridConfig::turtle_s1(), // Re-enabled for exploration
+                StrategyGridConfig::turtle_s2(), // Re-enabled for exploration
                 StrategyGridConfig::ma_crossover_default(),
                 StrategyGridConfig::tsmom_default(),
                 // Phase 2
-                StrategyGridConfig::dmi_adx_default().disabled(), // Poor performance
+                StrategyGridConfig::dmi_adx_default(), // Re-enabled for exploration
                 StrategyGridConfig::aroon_default(),
-                StrategyGridConfig::bollinger_squeeze_default().disabled(), // Poor performance
+                StrategyGridConfig::bollinger_squeeze_default(), // Re-enabled for exploration
                 // Phase 4
                 StrategyGridConfig::parabolic_sar_default(),
                 StrategyGridConfig::orb_default(),
@@ -4877,20 +4876,21 @@ impl MultiStrategyGrid {
     /// This is the recommended way to create a multi-strategy grid with
     /// research-backed parameter ranges.
     ///
-    /// Note: The following strategies are disabled by default due to poor
-    /// backtesting performance (Sharpe < 0.15): TurtleS1, TurtleS2, Keltner,
-    /// DmiAdx, BollingerSqueeze, DarvasBox.
+    /// Note: All strategies are now enabled for comprehensive exploration.
+    /// Previously disabled strategies (TurtleS1, TurtleS2, Keltner, DmiAdx,
+    /// BollingerSqueeze, DarvasBox) have been re-enabled to test with
+    /// improved randomness/exploration.
     pub fn with_depth(depth: SweepDepth) -> Self {
         Self {
             strategies: vec![
                 // Original strategies
                 StrategyGridConfig::donchian_with_depth(depth),
-                StrategyGridConfig::turtle_s1().disabled(), // Poor performance
-                StrategyGridConfig::turtle_s2().disabled(), // Poor performance
+                StrategyGridConfig::turtle_s1(), // Re-enabled for exploration
+                StrategyGridConfig::turtle_s2(), // Re-enabled for exploration
                 StrategyGridConfig::ma_crossover_with_depth(depth),
                 StrategyGridConfig::tsmom_with_depth(depth),
                 // Phase 1: ATR-Based Channels
-                StrategyGridConfig::keltner_with_depth(depth).disabled(), // Poor performance
+                StrategyGridConfig::keltner_with_depth(depth), // Re-enabled for exploration
                 StrategyGridConfig::starc_with_depth(depth),
                 StrategyGridConfig::supertrend_with_depth(depth),
                 StrategyGridConfig::supertrend_volume_with_depth(depth),
@@ -4898,14 +4898,14 @@ impl MultiStrategyGrid {
                 StrategyGridConfig::supertrend_asymmetric_with_depth(depth),
                 StrategyGridConfig::supertrend_cooldown_with_depth(depth),
                 // Phase 2: Momentum/Direction
-                StrategyGridConfig::dmi_adx_with_depth(depth).disabled(), // Poor performance
+                StrategyGridConfig::dmi_adx_with_depth(depth), // Re-enabled for exploration
                 StrategyGridConfig::aroon_with_depth(depth),
-                StrategyGridConfig::bollinger_squeeze_with_depth(depth).disabled(), // Poor performance
+                StrategyGridConfig::bollinger_squeeze_with_depth(depth), // Re-enabled for exploration
                 // Phase 3: Price Structure
                 StrategyGridConfig::fifty_two_week_high_with_depth(depth),
                 StrategyGridConfig::fifty_two_week_high_momentum_with_depth(depth),
                 StrategyGridConfig::fifty_two_week_high_trailing_with_depth(depth),
-                StrategyGridConfig::darvas_box_with_depth(depth).disabled(), // Poor performance
+                StrategyGridConfig::darvas_box_with_depth(depth), // Re-enabled for exploration
                 StrategyGridConfig::larry_williams_with_depth(depth),
                 StrategyGridConfig::heikin_ashi_with_depth(depth),
                 // Phase 4: Complex Stateful

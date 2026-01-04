@@ -43,6 +43,8 @@ pub struct YoloState {
     pub polars_max_threads: Option<usize>,
     /// Optional cap for outer Rayon pool (symbol-level parallelism)
     pub outer_threads: Option<usize>,
+    /// Number of warmup iterations before winner exploitation begins
+    pub warmup_iterations: u32,
     /// Total configs tested this session
     pub session_configs_tested: u64,
     /// Total configs tested all-time (loaded from all_time_leaderboard)
@@ -74,6 +76,8 @@ pub struct YoloConfigState {
     pub polars_max_threads: Option<usize>,
     /// Optional cap for outer Rayon pool (symbol-level parallelism)
     pub outer_threads: Option<usize>,
+    /// Number of warmup iterations before winner exploitation begins
+    pub warmup_iterations: u32,
 }
 
 /// Fields in the YOLO config modal
@@ -86,6 +90,7 @@ pub enum YoloConfigField {
     SweepDepth,
     PolarsThreads,
     OuterThreads,
+    WarmupIterations,
 }
 
 impl Default for YoloConfigState {
@@ -100,6 +105,7 @@ impl Default for YoloConfigState {
             sweep_depth: SweepDepth::Quick,
             polars_max_threads: None,
             outer_threads: None,
+            warmup_iterations: 50,
         }
     }
 }
@@ -113,19 +119,21 @@ impl YoloConfigField {
             Self::WfSharpeThreshold => Self::SweepDepth,
             Self::SweepDepth => Self::PolarsThreads,
             Self::PolarsThreads => Self::OuterThreads,
-            Self::OuterThreads => Self::StartDate,
+            Self::OuterThreads => Self::WarmupIterations,
+            Self::WarmupIterations => Self::StartDate,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Self::StartDate => Self::OuterThreads,
+            Self::StartDate => Self::WarmupIterations,
             Self::EndDate => Self::StartDate,
             Self::Randomization => Self::EndDate,
             Self::WfSharpeThreshold => Self::Randomization,
             Self::SweepDepth => Self::WfSharpeThreshold,
             Self::PolarsThreads => Self::SweepDepth,
             Self::OuterThreads => Self::PolarsThreads,
+            Self::WarmupIterations => Self::OuterThreads,
         }
     }
 }
@@ -154,6 +162,7 @@ impl Default for YoloState {
             wf_sharpe_threshold: 0.25,
             polars_max_threads: None,
             outer_threads: None,
+            warmup_iterations: 50,
             session_configs_tested: 0,
             total_configs_tested: 0,
             started_at: None,

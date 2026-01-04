@@ -43,6 +43,9 @@ pub struct DataState {
     pub selected_sector_index: usize,
     pub selected_ticker_index: usize,
     pub selected_tickers: HashSet<String>,
+    // Scroll offsets for viewport management
+    pub sector_scroll_offset: usize,
+    pub ticker_scroll_offset: usize,
 }
 
 impl Default for DataState {
@@ -63,6 +66,8 @@ impl Default for DataState {
             selected_sector_index: 0,
             selected_ticker_index: 0,
             selected_tickers: HashSet::new(),
+            sector_scroll_offset: 0,
+            ticker_scroll_offset: 0,
         }
     }
 }
@@ -187,5 +192,41 @@ impl DataState {
             }
         }
         // Otherwise keep the default universe
+    }
+
+    /// Ensure the sector selection is visible within the viewport.
+    /// Returns the adjusted scroll offset.
+    pub fn ensure_sector_visible(&mut self, visible_height: usize) {
+        if visible_height == 0 {
+            return;
+        }
+        // If selection is above viewport, scroll up
+        if self.selected_sector_index < self.sector_scroll_offset {
+            self.sector_scroll_offset = self.selected_sector_index;
+        }
+        // If selection is below viewport, scroll down
+        else if self.selected_sector_index >= self.sector_scroll_offset + visible_height {
+            self.sector_scroll_offset = self.selected_sector_index.saturating_sub(visible_height - 1);
+        }
+    }
+
+    /// Ensure the ticker selection is visible within the viewport.
+    pub fn ensure_ticker_visible(&mut self, visible_height: usize) {
+        if visible_height == 0 {
+            return;
+        }
+        // If selection is above viewport, scroll up
+        if self.selected_ticker_index < self.ticker_scroll_offset {
+            self.ticker_scroll_offset = self.selected_ticker_index;
+        }
+        // If selection is below viewport, scroll down
+        else if self.selected_ticker_index >= self.ticker_scroll_offset + visible_height {
+            self.ticker_scroll_offset = self.selected_ticker_index.saturating_sub(visible_height - 1);
+        }
+    }
+
+    /// Reset ticker scroll when switching sectors.
+    pub fn reset_ticker_scroll(&mut self) {
+        self.ticker_scroll_offset = 0;
     }
 }

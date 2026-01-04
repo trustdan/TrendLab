@@ -19,11 +19,12 @@ use trendlab_core::{
     combine_equity_curves_simple, compute_analysis, create_artifact_from_config, dataframe_to_bars,
     export_artifact_to_file, get_parquet_date_range, normalize_config, one_sided_mean_pvalue,
     parse_yahoo_chart_json, run_donchian_sweep_polars, run_strategy_sweep_polars_cached,
-    run_strategy_sweep_polars_parallel, scan_symbol_parquet_lazy, select_exploration_mode,
-    write_partitioned_parquet, AggregatedConfigResult, AggregatedMetrics,
-    AggregatedPortfolioResult, AnalysisConfig, BacktestConfig, BacktestResult, Bar, CostModel,
-    CrossSymbolLeaderboard, CrossSymbolRankMetric, DataQualityChecker, DataQualityReport,
-    DonchianBacktestConfig, ExplorationMode, ExplorationState, HistoryLogger, IntoLazy,
+    run_strategy_sweep_polars_parallel, scan_symbol_parquet_lazy,
+    select_exploration_mode_with_config, write_partitioned_parquet, AggregatedConfigResult,
+    AggregatedMetrics, AggregatedPortfolioResult, AnalysisConfig, BacktestConfig, BacktestResult,
+    Bar, CostModel, CrossSymbolLeaderboard, CrossSymbolRankMetric, DataQualityChecker,
+    DataQualityReport, DonchianBacktestConfig, ExplorationConfig, ExplorationMode,
+    ExplorationState, HistoryLogger, IntoLazy,
     Leaderboard, LeaderboardEntry, Metrics, MultiStrategyGrid, MultiStrategySweepResult,
     MultiSweepResult, OpeningPeriod, PolarsBacktestConfig, RankMetric, StatisticalAnalysis,
     StrategyBestResult, StrategyConfigId, StrategyGridConfig, StrategyParams, StrategyTypeId,
@@ -137,16 +138,18 @@ pub enum WorkerCommand {
         randomization_pct: f64,
         /// Walk-forward Sharpe threshold (min avg Sharpe to trigger WF validation)
         wf_sharpe_threshold: f64,
-        /// Optional: existing per-symbol leaderboard to continue from
-        existing_per_symbol_leaderboard: Option<Leaderboard>,
-        /// Optional: existing cross-symbol leaderboard to continue from
-        existing_cross_symbol_leaderboard: Option<CrossSymbolLeaderboard>,
+        /// Optional: existing per-symbol leaderboard to continue from (boxed to reduce enum size)
+        existing_per_symbol_leaderboard: Box<Option<Leaderboard>>,
+        /// Optional: existing cross-symbol leaderboard to continue from (boxed to reduce enum size)
+        existing_cross_symbol_leaderboard: Box<Option<CrossSymbolLeaderboard>>,
         /// Session identifier for tracking results from this YOLO run
         session_id: Option<String>,
         /// Optional: cap Polars threads (env var POLARS_MAX_THREADS)
         polars_max_threads: Option<usize>,
         /// Optional: outer Rayon pool threads for symbol-level parallelism
         outer_threads: Option<usize>,
+        /// Number of warmup iterations before winner exploitation begins
+        warmup_iterations: u32,
     },
 }
 
@@ -523,6 +526,7 @@ fn worker_loop(
                 session_id,
                 polars_max_threads,
                 outer_threads,
+                warmup_iterations,
             } => {
                 rt.block_on(handle_yolo_mode(
                     &symbols,
@@ -533,11 +537,12 @@ fn worker_loop(
                     backtest_config,
                     randomization_pct,
                     wf_sharpe_threshold,
-                    existing_per_symbol_leaderboard,
-                    existing_cross_symbol_leaderboard,
+                    *existing_per_symbol_leaderboard,
+                    *existing_cross_symbol_leaderboard,
                     session_id,
                     polars_max_threads,
                     outer_threads,
+                    warmup_iterations,
                     &update_tx,
                     &cancel_flag,
                 ));
@@ -1869,6 +1874,7 @@ async fn handle_yolo_mode(
     session_id: Option<String>,
     polars_max_threads: Option<usize>,
     outer_threads: Option<usize>,
+    warmup_iterations: u32,
     update_tx: &Sender<WorkerUpdate>,
     cancel_flag: &Arc<AtomicBool>,
 ) {
@@ -1923,6 +1929,14 @@ async fn handle_yolo_mode(
     // Load or build exploration state for history-informed coverage
     let exploration_path = Path::new("artifacts/exploration_state.json");
     let mut exploration_state = ExplorationState::load_or_default(exploration_path);
+    // Exploration config: controls forced random, non-local jump, and warmup
+    // force_random_every_n: every N iterations, force PureRandom mode (default 5)
+    // nonlocal_jump_probability: chance any param jumps to random value (default 0.15)
+    // warmup_iterations: iterations before winner exploitation begins (default 50)
+    let exploration_config = ExplorationConfig {
+        warmup_iterations,
+        ..ExplorationConfig::default()
+    };
     if exploration_state.coverage.is_empty() {
         // No saved state - try to build from history logs
         let history_dir = Path::new("artifacts/yolo_history");
@@ -2181,6 +2195,17 @@ async fn handle_yolo_mode(
     }
 
     let loaded_symbols: Vec<String> = symbol_dfs.keys().cloned().collect();
+    let total_requested = symbols.len();
+    let total_loaded = loaded_symbols.len();
+
+    info!(
+        requested = total_requested,
+        loaded = total_loaded,
+        freshly_fetched = symbols_needing_refresh.len(),
+        already_cached = total_requested.saturating_sub(symbols_needing_refresh.len()),
+        "YOLO symbol loading complete"
+    );
+
     if loaded_symbols.is_empty() {
         let _ = update_tx.send(WorkerUpdate::YoloStopped {
             cross_symbol_leaderboard,
@@ -2190,6 +2215,18 @@ async fn handle_yolo_mode(
         });
         return;
     }
+
+    // Send initial status with symbol counts
+    let _ = update_tx.send(WorkerUpdate::YoloProgress {
+        iteration: 0,
+        phase: format!("Loaded {} symbols ({} cached, {} fetched)",
+            total_loaded,
+            total_requested.saturating_sub(symbols_needing_refresh.len()),
+            symbols_needing_refresh.len()),
+        completed_configs: 0,
+        total_configs: 0,
+        jitter_summary: String::new(),
+    });
 
     // Main YOLO loop - runs until cancelled
     loop {
@@ -2223,13 +2260,19 @@ async fn handle_yolo_mode(
         debug!(iteration = iteration, "Starting YOLO iteration");
 
         // 1. Select exploration mode based on coverage history
+        // Uses exploration_config to force PureRandom every N iterations
         // Pick a representative strategy to determine mode (use first enabled)
         let primary_strategy = enabled_strategies
             .first()
             .map(|s| s.strategy_type)
             .unwrap_or(StrategyTypeId::Supertrend);
-        let exploration_mode =
-            select_exploration_mode(&mut rng, &exploration_state, primary_strategy);
+        let exploration_mode = select_exploration_mode_with_config(
+            &mut rng,
+            &exploration_state,
+            primary_strategy,
+            iteration,
+            &exploration_config,
+        );
 
         // 2. Determine jitter percentage based on exploration mode
         // Different modes benefit from different jitter strengths:
@@ -2259,7 +2302,38 @@ async fn handle_yolo_mode(
                 randomization_pct * 1.5
             }
         };
-        let jittered_grid = jitter_multi_strategy_grid(base_grid, iter_pct, &mut rng);
+
+        // 2b. For ExploitWinner mode, pick a random winner and center the grid on it
+        // This provides TRUE winner exploitation - jittering around the best known config
+        let effective_grid = if exploration_mode == ExplorationMode::ExploitWinner
+            && !cross_symbol_leaderboard.entries.is_empty()
+        {
+            // Pick a random winner from the leaderboard (top entries are best)
+            let winner_idx = rng.gen_range(0..cross_symbol_leaderboard.entries.len().min(5));
+            let winner = &cross_symbol_leaderboard.entries[winner_idx];
+
+            // Try to create a centered grid around this winner
+            if let Some(centered) = create_winner_centered_grid(base_grid, &winner.config_id) {
+                trace!(
+                    winner_strategy = %winner.strategy_type.id(),
+                    winner_config = ?winner.config_id,
+                    "ExploitWinner: centering grid on leaderboard winner"
+                );
+                centered
+            } else {
+                // Fall back to base grid if conversion fails
+                base_grid.clone()
+            }
+        } else {
+            base_grid.clone()
+        };
+
+        // Use non-local jump probability from config
+        // This allows parameters to occasionally jump to completely random values
+        // within bounds, escaping local optima
+        let jump_prob = exploration_config.nonlocal_jump_probability;
+        let jittered_grid =
+            jitter_multi_strategy_grid_with_jump(&effective_grid, iter_pct, jump_prob, &mut rng);
 
         trace!(
             iteration = iteration,
@@ -3238,6 +3312,141 @@ fn extract_strategy_config_id(
 }
 
 // =============================================================================
+// Winner Exploitation Helpers
+// =============================================================================
+
+/// Convert a winning StrategyConfigId to a single-element StrategyParams for jittering.
+/// Returns None for strategies that can't be converted (fixed strategies like TurtleS1/S2).
+fn config_id_to_single_params(config: &StrategyConfigId) -> Option<StrategyParams> {
+    Some(match config {
+        StrategyConfigId::Donchian {
+            entry_lookback,
+            exit_lookback,
+        } => StrategyParams::Donchian {
+            entry_lookbacks: vec![*entry_lookback],
+            exit_lookbacks: vec![*exit_lookback],
+        },
+        StrategyConfigId::MACrossover { fast, slow, ma_type } => StrategyParams::MACrossover {
+            fast_periods: vec![*fast],
+            slow_periods: vec![*slow],
+            ma_types: vec![*ma_type],
+        },
+        StrategyConfigId::Tsmom { lookback } => StrategyParams::Tsmom {
+            lookbacks: vec![*lookback],
+        },
+        StrategyConfigId::Supertrend {
+            atr_period,
+            multiplier,
+        } => StrategyParams::Supertrend {
+            atr_periods: vec![*atr_period],
+            multipliers: vec![*multiplier],
+        },
+        StrategyConfigId::FiftyTwoWeekHigh {
+            period,
+            entry_pct,
+            exit_pct,
+        } => StrategyParams::FiftyTwoWeekHigh {
+            periods: vec![*period],
+            entry_pcts: vec![*entry_pct],
+            exit_pcts: vec![*exit_pct],
+        },
+        StrategyConfigId::ParabolicSar {
+            af_start,
+            af_step,
+            af_max,
+        } => StrategyParams::ParabolicSar {
+            af_starts: vec![*af_start],
+            af_steps: vec![*af_step],
+            af_maxs: vec![*af_max],
+        },
+        StrategyConfigId::LarryWilliams {
+            range_multiplier,
+            atr_stop_mult,
+        } => StrategyParams::LarryWilliams {
+            range_multipliers: vec![*range_multiplier],
+            atr_stop_mults: vec![*atr_stop_mult],
+        },
+        StrategyConfigId::STARC {
+            sma_period,
+            atr_period,
+            multiplier,
+        } => StrategyParams::STARC {
+            sma_periods: vec![*sma_period],
+            atr_periods: vec![*atr_period],
+            multipliers: vec![*multiplier],
+        },
+        StrategyConfigId::Keltner {
+            ema_period,
+            atr_period,
+            multiplier,
+        } => StrategyParams::Keltner {
+            ema_periods: vec![*ema_period],
+            atr_periods: vec![*atr_period],
+            multipliers: vec![*multiplier],
+        },
+        StrategyConfigId::DmiAdx {
+            di_period,
+            adx_period,
+            adx_threshold,
+        } => StrategyParams::DmiAdx {
+            di_periods: vec![*di_period],
+            adx_periods: vec![*adx_period],
+            adx_thresholds: vec![*adx_threshold],
+        },
+        StrategyConfigId::Aroon { period } => StrategyParams::Aroon {
+            periods: vec![*period],
+        },
+        StrategyConfigId::BollingerSqueeze {
+            period,
+            std_mult,
+            squeeze_threshold,
+        } => StrategyParams::BollingerSqueeze {
+            periods: vec![*period],
+            std_mults: vec![*std_mult],
+            squeeze_thresholds: vec![*squeeze_threshold],
+        },
+        // Fixed strategies can't be exploited (no params to jitter)
+        StrategyConfigId::TurtleS1 | StrategyConfigId::TurtleS2 => return None,
+        // For other variants, return None (can be extended later)
+        _ => return None,
+    })
+}
+
+/// Create a grid centered on a winning config from the leaderboard.
+/// Only the winning strategy is enabled; others are disabled.
+fn create_winner_centered_grid(
+    base_grid: &MultiStrategyGrid,
+    winner_config: &StrategyConfigId,
+) -> Option<MultiStrategyGrid> {
+    let winner_params = config_id_to_single_params(winner_config)?;
+    let winner_type = winner_config.strategy_type();
+
+    let strategies = base_grid
+        .strategies
+        .iter()
+        .map(|s| {
+            if s.strategy_type == winner_type {
+                // Replace this strategy's params with the winner's single-element params
+                StrategyGridConfig {
+                    strategy_type: s.strategy_type,
+                    enabled: true,
+                    params: winner_params.clone(),
+                }
+            } else {
+                // Disable other strategies for this exploitation iteration
+                StrategyGridConfig {
+                    strategy_type: s.strategy_type,
+                    enabled: false,
+                    params: s.params.clone(),
+                }
+            }
+        })
+        .collect();
+
+    Some(MultiStrategyGrid { strategies })
+}
+
+// =============================================================================
 // Grid Jittering Functions
 // =============================================================================
 
@@ -3249,6 +3458,18 @@ fn jitter_multi_strategy_grid(
     pct: f64,
     rng: &mut impl Rng,
 ) -> MultiStrategyGrid {
+    jitter_multi_strategy_grid_with_jump(base, pct, 0.0, rng)
+}
+
+/// Jitter all parameters in a MultiStrategyGrid by a percentage with optional non-local jumps.
+/// jump_prob: probability that any given parameter will jump to a random value within bounds
+/// instead of being locally jittered (15% = 0.15 is the recommended default for exploration)
+fn jitter_multi_strategy_grid_with_jump(
+    base: &MultiStrategyGrid,
+    pct: f64,
+    jump_prob: f64,
+    rng: &mut impl Rng,
+) -> MultiStrategyGrid {
     MultiStrategyGrid {
         strategies: base
             .strategies
@@ -3256,7 +3477,7 @@ fn jitter_multi_strategy_grid(
             .map(|config| StrategyGridConfig {
                 strategy_type: config.strategy_type,
                 enabled: config.enabled,
-                params: jitter_strategy_params(&config.params, pct, rng),
+                params: jitter_strategy_params_with_jump(&config.params, pct, jump_prob, rng),
             })
             .collect(),
     }
@@ -3447,13 +3668,25 @@ fn format_change_pct(base: Option<&f64>, jit: Option<&f64>) -> String {
 
 /// Jitter the parameters of a single strategy.
 fn jitter_strategy_params(params: &StrategyParams, pct: f64, rng: &mut impl Rng) -> StrategyParams {
+    jitter_strategy_params_with_jump(params, pct, 0.0, rng)
+}
+
+/// Jitter the parameters of a single strategy with optional non-local jumps.
+/// jump_prob: probability (0.0-1.0) that any given parameter will jump to a random
+/// value within its bounds instead of being locally jittered.
+fn jitter_strategy_params_with_jump(
+    params: &StrategyParams,
+    pct: f64,
+    jump_prob: f64,
+    rng: &mut impl Rng,
+) -> StrategyParams {
     match params {
         StrategyParams::Donchian {
             entry_lookbacks,
             exit_lookbacks,
         } => StrategyParams::Donchian {
-            entry_lookbacks: jitter_usize_vec(entry_lookbacks, pct, 5, 5, 200, rng),
-            exit_lookbacks: jitter_usize_vec(exit_lookbacks, pct, 5, 2, 100, rng),
+            entry_lookbacks: jitter_usize_vec_with_jump(entry_lookbacks, pct, 5, 5, 200, jump_prob, rng),
+            exit_lookbacks: jitter_usize_vec_with_jump(exit_lookbacks, pct, 5, 2, 100, jump_prob, rng),
         },
 
         StrategyParams::TurtleS1 => StrategyParams::TurtleS1,
@@ -3464,13 +3697,13 @@ fn jitter_strategy_params(params: &StrategyParams, pct: f64, rng: &mut impl Rng)
             slow_periods,
             ma_types,
         } => StrategyParams::MACrossover {
-            fast_periods: jitter_usize_vec(fast_periods, pct, 5, 5, 100, rng),
-            slow_periods: jitter_usize_vec(slow_periods, pct, 10, 20, 500, rng),
+            fast_periods: jitter_usize_vec_with_jump(fast_periods, pct, 5, 5, 100, jump_prob, rng),
+            slow_periods: jitter_usize_vec_with_jump(slow_periods, pct, 10, 20, 500, jump_prob, rng),
             ma_types: ma_types.clone(), // Don't jitter enum types
         },
 
         StrategyParams::Tsmom { lookbacks } => StrategyParams::Tsmom {
-            lookbacks: jitter_usize_vec(lookbacks, pct, 5, 5, 500, rng),
+            lookbacks: jitter_usize_vec_with_jump(lookbacks, pct, 5, 5, 500, jump_prob, rng),
         },
 
         StrategyParams::DmiAdx {
@@ -3478,13 +3711,13 @@ fn jitter_strategy_params(params: &StrategyParams, pct: f64, rng: &mut impl Rng)
             adx_periods,
             adx_thresholds,
         } => StrategyParams::DmiAdx {
-            di_periods: jitter_usize_vec(di_periods, pct, 1, 5, 50, rng),
-            adx_periods: jitter_usize_vec(adx_periods, pct, 1, 5, 50, rng),
-            adx_thresholds: jitter_f64_vec(adx_thresholds, pct, 1.0, 10.0, 50.0, rng),
+            di_periods: jitter_usize_vec_with_jump(di_periods, pct, 1, 5, 50, jump_prob, rng),
+            adx_periods: jitter_usize_vec_with_jump(adx_periods, pct, 1, 5, 50, jump_prob, rng),
+            adx_thresholds: jitter_f64_vec_with_jump(adx_thresholds, pct, 1.0, 10.0, 50.0, jump_prob, rng),
         },
 
         StrategyParams::Aroon { periods } => StrategyParams::Aroon {
-            periods: jitter_usize_vec(periods, pct, 1, 5, 100, rng),
+            periods: jitter_usize_vec_with_jump(periods, pct, 1, 5, 100, jump_prob, rng),
         },
 
         StrategyParams::BollingerSqueeze {
@@ -3492,10 +3725,10 @@ fn jitter_strategy_params(params: &StrategyParams, pct: f64, rng: &mut impl Rng)
             std_mults,
             squeeze_thresholds,
         } => StrategyParams::BollingerSqueeze {
-            periods: jitter_usize_vec(periods, pct, 1, 5, 100, rng),
-            std_mults: jitter_f64_vec(std_mults, pct, 0.1, 1.0, 4.0, rng),
+            periods: jitter_usize_vec_with_jump(periods, pct, 1, 5, 100, jump_prob, rng),
+            std_mults: jitter_f64_vec_with_jump(std_mults, pct, 0.1, 1.0, 4.0, jump_prob, rng),
             // Use bounded jitter since typical values (0.02-0.05) are near the min (0.01)
-            squeeze_thresholds: jitter_f64_bounded(squeeze_thresholds, pct, 0.01, 0.01, 0.5, rng),
+            squeeze_thresholds: jitter_f64_bounded_with_jump(squeeze_thresholds, pct, 0.01, 0.01, 0.5, jump_prob, rng),
         },
 
         StrategyParams::Keltner {
@@ -3503,9 +3736,9 @@ fn jitter_strategy_params(params: &StrategyParams, pct: f64, rng: &mut impl Rng)
             atr_periods,
             multipliers,
         } => StrategyParams::Keltner {
-            ema_periods: jitter_usize_vec(ema_periods, pct, 1, 5, 100, rng),
-            atr_periods: jitter_usize_vec(atr_periods, pct, 1, 5, 50, rng),
-            multipliers: jitter_f64_vec(multipliers, pct, 0.1, 0.5, 5.0, rng),
+            ema_periods: jitter_usize_vec_with_jump(ema_periods, pct, 1, 5, 100, jump_prob, rng),
+            atr_periods: jitter_usize_vec_with_jump(atr_periods, pct, 1, 5, 50, jump_prob, rng),
+            multipliers: jitter_f64_vec_with_jump(multipliers, pct, 0.1, 0.5, 5.0, jump_prob, rng),
         },
 
         StrategyParams::STARC {
@@ -3513,17 +3746,17 @@ fn jitter_strategy_params(params: &StrategyParams, pct: f64, rng: &mut impl Rng)
             atr_periods,
             multipliers,
         } => StrategyParams::STARC {
-            sma_periods: jitter_usize_vec(sma_periods, pct, 1, 5, 100, rng),
-            atr_periods: jitter_usize_vec(atr_periods, pct, 1, 5, 50, rng),
-            multipliers: jitter_f64_vec(multipliers, pct, 0.1, 0.5, 5.0, rng),
+            sma_periods: jitter_usize_vec_with_jump(sma_periods, pct, 1, 5, 100, jump_prob, rng),
+            atr_periods: jitter_usize_vec_with_jump(atr_periods, pct, 1, 5, 50, jump_prob, rng),
+            multipliers: jitter_f64_vec_with_jump(multipliers, pct, 0.1, 0.5, 5.0, jump_prob, rng),
         },
 
         StrategyParams::Supertrend {
             atr_periods,
             multipliers,
         } => StrategyParams::Supertrend {
-            atr_periods: jitter_usize_vec(atr_periods, pct, 1, 5, 50, rng),
-            multipliers: jitter_f64_vec(multipliers, pct, 0.1, 1.0, 5.0, rng),
+            atr_periods: jitter_usize_vec_with_jump(atr_periods, pct, 1, 5, 50, jump_prob, rng),
+            multipliers: jitter_f64_vec_with_jump(multipliers, pct, 0.1, 1.0, 5.0, jump_prob, rng),
         },
 
         StrategyParams::FiftyTwoWeekHigh {
@@ -3531,29 +3764,29 @@ fn jitter_strategy_params(params: &StrategyParams, pct: f64, rng: &mut impl Rng)
             entry_pcts,
             exit_pcts,
         } => StrategyParams::FiftyTwoWeekHigh {
-            periods: jitter_usize_vec(periods, pct, 5, 50, 500, rng),
+            periods: jitter_usize_vec_with_jump(periods, pct, 5, 50, 500, jump_prob, rng),
             // Widened bounds: entry can go from 70% to 100% (was 80-100%)
-            entry_pcts: jitter_f64_bounded(entry_pcts, pct, 0.01, 0.70, 1.0, rng),
+            entry_pcts: jitter_f64_bounded_with_jump(entry_pcts, pct, 0.01, 0.70, 1.0, jump_prob, rng),
             // Widened bounds: exit can go from 40% to 95% (was 50-95%)
-            exit_pcts: jitter_f64_bounded(exit_pcts, pct, 0.01, 0.40, 0.95, rng),
+            exit_pcts: jitter_f64_bounded_with_jump(exit_pcts, pct, 0.01, 0.40, 0.95, jump_prob, rng),
         },
 
         StrategyParams::DarvasBox {
             box_confirmation_bars,
         } => StrategyParams::DarvasBox {
-            box_confirmation_bars: jitter_usize_vec(box_confirmation_bars, pct, 1, 2, 20, rng),
+            box_confirmation_bars: jitter_usize_vec_with_jump(box_confirmation_bars, pct, 1, 2, 20, jump_prob, rng),
         },
 
         StrategyParams::LarryWilliams {
             range_multipliers,
             atr_stop_mults,
         } => StrategyParams::LarryWilliams {
-            range_multipliers: jitter_f64_vec(range_multipliers, pct, 0.1, 0.5, 5.0, rng),
-            atr_stop_mults: jitter_f64_vec(atr_stop_mults, pct, 0.1, 0.5, 5.0, rng),
+            range_multipliers: jitter_f64_vec_with_jump(range_multipliers, pct, 0.1, 0.5, 5.0, jump_prob, rng),
+            atr_stop_mults: jitter_f64_vec_with_jump(atr_stop_mults, pct, 0.1, 0.5, 5.0, jump_prob, rng),
         },
 
         StrategyParams::HeikinAshi { confirmation_bars } => StrategyParams::HeikinAshi {
-            confirmation_bars: jitter_usize_vec(confirmation_bars, pct, 1, 1, 10, rng),
+            confirmation_bars: jitter_usize_vec_with_jump(confirmation_bars, pct, 1, 1, 10, jump_prob, rng),
         },
 
         StrategyParams::ParabolicSar {
@@ -3562,9 +3795,9 @@ fn jitter_strategy_params(params: &StrategyParams, pct: f64, rng: &mut impl Rng)
             af_maxs,
         } => StrategyParams::ParabolicSar {
             // Use bounded jitter since typical values (0.02) are near the min (0.01)
-            af_starts: jitter_f64_bounded(af_starts, pct, 0.005, 0.01, 0.1, rng),
-            af_steps: jitter_f64_bounded(af_steps, pct, 0.005, 0.01, 0.1, rng),
-            af_maxs: jitter_f64_bounded(af_maxs, pct, 0.01, 0.1, 0.5, rng),
+            af_starts: jitter_f64_bounded_with_jump(af_starts, pct, 0.005, 0.01, 0.1, jump_prob, rng),
+            af_steps: jitter_f64_bounded_with_jump(af_steps, pct, 0.005, 0.01, 0.1, jump_prob, rng),
+            af_maxs: jitter_f64_bounded_with_jump(af_maxs, pct, 0.01, 0.1, 0.5, jump_prob, rng),
         },
 
         StrategyParams::OpeningRangeBreakout {
@@ -3572,7 +3805,7 @@ fn jitter_strategy_params(params: &StrategyParams, pct: f64, rng: &mut impl Rng)
             periods,
         } => {
             StrategyParams::OpeningRangeBreakout {
-                range_bars: jitter_usize_vec(range_bars, pct, 1, 1, 20, rng),
+                range_bars: jitter_usize_vec_with_jump(range_bars, pct, 1, 1, 20, jump_prob, rng),
                 periods: periods.clone(), // Don't jitter enum types
             }
         }
@@ -3585,7 +3818,7 @@ fn jitter_strategy_params(params: &StrategyParams, pct: f64, rng: &mut impl Rng)
             base_strategies: base_strategies.clone(),
             horizon_sets: horizon_sets
                 .iter()
-                .map(|hs| jitter_usize_vec(hs, pct, 5, 5, 200, rng))
+                .map(|hs| jitter_usize_vec_with_jump(hs, pct, 5, 5, 200, jump_prob, rng))
                 .collect(),
             voting_methods: voting_methods.clone(),
         },
@@ -3603,9 +3836,22 @@ fn jitter_usize_vec(
     max: usize,
     rng: &mut impl Rng,
 ) -> Vec<usize> {
+    jitter_usize_vec_with_jump(values, pct, step, min, max, 0.0, rng)
+}
+
+/// Jitter a vector of usize values with optional non-local jump.
+fn jitter_usize_vec_with_jump(
+    values: &[usize],
+    pct: f64,
+    step: usize,
+    min: usize,
+    max: usize,
+    jump_prob: f64,
+    rng: &mut impl Rng,
+) -> Vec<usize> {
     values
         .iter()
-        .map(|&v| jitter_usize(v, pct, step, min, max, rng))
+        .map(|&v| jitter_usize_with_jump(v, pct, step, min, max, jump_prob, rng))
         .collect()
 }
 
@@ -3618,6 +3864,30 @@ fn jitter_usize(
     max: usize,
     rng: &mut impl Rng,
 ) -> usize {
+    jitter_usize_with_jump(value, pct, step, min, max, 0.0, rng)
+}
+
+/// Jitter a single usize value with optional non-local jump.
+/// When jump_prob > 0, there's a chance to completely replace the value
+/// with a random one within bounds instead of local jitter.
+fn jitter_usize_with_jump(
+    value: usize,
+    pct: f64,
+    step: usize,
+    min: usize,
+    max: usize,
+    jump_prob: f64,
+    rng: &mut impl Rng,
+) -> usize {
+    // Non-local jump: completely random value within bounds
+    if jump_prob > 0.0 && rng.gen::<f64>() < jump_prob {
+        // Generate random value within bounds, respecting step size
+        let num_steps = ((max - min) / step.max(1)) + 1;
+        let random_step = rng.gen_range(0..num_steps);
+        return (min + random_step * step.max(1)).min(max);
+    }
+
+    // Standard relative jitter
     let delta = rng.gen_range(-pct..=pct);
     let candidate = (value as f64) * (1.0 + delta);
     let candidate = if step > 1 {
@@ -3637,14 +3907,53 @@ fn jitter_f64_vec(
     max: f64,
     rng: &mut impl Rng,
 ) -> Vec<f64> {
+    jitter_f64_vec_with_jump(values, pct, step, min, max, 0.0, rng)
+}
+
+/// Jitter a vector of f64 values with optional non-local jump.
+fn jitter_f64_vec_with_jump(
+    values: &[f64],
+    pct: f64,
+    step: f64,
+    min: f64,
+    max: f64,
+    jump_prob: f64,
+    rng: &mut impl Rng,
+) -> Vec<f64> {
     values
         .iter()
-        .map(|&v| jitter_f64(v, pct, step, min, max, rng))
+        .map(|&v| jitter_f64_with_jump(v, pct, step, min, max, jump_prob, rng))
         .collect()
 }
 
 /// Jitter a single f64 value.
 fn jitter_f64(value: f64, pct: f64, step: f64, min: f64, max: f64, rng: &mut impl Rng) -> f64 {
+    jitter_f64_with_jump(value, pct, step, min, max, 0.0, rng)
+}
+
+/// Jitter a single f64 value with optional non-local jump.
+/// When jump_prob > 0, there's a chance to completely replace the value
+/// with a random one within bounds instead of local jitter.
+fn jitter_f64_with_jump(
+    value: f64,
+    pct: f64,
+    step: f64,
+    min: f64,
+    max: f64,
+    jump_prob: f64,
+    rng: &mut impl Rng,
+) -> f64 {
+    // Non-local jump: completely random value within bounds
+    if jump_prob > 0.0 && rng.gen::<f64>() < jump_prob {
+        // Generate random value within bounds, respecting step size
+        let range = max - min;
+        let num_steps = (range / step).floor() as usize + 1;
+        let random_step = rng.gen_range(0..num_steps);
+        let candidate = min + (random_step as f64) * step;
+        return candidate.min(max);
+    }
+
+    // Standard relative jitter
     let delta = rng.gen_range(-pct..=pct);
     let candidate = value * (1.0 + delta);
     let candidate = (candidate / step).round() * step;
@@ -3661,9 +3970,22 @@ fn jitter_f64_bounded(
     max: f64,
     rng: &mut impl Rng,
 ) -> Vec<f64> {
+    jitter_f64_bounded_with_jump(values, pct, step, min, max, 0.0, rng)
+}
+
+/// Jitter a vector of f64 values with improved bounds handling and optional non-local jump.
+fn jitter_f64_bounded_with_jump(
+    values: &[f64],
+    pct: f64,
+    step: f64,
+    min: f64,
+    max: f64,
+    jump_prob: f64,
+    rng: &mut impl Rng,
+) -> Vec<f64> {
     values
         .iter()
-        .map(|&v| jitter_f64_edge_aware(v, pct, step, min, max, rng))
+        .map(|&v| jitter_f64_edge_aware_with_jump(v, pct, step, min, max, jump_prob, rng))
         .collect()
 }
 
@@ -3678,7 +4000,29 @@ fn jitter_f64_edge_aware(
     max: f64,
     rng: &mut impl Rng,
 ) -> f64 {
+    jitter_f64_edge_aware_with_jump(value, pct, step, min, max, 0.0, rng)
+}
+
+/// Jitter a single f64 value with edge-case awareness and optional non-local jump.
+fn jitter_f64_edge_aware_with_jump(
+    value: f64,
+    pct: f64,
+    step: f64,
+    min: f64,
+    max: f64,
+    jump_prob: f64,
+    rng: &mut impl Rng,
+) -> f64 {
     let range = max - min;
+
+    // Non-local jump: completely random value within bounds
+    if jump_prob > 0.0 && rng.gen::<f64>() < jump_prob {
+        let num_steps = (range / step).floor() as usize + 1;
+        let random_step = rng.gen_range(0..num_steps);
+        let candidate = min + (random_step as f64) * step;
+        return candidate.min(max);
+    }
+
     let threshold = range * 0.15; // 15% of range = edge zone
 
     // Check if value is near a bound

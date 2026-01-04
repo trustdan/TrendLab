@@ -756,11 +756,19 @@ impl App {
                 DataViewMode::Sectors => {
                     if self.data.selected_sector_index > 0 {
                         self.data.selected_sector_index -= 1;
+                        // Scroll up if selection goes above viewport
+                        if self.data.selected_sector_index < self.data.sector_scroll_offset {
+                            self.data.sector_scroll_offset = self.data.selected_sector_index;
+                        }
                     }
                 }
                 DataViewMode::Tickers => {
                     if self.data.selected_ticker_index > 0 {
                         self.data.selected_ticker_index -= 1;
+                        // Scroll up if selection goes above viewport
+                        if self.data.selected_ticker_index < self.data.ticker_scroll_offset {
+                            self.data.ticker_scroll_offset = self.data.selected_ticker_index;
+                        }
                     }
                 }
             },
@@ -787,13 +795,22 @@ impl App {
 
                 match self.results.view_mode {
                     ResultsViewMode::Leaderboard => {
-                        if self.results.selected_leaderboard_index > 0 {
-                            self.results.selected_leaderboard_index -= 1;
+                        self.results.leaderboard_up();
+                        // Scroll up if selection goes above viewport
+                        if self.results.selected_leaderboard_index
+                            < self.results.leaderboard_scroll_offset
+                        {
+                            self.results.leaderboard_scroll_offset =
+                                self.results.selected_leaderboard_index;
                         }
                     }
                     _ => {
                         if self.results.selected_index > 0 {
                             self.results.selected_index -= 1;
+                            // Scroll up if selection goes above viewport
+                            if self.results.selected_index < self.results.scroll_offset {
+                                self.results.scroll_offset = self.results.selected_index;
+                            }
                         }
                     }
                 }
@@ -811,18 +828,35 @@ impl App {
     }
 
     pub fn handle_down(&mut self) {
+        // Default visible height for scroll calculations (will be adjusted by render)
+        const DEFAULT_VISIBLE_HEIGHT: usize = 15;
+
         match self.active_panel {
             Panel::Data => match self.data.view_mode {
                 DataViewMode::Sectors => {
                     let max_idx = self.data.universe.sector_count().saturating_sub(1);
                     if self.data.selected_sector_index < max_idx {
                         self.data.selected_sector_index += 1;
+                        // Scroll down if selection goes below viewport
+                        if self.data.selected_sector_index
+                            >= self.data.sector_scroll_offset + DEFAULT_VISIBLE_HEIGHT
+                        {
+                            self.data.sector_scroll_offset = self.data.selected_sector_index
+                                .saturating_sub(DEFAULT_VISIBLE_HEIGHT - 1);
+                        }
                     }
                 }
                 DataViewMode::Tickers => {
                     let max_idx = self.data.current_sector_tickers().len().saturating_sub(1);
                     if self.data.selected_ticker_index < max_idx {
                         self.data.selected_ticker_index += 1;
+                        // Scroll down if selection goes below viewport
+                        if self.data.selected_ticker_index
+                            >= self.data.ticker_scroll_offset + DEFAULT_VISIBLE_HEIGHT
+                        {
+                            self.data.ticker_scroll_offset = self.data.selected_ticker_index
+                                .saturating_sub(DEFAULT_VISIBLE_HEIGHT - 1);
+                        }
                     }
                 }
             },
@@ -856,8 +890,15 @@ impl App {
                             .cross_symbol_leaderboard()
                             .map(|lb| lb.entries.len().saturating_sub(1))
                             .unwrap_or(0);
-                        if self.results.selected_leaderboard_index < max_idx {
-                            self.results.selected_leaderboard_index += 1;
+                        self.results.leaderboard_down(max_idx);
+                        // Scroll down if selection goes below viewport
+                        if self.results.selected_leaderboard_index
+                            >= self.results.leaderboard_scroll_offset + DEFAULT_VISIBLE_HEIGHT
+                        {
+                            self.results.leaderboard_scroll_offset = self
+                                .results
+                                .selected_leaderboard_index
+                                .saturating_sub(DEFAULT_VISIBLE_HEIGHT - 1);
                         }
                     }
                     _ => {
@@ -865,6 +906,15 @@ impl App {
                             && self.results.selected_index < self.results.results.len() - 1
                         {
                             self.results.selected_index += 1;
+                            // Scroll down if selection goes below viewport
+                            if self.results.selected_index
+                                >= self.results.scroll_offset + DEFAULT_VISIBLE_HEIGHT
+                            {
+                                self.results.scroll_offset = self
+                                    .results
+                                    .selected_index
+                                    .saturating_sub(DEFAULT_VISIBLE_HEIGHT - 1);
+                            }
                         }
                     }
                 }
@@ -919,6 +969,7 @@ impl App {
                 if self.data.view_mode == DataViewMode::Sectors {
                     self.data.view_mode = DataViewMode::Tickers;
                     self.data.selected_ticker_index = 0;
+                    self.data.ticker_scroll_offset = 0; // Reset scroll when entering sector
                     if let Some(sector) = self.data.selected_sector() {
                         self.status_message = format!("{} tickers", sector.name);
                     }
@@ -2055,28 +2106,9 @@ impl App {
             return;
         }
 
-        // Build symbol->bars map from cache
-        let mut symbol_bars: HashMap<String, Arc<Vec<Bar>>> = HashMap::new();
-        let mut missing: Vec<String> = Vec::new();
-        for sym in &selected {
-            if let Some(bars) = self.data.bars_cache.get(sym) {
-                if !bars.is_empty() {
-                    symbol_bars.insert(sym.clone(), Arc::new(bars.clone()));
-                } else {
-                    missing.push(sym.clone());
-                }
-            } else {
-                missing.push(sym.clone());
-            }
-        }
-
-        if symbol_bars.is_empty() {
-            self.status_message = format!(
-                "YOLO Mode: No bars loaded for selected tickers. Missing: {}",
-                missing.join(", ")
-            );
-            return;
-        }
+        // Note: We no longer check bars_cache here. The worker will handle
+        // data refresh for any symbols missing coverage. This allows YOLO to
+        // start without pre-loading data.
 
         // Build strategy grid (use Quick depth for faster iterations)
         let strategy_grid = MultiStrategyGrid::with_depth(SweepDepth::Quick);
@@ -2092,13 +2124,16 @@ impl App {
             pyramid_config: PyramidConfig::default(),
         };
 
-        // Try to load existing leaderboards
-        let existing_per_symbol_leaderboard =
-            Leaderboard::load(std::path::Path::new("artifacts/leaderboard.json")).ok();
-        let existing_cross_symbol_leaderboard = CrossSymbolLeaderboard::load(std::path::Path::new(
-            "artifacts/cross_symbol_leaderboard.json",
-        ))
-        .ok();
+        // Try to load existing leaderboards (boxed to reduce enum size)
+        let existing_per_symbol_leaderboard = Box::new(
+            Leaderboard::load(std::path::Path::new("artifacts/leaderboard.json")).ok(),
+        );
+        let existing_cross_symbol_leaderboard = Box::new(
+            CrossSymbolLeaderboard::load(std::path::Path::new(
+                "artifacts/cross_symbol_leaderboard.json",
+            ))
+            .ok(),
+        );
 
         // Provide symbol -> sector_id mapping so YOLO can do sector-aware validation.
         let sector_lookup = self.data.universe.build_sector_id_lookup();
@@ -2125,6 +2160,7 @@ impl App {
             session_id: Some(self.yolo.session_id.clone()),
             polars_max_threads: self.yolo.polars_max_threads,
             outer_threads: self.yolo.outer_threads,
+            warmup_iterations: self.yolo.warmup_iterations,
         };
 
         let symbols_count = selected.len();

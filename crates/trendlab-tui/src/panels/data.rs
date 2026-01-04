@@ -52,12 +52,22 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 fn draw_sector_list(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
     let is_sector_focused = is_active && matches!(app.data.view_mode, DataViewMode::Sectors);
 
+    // Calculate visible height (subtract 2 for borders)
+    let visible_height = area.height.saturating_sub(2) as usize;
+    let total_sectors = app.data.universe.sectors.len();
+
+    // Clamp scroll offset to valid range
+    let max_scroll = total_sectors.saturating_sub(visible_height);
+    let scroll_offset = app.data.sector_scroll_offset.min(max_scroll);
+
     let items: Vec<ListItem> = app
         .data
         .universe
         .sectors
         .iter()
         .enumerate()
+        .skip(scroll_offset)
+        .take(visible_height)
         .map(|(i, sector)| {
             let is_selected = i == app.data.selected_sector_index;
             let selected_count = app.data.selected_count_in_sector(&sector.id);
@@ -101,7 +111,12 @@ fn draw_sector_list(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
 
     // Calculate total selected
     let total_selected = app.data.selected_tickers.len();
-    let title = format!("Sectors ({} selected)", total_selected);
+    let scroll_indicator = if max_scroll > 0 {
+        format!(" [{}/{}]", scroll_offset + 1, total_sectors)
+    } else {
+        String::new()
+    };
+    let title = format!("Sectors ({} selected){}", total_selected, scroll_indicator);
 
     let list = List::new(items).block(panel_block(&title, is_sector_focused));
     f.render_widget(list, area);
@@ -127,11 +142,21 @@ fn draw_ticker_list(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
         .constraints([Constraint::Min(5), Constraint::Length(8)])
         .split(area);
 
+    // Calculate visible height (subtract 2 for borders)
+    let visible_height = chunks[0].height.saturating_sub(2) as usize;
+    let total_tickers = sector.tickers.len();
+
+    // Clamp scroll offset to valid range
+    let max_scroll = total_tickers.saturating_sub(visible_height);
+    let scroll_offset = app.data.ticker_scroll_offset.min(max_scroll);
+
     // Ticker list
     let items: Vec<ListItem> = sector
         .tickers
         .iter()
         .enumerate()
+        .skip(scroll_offset)
+        .take(visible_height)
         .map(|(i, ticker)| {
             let is_cursor = i == app.data.selected_ticker_index;
             let is_checked = app.data.is_ticker_selected(ticker);
@@ -183,11 +208,17 @@ fn draw_ticker_list(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
         .collect();
 
     let selected_in_sector = app.data.selected_count_in_sector(&sector.id);
+    let scroll_indicator = if max_scroll > 0 {
+        format!(" [{}/{}]", scroll_offset + 1, total_tickers)
+    } else {
+        String::new()
+    };
     let title = format!(
-        "{} [{}/{}]",
+        "{} [{}/{}]{}",
         sector.name,
         selected_in_sector,
-        sector.tickers.len()
+        total_tickers,
+        scroll_indicator
     );
 
     let list = List::new(items).block(panel_block(&title, is_ticker_focused));
@@ -285,6 +316,14 @@ fn draw_sector_summary(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
         .map(|s| s.tickers.len())
         .sum();
 
+    // Count how many selected tickers have data loaded
+    let loaded_count = app
+        .data
+        .selected_tickers
+        .iter()
+        .filter(|t| app.data.bars_cache.contains_key(*t))
+        .count();
+
     lines.push(Line::from(vec![
         Span::styled("Selected: ", Style::default().fg(colors::FG_DARK)),
         Span::styled(
@@ -297,6 +336,44 @@ fn draw_sector_summary(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
         ),
         Span::styled(" tickers", Style::default().fg(colors::FG_DARK)),
     ]));
+
+    // Show loaded status and prompt to fetch if needed
+    if total_selected > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("Data: ", Style::default().fg(colors::FG_DARK)),
+            Span::styled(
+                format!("{}/{}", loaded_count, total_selected),
+                Style::default().fg(if loaded_count == total_selected {
+                    colors::GREEN
+                } else {
+                    colors::ORANGE
+                }),
+            ),
+            Span::styled(" loaded", Style::default().fg(colors::FG_DARK)),
+        ]));
+
+        // Prominent fetch prompt when data is missing
+        if loaded_count < total_selected {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("▶ ", Style::default().fg(colors::YELLOW)),
+                Span::styled(
+                    "Press ",
+                    Style::default().fg(colors::YELLOW),
+                ),
+                Span::styled(
+                    "f",
+                    Style::default()
+                        .fg(colors::CYAN)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " to fetch data before running sweeps",
+                    Style::default().fg(colors::YELLOW),
+                ),
+            ]));
+        }
+    }
     lines.push(Line::from(""));
 
     // Show selected tickers by sector

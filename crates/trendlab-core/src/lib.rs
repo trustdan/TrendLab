@@ -22,6 +22,7 @@ pub mod exploration;
 pub mod indicator_cache;
 pub mod indicators;
 pub mod indicators_polars;
+pub mod latin_hypercube;
 pub mod leaderboard;
 pub mod metrics;
 pub mod sector_analysis;
@@ -82,11 +83,15 @@ pub use error::TrendLabError;
 pub use exploration::{
     build_exploration_state_from_history, denormalize_to_params, generate_random_config,
     get_param_bounds, normalize_config, record_history_entry, select_exploration_mode,
-    ExplorationMode, ExplorationState, NormalizedConfig, ParamBounds, StrategyCoverage,
+    select_exploration_mode_with_config, ExplorationConfig, ExplorationMode, ExplorationState,
+    NormalizedConfig, ParamBounds, StrategyCoverage,
 };
 pub use indicator_cache::{
     collect_indicator_requirements, extract_indicator_requirements, CacheStats, IndicatorCache,
     IndicatorKey, LazyIndicatorCache,
+};
+pub use latin_hypercube::{
+    generate_lhs_2d, generate_lhs_3d, generate_lhs_samples, LatinHypercubeSampler, LhsConfig,
 };
 pub use indicators::{
     aroon, aroon_down, aroon_up, atr, atr_wilder, bollinger_bands, cci, darvas_boxes, dmi,

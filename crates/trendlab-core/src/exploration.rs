@@ -322,80 +322,111 @@ impl ExplorationState {
 }
 
 /// Get parameter bounds for a strategy type.
-/// These are extracted from the jitter functions in worker.rs.
+/// These are WIDENED to encourage more diverse exploration.
+/// The bounds define the full explorable parameter space.
 pub fn get_param_bounds(strategy_type: StrategyTypeId) -> Vec<ParamBounds> {
     match strategy_type {
         StrategyTypeId::Donchian => vec![
-            ParamBounds::new("entry_lookback", 5.0, 200.0, 5.0),
-            ParamBounds::new("exit_lookback", 2.0, 100.0, 5.0),
+            // WIDENED: was 5-200, now 5-500 for longer-term breakouts
+            ParamBounds::new("entry_lookback", 5.0, 500.0, 5.0),
+            // WIDENED: was 2-100, now 2-200
+            ParamBounds::new("exit_lookback", 2.0, 200.0, 5.0),
         ],
         StrategyTypeId::MACrossover => vec![
-            ParamBounds::new("fast_period", 5.0, 100.0, 5.0),
-            ParamBounds::new("slow_period", 20.0, 500.0, 10.0),
+            // WIDENED: was 5-100, now 3-200 for very fast crossovers
+            ParamBounds::new("fast_period", 3.0, 200.0, 1.0),
+            // WIDENED: was 20-500, now 10-1000 for very slow MAs
+            ParamBounds::new("slow_period", 10.0, 1000.0, 5.0),
         ],
-        StrategyTypeId::Tsmom => vec![ParamBounds::new("lookback", 5.0, 500.0, 5.0)],
+        // WIDENED: was 5-500, now 5-750 for multi-year momentum
+        StrategyTypeId::Tsmom => vec![ParamBounds::new("lookback", 5.0, 750.0, 5.0)],
         StrategyTypeId::Supertrend => vec![
-            ParamBounds::new("atr_period", 5.0, 50.0, 1.0),
-            ParamBounds::new("multiplier", 1.0, 5.0, 0.1),
+            // WIDENED: was 5-50, now 3-100 for more extreme periods
+            ParamBounds::new("atr_period", 3.0, 100.0, 1.0),
+            // WIDENED: was 1.0-5.0, now 0.5-10.0 for tighter/wider bands
+            ParamBounds::new("multiplier", 0.5, 10.0, 0.1),
         ],
         StrategyTypeId::FiftyTwoWeekHigh => vec![
-            ParamBounds::new("period", 50.0, 500.0, 5.0),
-            ParamBounds::new("entry_pct", 0.70, 1.0, 0.01),
-            ParamBounds::new("exit_pct", 0.40, 0.95, 0.01),
+            // WIDENED: was 50-500, now 20-1000 (from ~1 month to 4 years)
+            ParamBounds::new("period", 20.0, 1000.0, 5.0),
+            // WIDENED: was 0.70-1.0, now 0.50-1.0 for earlier entries
+            ParamBounds::new("entry_pct", 0.50, 1.0, 0.01),
+            // WIDENED: was 0.40-0.95, now 0.30-0.99 for more exit flexibility
+            ParamBounds::new("exit_pct", 0.30, 0.99, 0.01),
         ],
         StrategyTypeId::ParabolicSar => vec![
-            ParamBounds::new("af_start", 0.01, 0.1, 0.005),
-            ParamBounds::new("af_step", 0.01, 0.1, 0.005),
-            ParamBounds::new("af_max", 0.1, 0.5, 0.01),
+            // WIDENED: was 0.01-0.1, now 0.005-0.2 for slower/faster starts
+            ParamBounds::new("af_start", 0.005, 0.20, 0.005),
+            // WIDENED: was 0.01-0.1, now 0.005-0.2
+            ParamBounds::new("af_step", 0.005, 0.20, 0.005),
+            // WIDENED: was 0.1-0.5, now 0.1-1.0 for higher max acceleration
+            ParamBounds::new("af_max", 0.1, 1.0, 0.01),
         ],
         StrategyTypeId::LarryWilliams => vec![
-            ParamBounds::new("range_multiplier", 0.5, 5.0, 0.1),
-            ParamBounds::new("atr_stop_mult", 0.5, 5.0, 0.1),
+            // WIDENED: was 0.5-5.0, now 0.3-8.0
+            ParamBounds::new("range_multiplier", 0.3, 8.0, 0.1),
+            // WIDENED: was 0.5-5.0, now 0.3-8.0
+            ParamBounds::new("atr_stop_mult", 0.3, 8.0, 0.1),
         ],
         StrategyTypeId::STARC => vec![
-            ParamBounds::new("sma_period", 5.0, 100.0, 1.0),
-            ParamBounds::new("atr_period", 5.0, 50.0, 1.0),
-            ParamBounds::new("multiplier", 0.5, 5.0, 0.1),
+            // WIDENED: was 5-100, now 3-200
+            ParamBounds::new("sma_period", 3.0, 200.0, 1.0),
+            // WIDENED: was 5-50, now 3-100
+            ParamBounds::new("atr_period", 3.0, 100.0, 1.0),
+            // WIDENED: was 0.5-5.0, now 0.3-8.0
+            ParamBounds::new("multiplier", 0.3, 8.0, 0.1),
         ],
         StrategyTypeId::Keltner => vec![
-            ParamBounds::new("ema_period", 5.0, 100.0, 1.0),
-            ParamBounds::new("atr_period", 5.0, 50.0, 1.0),
-            ParamBounds::new("multiplier", 0.5, 5.0, 0.1),
+            // WIDENED: was 5-100, now 3-200
+            ParamBounds::new("ema_period", 3.0, 200.0, 1.0),
+            // WIDENED: was 5-50, now 3-100
+            ParamBounds::new("atr_period", 3.0, 100.0, 1.0),
+            // WIDENED: was 0.5-5.0, now 0.3-8.0
+            ParamBounds::new("multiplier", 0.3, 8.0, 0.1),
         ],
         StrategyTypeId::DmiAdx => vec![
-            ParamBounds::new("di_period", 5.0, 50.0, 1.0),
-            ParamBounds::new("adx_period", 5.0, 50.0, 1.0),
-            ParamBounds::new("adx_threshold", 10.0, 50.0, 1.0),
+            // WIDENED: was 5-50, now 3-100
+            ParamBounds::new("di_period", 3.0, 100.0, 1.0),
+            // WIDENED: was 5-50, now 3-100
+            ParamBounds::new("adx_period", 3.0, 100.0, 1.0),
+            // WIDENED: was 10-50, now 5-70
+            ParamBounds::new("adx_threshold", 5.0, 70.0, 1.0),
         ],
-        StrategyTypeId::Aroon => vec![ParamBounds::new("period", 5.0, 100.0, 1.0)],
+        // WIDENED: was 5-100, now 3-200
+        StrategyTypeId::Aroon => vec![ParamBounds::new("period", 3.0, 200.0, 1.0)],
         StrategyTypeId::BollingerSqueeze => vec![
-            ParamBounds::new("period", 5.0, 100.0, 1.0),
-            ParamBounds::new("std_mult", 1.0, 4.0, 0.1),
-            ParamBounds::new("squeeze_threshold", 0.01, 0.5, 0.01),
+            // WIDENED: was 5-100, now 3-200
+            ParamBounds::new("period", 3.0, 200.0, 1.0),
+            // WIDENED: was 1.0-4.0, now 0.5-6.0
+            ParamBounds::new("std_mult", 0.5, 6.0, 0.1),
+            // WIDENED: was 0.01-0.5, now 0.005-0.8
+            ParamBounds::new("squeeze_threshold", 0.005, 0.8, 0.01),
         ],
         StrategyTypeId::DarvasBox => {
-            vec![ParamBounds::new("box_confirmation_bars", 2.0, 20.0, 1.0)]
+            // WIDENED: was 2-20, now 1-30
+            vec![ParamBounds::new("box_confirmation_bars", 1.0, 30.0, 1.0)]
         }
-        StrategyTypeId::HeikinAshi => vec![ParamBounds::new("confirmation_bars", 1.0, 10.0, 1.0)],
-        // Variants (use same bounds as base)
+        // WIDENED: was 1-10, now 1-20
+        StrategyTypeId::HeikinAshi => vec![ParamBounds::new("confirmation_bars", 1.0, 20.0, 1.0)],
+        // Variants (use same WIDENED bounds as base)
         StrategyTypeId::SupertrendVolume
         | StrategyTypeId::SupertrendConfirmed
         | StrategyTypeId::SupertrendAsymmetric
         | StrategyTypeId::SupertrendCooldown => vec![
-            ParamBounds::new("atr_period", 5.0, 50.0, 1.0),
-            ParamBounds::new("multiplier", 1.0, 5.0, 0.1),
+            ParamBounds::new("atr_period", 3.0, 100.0, 1.0),
+            ParamBounds::new("multiplier", 0.5, 10.0, 0.1),
         ],
         StrategyTypeId::FiftyTwoWeekHighMomentum | StrategyTypeId::FiftyTwoWeekHighTrailing => {
             vec![
-                ParamBounds::new("period", 50.0, 500.0, 5.0),
-                ParamBounds::new("entry_pct", 0.70, 1.0, 0.01),
-                ParamBounds::new("exit_pct", 0.40, 0.95, 0.01),
+                ParamBounds::new("period", 20.0, 1000.0, 5.0),
+                ParamBounds::new("entry_pct", 0.50, 1.0, 0.01),
+                ParamBounds::new("exit_pct", 0.30, 0.99, 0.01),
             ]
         }
         StrategyTypeId::ParabolicSarFiltered | StrategyTypeId::ParabolicSarDelayed => vec![
-            ParamBounds::new("af_start", 0.01, 0.1, 0.005),
-            ParamBounds::new("af_step", 0.01, 0.1, 0.005),
-            ParamBounds::new("af_max", 0.1, 0.5, 0.01),
+            ParamBounds::new("af_start", 0.005, 0.20, 0.005),
+            ParamBounds::new("af_step", 0.005, 0.20, 0.005),
+            ParamBounds::new("af_max", 0.1, 1.0, 0.01),
         ],
         // Strategies without clear parameter bounds or fixed params
         StrategyTypeId::TurtleS1 | StrategyTypeId::TurtleS2 => {
@@ -582,31 +613,87 @@ pub fn denormalize_to_params(config: &NormalizedConfig) -> Vec<f64> {
         .collect()
 }
 
+/// Configuration for exploration mode selection.
+#[derive(Debug, Clone, Copy)]
+pub struct ExplorationConfig {
+    /// Force pure random mode every N iterations (0 = disabled)
+    pub force_random_every_n: u32,
+    /// Probability of non-local jump (0.0-1.0) during jitter operations
+    pub nonlocal_jump_probability: f64,
+    /// Number of warmup iterations before winner exploitation begins (0 = no warmup)
+    pub warmup_iterations: u32,
+}
+
+impl Default for ExplorationConfig {
+    fn default() -> Self {
+        Self {
+            force_random_every_n: 5,           // Force random every 5 iterations
+            nonlocal_jump_probability: 0.15,   // 15% chance of non-local jump
+            warmup_iterations: 50,             // 50 iterations before exploitation begins
+        }
+    }
+}
+
 /// Select exploration mode based on coverage state.
+/// Now accepts iteration number to periodically force pure random mode.
 pub fn select_exploration_mode(
     rng: &mut impl Rng,
     state: &ExplorationState,
     strategy_type: StrategyTypeId,
 ) -> ExplorationMode {
+    select_exploration_mode_with_config(rng, state, strategy_type, 0, &ExplorationConfig::default())
+}
+
+/// Select exploration mode with iteration awareness and configuration.
+/// Forces pure random mode every `force_random_every_n` iterations.
+/// During warmup phase, disables winner exploitation to allow broader exploration.
+pub fn select_exploration_mode_with_config(
+    rng: &mut impl Rng,
+    state: &ExplorationState,
+    strategy_type: StrategyTypeId,
+    iteration: u32,
+    config: &ExplorationConfig,
+) -> ExplorationMode {
+    // During warmup: only exploration, no exploitation
+    // This prevents locking in early winners that may not be statistically significant
+    if iteration < config.warmup_iterations {
+        let roll = rng.gen::<f64>();
+        return if roll < 0.50 {
+            ExplorationMode::MaximizeCoverage
+        } else if roll < 0.90 {
+            ExplorationMode::PureRandom
+        } else {
+            ExplorationMode::LocalJitter
+        };
+    }
+
+    // Force pure random mode every N iterations to break out of local optima
+    if config.force_random_every_n > 0 && iteration > 0 && iteration.is_multiple_of(config.force_random_every_n) {
+        return ExplorationMode::PureRandom;
+    }
+
     let coverage_ratio = state.coverage_ratio(strategy_type);
     let has_winners = state.has_winners(strategy_type);
 
-    // Adaptive probabilities based on coverage
+    // NEW: More aggressive exploration probabilities
+    // Reduced exploitation, increased random/coverage at all stages
     // Format: (local, exploit, random, coverage)
     let (local, exploit, random, coverage) = if coverage_ratio < 0.3 {
-        // Early exploration: prioritize random + coverage
-        (0.20, 0.10, 0.35, 0.35)
+        // Early exploration: heavy random + coverage
+        (0.15, 0.05, 0.40, 0.40)
     } else if coverage_ratio < 0.6 {
-        // Mid exploration: balanced
-        (0.25, 0.25, 0.25, 0.25)
+        // Mid exploration: still favor exploration over exploitation
+        (0.20, 0.15, 0.35, 0.30)
     } else {
-        // Late exploration: focus on exploitation + gaps
-        (0.30, 0.35, 0.15, 0.20)
+        // Late exploration: still maintain significant random component
+        // OLD: (0.30, 0.35, 0.15, 0.20) - too much exploitation!
+        // NEW: Balance exploitation with continued exploration
+        (0.20, 0.25, 0.30, 0.25)
     };
 
-    // If no winners, redistribute exploit probability
+    // If no winners, redistribute exploit probability to random
     let (local, exploit, random, _coverage) = if !has_winners {
-        (local + exploit / 2.0, 0.0, random + exploit / 2.0, coverage)
+        (local, 0.0, random + exploit, coverage)
     } else {
         (local, exploit, random, coverage)
     };

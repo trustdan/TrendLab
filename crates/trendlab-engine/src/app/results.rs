@@ -60,6 +60,10 @@ pub struct ResultsState {
     pub analysis_cache: HashMap<String, StatisticalAnalysis>,
     /// Whether analysis panel is visible
     pub show_analysis: bool,
+    /// Scroll offset for results list
+    pub scroll_offset: usize,
+    /// Scroll offset for leaderboard view
+    pub leaderboard_scroll_offset: usize,
 }
 
 impl ResultsState {
@@ -114,6 +118,20 @@ impl ResultsState {
         };
         self.selected_ticker_index = 0;
         self.selected_leaderboard_index = 0;
+    }
+
+    /// Move leaderboard selection up
+    pub fn leaderboard_up(&mut self) {
+        if self.selected_leaderboard_index > 0 {
+            self.selected_leaderboard_index -= 1;
+        }
+    }
+
+    /// Move leaderboard selection down
+    pub fn leaderboard_down(&mut self, max_index: usize) {
+        if self.selected_leaderboard_index < max_index {
+            self.selected_leaderboard_index += 1;
+        }
     }
 
     /// Get the current view mode name

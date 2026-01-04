@@ -213,22 +213,36 @@ Sweep Depths:
 
 YOLO Mode (press 'y'):
 Opens configuration modal for custom date ranges, randomization percentage,
-and sweep depth. Useful for stress-testing strategies across different
-time periods.
+sweep depth, and warmup iterations. Useful for stress-testing strategies
+across different time periods.
 
-YOLO Auto-Fetch:
-When you select a date range (e.g., 30 years), YOLO mode automatically:
-- Checks each symbol's cached data coverage
-- Fetches missing data from Yahoo Finance if needed
-- Shows progress during data refresh phase
-This ensures backtests use the full requested date range.
+YOLO Config Modal Settings:
+- Start/End Date: Backtest period (auto-fetches missing data)
+- Randomization %: Parameter jitter strength (default 30%)
+- WF Sharpe Threshold: Min Sharpe for walk-forward validation (0.25)
+- Sweep Depth: Quick/Standard/Comprehensive grid density
+- Polars/Outer Threads: Parallelism caps (auto = system default)
+- Warmup Iters: Iterations before winner exploitation (default 50)
+
+Warmup Period:
+During warmup (first N iterations), YOLO focuses on exploration:
+- No ExploitWinner mode - only MaximizeCoverage, PureRandom, LocalJitter
+- 2.5x wider jitter for broader parameter space coverage
+- Coverage and leaderboard updates happen every iteration
+
+After warmup, ExploitWinner mode unlocks (5-25% chance):
+- Picks a random winner from the top 5 leaderboard entries
+- Centers the grid on that winner's exact parameters
+- Applies tight 50% jitter around the winning config
+
+This ensures statistical significance before exploiting early winners.
 
 Artifact Auto-Export:
 When YOLO discovers a new top cross-symbol config, it auto-exports a
 StrategyArtifact JSON to artifacts/exports/{session}/. These artifacts
 contain everything needed to generate Pine Scripts via /pine:generate.
 
-Results are automatically sorted by Sharpe ratio and displayed in the
+Results are automatically sorted by weighted score and displayed in the
 Results panel when the sweep completes.
 "#,
 };
@@ -377,7 +391,7 @@ const FEATURES_HELP: HelpContent = HelpContent {
         },
         HelpEntry {
             key: "YOLO Mode",
-            description: "Custom date range sweeps with randomization",
+            description: "Adaptive exploration with warmup + winner exploitation",
         },
         HelpEntry {
             key: "Statistical Analysis",
@@ -403,11 +417,16 @@ Apply weighted scoring to rank results by your trading style:
 - Sharpe-focused: 1.5x Sharpe, 0.5x Sortino, 0.2x MaxDD, 0.1x WinRate, 0.1x CAGR
 
 YOLO MODE
-Stress-test strategies with custom parameters:
-- Set specific date ranges for backtesting (e.g., 30 years)
-- Auto-fetches missing data from Yahoo Finance to cover full date range
-- Add randomization (±X%) to date boundaries
-- Choose sweep depth independently
+Adaptive strategy discovery with intelligent exploration:
+- Warmup Period (default 50 iters): Pure exploration, no winner exploitation
+  - Higher probability of MaximizeCoverage and PureRandom modes
+  - 2.5x wider jitter for broader parameter space coverage
+- Post-Warmup: Adaptive mode based on coverage metrics
+  - ExploitWinner: Picks top configs from leaderboard, jitters around them
+  - MaximizeCoverage: Targets unexplored parameter regions
+  - PureRandom: Random sampling for diversity
+  - LocalJitter: Small perturbations around current config
+- Auto-fetches missing data from Yahoo Finance
 - Auto-exports StrategyArtifact JSON for top cross-symbol performers
 
 STATISTICAL ANALYSIS

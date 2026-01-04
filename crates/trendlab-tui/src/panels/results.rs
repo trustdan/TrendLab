@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Cell, Paragraph, Row, Table, Wrap},
+    widgets::{Cell, Paragraph, Row, Table, TableState, Wrap},
     Frame,
 };
 
@@ -15,7 +15,7 @@ use trendlab_engine::app::{App, Panel, ResultsViewMode};
 /// Sector statistics: (sector_name, hit_rate_percentage)
 type SectorStats = Vec<(String, f64)>;
 
-pub fn draw(f: &mut Frame, app: &App, area: Rect) {
+pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     // Split for table and help text
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -177,11 +177,21 @@ fn draw_single_symbol_table(f: &mut Frame, app: &App, area: Rect, is_active: boo
         Cell::from("Win %").style(header_style),
     ]);
 
+    // Calculate visible height (subtract 3 for borders + header)
+    let visible_height = area.height.saturating_sub(3) as usize;
+    let total_results = app.results.results.len();
+
+    // Clamp scroll offset to valid range
+    let max_scroll = total_results.saturating_sub(visible_height);
+    let scroll_offset = app.results.scroll_offset.min(max_scroll);
+
     let rows: Vec<Row> = app
         .results
         .results
         .iter()
         .enumerate()
+        .skip(scroll_offset)
+        .take(visible_height)
         .map(|(i, result)| {
             let is_selected = i == app.results.selected_index;
             let base_style = if is_selected && is_active {
@@ -246,7 +256,12 @@ fn draw_single_symbol_table(f: &mut Frame, app: &App, area: Rect, is_active: boo
         Constraint::Length(6),
     ];
 
-    let title = format!("Results ({} configs)", app.results.results.len());
+    let scroll_indicator = if max_scroll > 0 {
+        format!(" [{}/{}]", scroll_offset + 1, total_results)
+    } else {
+        String::new()
+    };
+    let title = format!("Results ({} configs){}", total_results, scroll_indicator);
     let table = Table::new(rows, widths)
         .header(header)
         .block(panel_block(&title, is_active))
@@ -552,7 +567,7 @@ fn draw_aggregated_view(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
 /// Draw YOLO leaderboard table (cross-symbol aggregated results)
 fn draw_leaderboard_table(
     f: &mut Frame,
-    app: &App,
+    app: &mut App,
     area: Rect,
     is_active: bool,
     show_inline_expansion: bool,
@@ -881,9 +896,17 @@ fn draw_leaderboard_table(
 
     let table = Table::new(rows, widths)
         .header(header)
-        .block(panel_block(&title, is_active));
+        .block(panel_block(&title, is_active))
+        .row_highlight_style(
+            Style::default()
+                .fg(colors::BLUE)
+                .add_modifier(Modifier::BOLD),
+        );
 
-    f.render_widget(table, area);
+    // Create local TableState with current selection for proper scrolling
+    let mut table_state = TableState::default();
+    table_state.select(Some(app.results.selected_leaderboard_index));
+    f.render_stateful_widget(table, area, &mut table_state);
 }
 
 fn draw_leaderboard_details(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
@@ -1090,7 +1113,7 @@ fn compute_sector_stats(
 }
 
 /// Draw empty leaderboard state
-fn draw_empty_leaderboard(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
+fn draw_empty_leaderboard(f: &mut Frame, app: &mut App, area: Rect, is_active: bool) {
     let scope_label = app.yolo.view_scope.display_name();
     let lines = vec![
         Line::from(""),
@@ -1122,7 +1145,7 @@ fn draw_empty_leaderboard(f: &mut Frame, app: &App, area: Rect, is_active: bool)
 }
 
 /// Draw per-symbol leaderboard (fallback when no cross-symbol data)
-fn draw_per_symbol_leaderboard(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
+fn draw_per_symbol_leaderboard(f: &mut Frame, app: &mut App, area: Rect, is_active: bool) {
     let leaderboard = app.yolo.leaderboard();
 
     let header_style = Style::default()
@@ -1203,9 +1226,17 @@ fn draw_per_symbol_leaderboard(f: &mut Frame, app: &App, area: Rect, is_active: 
     );
     let table = Table::new(rows, widths)
         .header(header)
-        .block(panel_block(&title, is_active));
+        .block(panel_block(&title, is_active))
+        .row_highlight_style(
+            Style::default()
+                .fg(colors::BLUE)
+                .add_modifier(Modifier::BOLD),
+        );
 
-    f.render_widget(table, area);
+    // Create local TableState with current selection for proper scrolling
+    let mut table_state = TableState::default();
+    table_state.select(Some(app.results.selected_leaderboard_index));
+    f.render_stateful_widget(table, area, &mut table_state);
 }
 
 /// Truncate a config string to fit in limited space

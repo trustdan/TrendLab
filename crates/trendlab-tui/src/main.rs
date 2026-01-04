@@ -509,17 +509,15 @@ fn handle_search_key(app: &mut App, code: KeyCode, channels: &WorkerChannels) ->
             if let Some(suggestion) = app.data.search_suggestions.get(app.data.search_selected) {
                 let symbol = suggestion.symbol.clone();
 
-                // Add to symbols list if not present
+                // Add to selected_tickers for multi-ticker sweeps
+                app.data.selected_tickers.insert(symbol.clone());
+
+                // Also add to symbols list for compatibility
                 if !app.data.symbols.contains(&symbol) {
                     app.data.symbols.push(symbol.clone());
                 }
 
-                // Select it
-                if let Some(idx) = app.data.symbols.iter().position(|s| s == &symbol) {
-                    app.data.selected_index = idx;
-                }
-
-                app.status_message = format!("Added {}", symbol);
+                app.status_message = format!("Added {} to selection", symbol);
             }
 
             // Exit search mode
@@ -788,6 +786,11 @@ fn handle_yolo_config_key(app: &mut App, code: KeyCode, channels: &WorkerChannel
                         _ => None,
                     };
                 }
+                YoloConfigField::WarmupIterations => {
+                    // Decrease by 5 (minimum 0)
+                    app.yolo.config.warmup_iterations =
+                        app.yolo.config.warmup_iterations.saturating_sub(5);
+                }
             }
             KeyResult::Continue
         }
@@ -847,6 +850,11 @@ fn handle_yolo_config_key(app: &mut App, code: KeyCode, channels: &WorkerChannel
                     let base = app.yolo.config.outer_threads.unwrap_or(8);
                     app.yolo.config.outer_threads = Some((base + 1).min(max_threads));
                 }
+                YoloConfigField::WarmupIterations => {
+                    // Increase by 5 (maximum 200)
+                    app.yolo.config.warmup_iterations =
+                        (app.yolo.config.warmup_iterations + 5).min(200);
+                }
             }
             KeyResult::Continue
         }
@@ -858,6 +866,7 @@ fn handle_yolo_config_key(app: &mut App, code: KeyCode, channels: &WorkerChannel
             app.yolo.wf_sharpe_threshold = app.yolo.config.wf_sharpe_threshold;
             app.yolo.polars_max_threads = app.yolo.config.polars_max_threads;
             app.yolo.outer_threads = app.yolo.config.outer_threads;
+            app.yolo.warmup_iterations = app.yolo.config.warmup_iterations;
             app.yolo.show_config = false;
             app.start_yolo_mode(channels);
             KeyResult::Continue

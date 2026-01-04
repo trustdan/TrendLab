@@ -42,7 +42,7 @@ pub mod colors {
 }
 
 /// Draw the main UI
-pub fn draw(f: &mut Frame, app: &App) {
+pub fn draw(f: &mut Frame, app: &mut App) {
     // Main layout: tabs at top, content in middle, status at bottom
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -585,6 +585,25 @@ fn draw_yolo_config_modal(f: &mut Frame, app: &App) {
         Span::styled(outer_marker, outer_style),
         Span::styled("Outer threads: ", Style::default().fg(colors::FG_DARK)),
         Span::styled(format!(" {}", outer_value), outer_style),
+    ]));
+
+    // Warmup iterations
+    let warmup_style = if focused == YoloConfigField::WarmupIterations {
+        Style::default()
+            .fg(colors::GREEN)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(colors::FG)
+    };
+    let warmup_marker = if focused == YoloConfigField::WarmupIterations {
+        "▶ "
+    } else {
+        "  "
+    };
+    lines.push(Line::from(vec![
+        Span::styled(warmup_marker, warmup_style),
+        Span::styled("Warmup iters:  ", Style::default().fg(colors::FG_DARK)),
+        Span::styled(format!("{}", config.warmup_iterations), warmup_style),
     ]));
 
     lines.push(Line::from(""));

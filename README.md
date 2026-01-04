@@ -688,12 +688,14 @@ YOLO Mode is TrendLab's autonomous strategy discovery engine. It continuously ex
 ### How It Works
 
 1. **Smart Data Fetching**: Automatically checks cached data coverage and fetches missing historical data from Yahoo Finance to match your requested date range
-2. **Random Exploration**: Samples strategy configurations with configurable randomization (default 15%)
-3. **Parallel Execution**: Runs backtests across all selected tickers simultaneously
-4. **Leaderboard Ranking**: Maintains top N configurations ranked by Sharpe ratio
-5. **Cross-Symbol Aggregation**: Identifies configs that work across multiple symbols
-6. **Artifact Auto-Export**: Automatically exports StrategyArtifact JSON for new top performers
-7. **Session Persistence**: Results persist across sessions for long-running research
+2. **Warmup Period**: First N iterations (default 50) focus on exploration without winner exploitation, building coverage across the parameter space
+3. **Adaptive Exploration**: After warmup, switches between exploration modes based on coverage: MaximizeCoverage, PureRandom, LocalJitter, and ExploitWinner
+4. **True Winner Exploitation**: Post-warmup, ExploitWinner mode selects top configs from the leaderboard and jitters around their exact parameters
+5. **Parallel Execution**: Runs backtests across all selected tickers simultaneously
+6. **Leaderboard Ranking**: Maintains top N configurations ranked by weighted score (risk profile dependent)
+7. **Cross-Symbol Aggregation**: Identifies configs that work across multiple symbols
+8. **Artifact Auto-Export**: Automatically exports StrategyArtifact JSON for new top performers
+9. **Session Persistence**: Results persist across sessions for long-running research
 
 ### Automatic Data Refresh
 
@@ -768,6 +770,22 @@ TrendLab uses different evidence depending on what data is available:
 | ○ (orange) | Low | CI includes 0, wide CI, or robustness guardrails fail |
 | ? (gray) | Insufficient | Not enough samples (e.g., too few days / symbols / sectors) |
 
+### Warmup Period
+
+During the warmup period (configurable, default 50 iterations):
+
+- **No winner exploitation**: Only exploration modes (MaximizeCoverage, PureRandom, LocalJitter)
+- **Wider jitter**: 2.5× wider parameter perturbations for broader coverage
+- **Building knowledge**: Coverage tracking and leaderboard updates happen every iteration
+
+After warmup completes:
+
+- **ExploitWinner unlocks**: 5-25% chance per iteration (based on coverage)
+- **True exploitation**: Picks a winning config from the top 5 leaderboard entries
+- **Focused jitter**: Tight 50% jitter around the winner's exact parameters
+
+This ensures statistically meaningful data before exploiting early winners.
+
 ### TUI Controls
 
 | Key | Action |
@@ -776,6 +794,23 @@ TrendLab uses different evidence depending on what data is available:
 | `t` | Toggle Session/All-Time view |
 | `↑/↓` | Navigate leaderboard entries |
 | `Enter` | View selected config in Chart panel |
+
+### YOLO Config Modal
+
+Press `y` to open the configuration modal with these settings:
+
+| Setting             | Range                        | Default      | Description                            |
+|---------------------|------------------------------|--------------|----------------------------------------|
+| Start Date          | Any                          | 5 years ago  | Backtest start date                    |
+| End Date            | Any                          | Today        | Backtest end date                      |
+| Randomization       | 0-100%                       | 30%          | Parameter jitter strength              |
+| WF Sharpe Threshold | 0.15-0.50                    | 0.25         | Min Sharpe for walk-forward validation |
+| Sweep Depth         | Quick/Standard/Comprehensive | Quick        | Parameter grid density                 |
+| Polars Threads      | auto/1-64                    | auto         | Per-backtest thread cap                |
+| Outer Threads       | auto/1-64                    | auto         | Symbol-level parallelism cap           |
+| Warmup Iters        | 0-200                        | 50           | Iterations before winner exploitation  |
+
+Use `↑/↓` to navigate fields, `←/→` to adjust values, `Enter` to start.
 
 ## Daily Signal Scanner
 
