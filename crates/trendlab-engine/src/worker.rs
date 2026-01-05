@@ -1923,8 +1923,14 @@ async fn handle_yolo_mode(
     // Initialize or continue leaderboards
     let had_existing_per_symbol = existing_per_symbol_leaderboard.is_some();
     let had_existing_cross_symbol = existing_cross_symbol_leaderboard.is_some();
-    let existing_per_symbol_count = existing_per_symbol_leaderboard.as_ref().map(|lb| lb.entries.len()).unwrap_or(0);
-    let existing_cross_symbol_count = existing_cross_symbol_leaderboard.as_ref().map(|lb| lb.entries.len()).unwrap_or(0);
+    let existing_per_symbol_count = existing_per_symbol_leaderboard
+        .as_ref()
+        .map(|lb| lb.entries.len())
+        .unwrap_or(0);
+    let existing_cross_symbol_count = existing_cross_symbol_leaderboard
+        .as_ref()
+        .map(|lb| lb.entries.len())
+        .unwrap_or(0);
 
     let mut per_symbol_leaderboard =
         existing_per_symbol_leaderboard.unwrap_or_else(|| Leaderboard::new(4));
@@ -2321,7 +2327,11 @@ async fn handle_yolo_mode(
         per_symbol_leaderboard.total_iterations = all_time_iteration;
         cross_symbol_leaderboard.total_iterations = all_time_iteration;
 
-        debug!(session_iteration = session_iteration, all_time_iteration = all_time_iteration, "Starting YOLO iteration");
+        debug!(
+            session_iteration = session_iteration,
+            all_time_iteration = all_time_iteration,
+            "Starting YOLO iteration"
+        );
 
         // 1. Select exploration mode based on coverage history
         // Uses exploration_config to force PureRandom every N iterations
@@ -2406,9 +2416,7 @@ async fn handle_yolo_mode(
             } else {
                 // All top winners are combos - we can't exploit them directly
                 // Fall back to base grid but mark as combo fallback for wider jitter
-                trace!(
-                    "ExploitWinner: top winners are all combos, using conservative exploration"
-                );
+                trace!("ExploitWinner: top winners are all combos, using conservative exploration");
                 (base_grid.clone(), true)
             }
         } else {
@@ -2466,7 +2474,10 @@ async fn handle_yolo_mode(
         // Generate combos if this is a combo iteration
         let combo_configs: Vec<StrategyConfigId> = match iteration_type {
             YoloIterationType::TwoWayCombo => {
-                debug!(iteration = session_iteration, "Running 2-way combo iteration");
+                debug!(
+                    iteration = session_iteration,
+                    "Running 2-way combo iteration"
+                );
                 generate_random_combos(
                     &enabled_strategies,
                     &jittered_grid,
@@ -2476,7 +2487,10 @@ async fn handle_yolo_mode(
                 )
             }
             YoloIterationType::ThreeWayCombo => {
-                debug!(iteration = session_iteration, "Running 3-way combo iteration");
+                debug!(
+                    iteration = session_iteration,
+                    "Running 3-way combo iteration"
+                );
                 generate_random_combos(
                     &enabled_strategies,
                     &jittered_grid,
@@ -2486,7 +2500,10 @@ async fn handle_yolo_mode(
                 )
             }
             YoloIterationType::FourWayCombo => {
-                debug!(iteration = session_iteration, "Running 4-way combo iteration");
+                debug!(
+                    iteration = session_iteration,
+                    "Running 4-way combo iteration"
+                );
                 generate_random_combos(
                     &enabled_strategies,
                     &jittered_grid,
@@ -2950,9 +2967,12 @@ async fn handle_yolo_mode(
             } else {
                 // Log to append-only history with date range
                 if let Some(ref mut logger) = history_logger {
-                    if let Err(e) =
-                        logger.log_with_dates(&aggregated_result, all_time_iteration, Some(start), Some(end))
-                    {
+                    if let Err(e) = logger.log_with_dates(
+                        &aggregated_result,
+                        all_time_iteration,
+                        Some(start),
+                        Some(end),
+                    ) {
                         trace!(error = %e, "Failed to write history entry");
                     }
                 }
@@ -2968,7 +2988,8 @@ async fn handle_yolo_mode(
             }
 
             // Try to insert into cross-symbol leaderboard
-            let inserted = yolo_try_insert_best_per_strategy(&mut cross_symbol_leaderboard, aggregated_result);
+            let inserted =
+                yolo_try_insert_best_per_strategy(&mut cross_symbol_leaderboard, aggregated_result);
             debug!(
                 inserted = inserted,
                 leaderboard_size = cross_symbol_leaderboard.entries.len(),
@@ -4397,7 +4418,9 @@ fn jitter_strategy_params_with_jump(
                 af_starts, pct, 0.005, 0.005, 0.20, jump_prob, rng,
             ),
             // WIDENED: [0.01,0.1] → [0.005,0.20] to match exploration bounds
-            af_steps: jitter_f64_bounded_with_jump(af_steps, pct, 0.005, 0.005, 0.20, jump_prob, rng),
+            af_steps: jitter_f64_bounded_with_jump(
+                af_steps, pct, 0.005, 0.005, 0.20, jump_prob, rng,
+            ),
             // WIDENED: [0.1,0.5] → [0.1,1.0] to match exploration bounds
             af_maxs: jitter_f64_bounded_with_jump(af_maxs, pct, 0.01, 0.1, 1.0, jump_prob, rng),
         },
@@ -4714,7 +4737,9 @@ fn auto_export_aggregate_artifact(
         .map_err(|e| format!("Failed to create artifact: {}", e))?;
 
     // Build output path
-    let output_dir = trendlab_core::artifacts_dir().join("exports").join(session_id);
+    let output_dir = trendlab_core::artifacts_dir()
+        .join("exports")
+        .join(session_id);
     let filename = format!("{}_{}", agg.strategy_type.id(), agg.config_id.file_id());
 
     // Export

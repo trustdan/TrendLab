@@ -450,7 +450,9 @@ impl App {
                 let all_time_cross_symbol = match CrossSymbolLeaderboard::load(&cross_symbol_path) {
                     Ok(lb) => {
                         // Log unique session IDs from loaded entries
-                        let sessions: std::collections::HashSet<_> = lb.entries.iter()
+                        let sessions: std::collections::HashSet<_> = lb
+                            .entries
+                            .iter()
                             .filter_map(|e| e.session_id.as_ref())
                             .collect();
                         tracing::info!(
@@ -2189,12 +2191,19 @@ impl App {
         // or returns different data (race condition, file corruption, etc.).
         tracing::info!(
             per_symbol_entries = self.yolo.all_time_leaderboard.entries.len(),
-            cross_symbol_entries = self.yolo.all_time_cross_symbol_leaderboard.as_ref().map(|lb| lb.entries.len()).unwrap_or(0),
+            cross_symbol_entries = self
+                .yolo
+                .all_time_cross_symbol_leaderboard
+                .as_ref()
+                .map(|lb| lb.entries.len())
+                .unwrap_or(0),
             "YOLO start: using already-loaded all-time leaderboards"
         );
 
-        let existing_per_symbol_leaderboard = Box::new(Some(self.yolo.all_time_leaderboard.clone()));
-        let existing_cross_symbol_leaderboard = Box::new(self.yolo.all_time_cross_symbol_leaderboard.clone());
+        let existing_per_symbol_leaderboard =
+            Box::new(Some(self.yolo.all_time_leaderboard.clone()));
+        let existing_cross_symbol_leaderboard =
+            Box::new(self.yolo.all_time_cross_symbol_leaderboard.clone());
 
         // Provide symbol -> sector_id mapping so YOLO can do sector-aware validation.
         let sector_lookup = self.data.universe.build_sector_id_lookup();

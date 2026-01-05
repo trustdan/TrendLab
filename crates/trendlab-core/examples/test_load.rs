@@ -7,8 +7,14 @@ fn main() {
         println!("Current exe: {:?}", exe);
         if let Some(parent) = exe.parent() {
             println!("Parent dir: {:?}", parent);
-            println!("Parent ends_with 'release': {}", parent.ends_with("release"));
-            println!("Parent ends_with 'examples': {}", parent.ends_with("examples"));
+            println!(
+                "Parent ends_with 'release': {}",
+                parent.ends_with("release")
+            );
+            println!(
+                "Parent ends_with 'examples': {}",
+                parent.ends_with("examples")
+            );
         }
     }
 
@@ -22,7 +28,10 @@ fn main() {
     let tui_parent = tui_exe.parent().unwrap();
     println!("\nTUI exe: {:?}", tui_exe);
     println!("TUI parent: {:?}", tui_parent);
-    println!("TUI parent ends_with 'release': {}", tui_parent.ends_with("release"));
+    println!(
+        "TUI parent ends_with 'release': {}",
+        tui_parent.ends_with("release")
+    );
 
     // Manually compute what artifacts_dir would return for TUI
     if tui_parent.ends_with("release") || tui_parent.ends_with("debug") {

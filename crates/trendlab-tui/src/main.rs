@@ -25,13 +25,13 @@ use trendlab_logging::LogConfig;
 mod panels;
 mod ui;
 
+use tracing::debug;
 use trendlab_engine::app::{
     App, AutoStage, ChartViewMode, OperationState, Panel, ResultsViewMode, SearchSuggestion,
     StartupMode, StrategyCurve, StrategyFocus, StrategySelection, StrategyType, TickerBestStrategy,
     TickerCurve, WinningConfig, YoloConfigField,
 };
 use trendlab_engine::worker::{spawn_worker, WorkerChannels, WorkerCommand, WorkerUpdate};
-use tracing::debug;
 
 fn main() -> Result<()> {
     // Initialize logging from environment (set by launcher)

@@ -70,7 +70,6 @@ pub struct Metrics {
     pub avg_losing_streak: f64,
 }
 
-
 /// Compute all metrics from a BacktestResult.
 pub fn compute_metrics(result: &BacktestResult, initial_cash: f64) -> Metrics {
     if result.equity.is_empty() {
