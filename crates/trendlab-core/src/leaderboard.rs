@@ -2509,6 +2509,7 @@ mod tests {
             dates: vec![],
             discovered_at: Utc::now(),
             iteration,
+            session_iteration: None,
             session_id: None,
             confidence_grade: None,
             // Walk-forward / FDR fields (None for basic tests)
@@ -2664,6 +2665,7 @@ mod tests {
             dates: vec![],
             discovered_at: Utc::now(),
             iteration: 1,
+            session_iteration: None,
             session_id: None,
             confidence_grade: Some(ConfidenceGrade::High),
             // Walk-forward fields

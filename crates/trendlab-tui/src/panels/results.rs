@@ -1267,15 +1267,6 @@ fn draw_per_symbol_leaderboard(f: &mut Frame, app: &mut App, area: Rect, is_acti
     f.render_stateful_widget(table, area, &mut table_state);
 }
 
-/// Truncate a config string to fit in limited space
-fn truncate_config(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len - 3])
-    }
-}
-
 /// Create a detail row with 11 cells (matching leaderboard column count).
 /// Spreads content across multiple columns to have enough display width.
 fn detail_row(text: String, style: Style) -> Row<'static> {
