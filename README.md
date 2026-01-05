@@ -26,7 +26,7 @@ The project optimizes for:
 
 ## Quick Links
 
-[Quick Start](#quick-start) | [Zero to Backtest](#zero-to-first-backtest-5-minutes) | [TUI Guide](#tui-features) | [Help Panel](#help-panel-6-or-) | [Desktop GUI](#desktop-gui) | [YOLO Mode](#yolo-mode) | [Daily Signal Scanner](#daily-signal-scanner) | [Statistical Rigor](#statistical-rigor) | [Risk Profiles](#risk-profiles) | [Strategies](#strategies) | [CLI Commands](#cli-commands) | [Contributing](#contributing)
+[Quick Start](#quick-start) | [Zero to Backtest](#zero-to-first-backtest-5-minutes) | [TUI Guide](#tui-features) | [Help Panel](#help-panel-6-or-) | [Desktop GUI](#desktop-gui) | [YOLO Mode](#yolo-mode) | [Daily Signal Scanner](#daily-signal-scanner) | [GPU Mega-Sweep](#gpu-mega-sweep) | [Statistical Rigor](#statistical-rigor) | [Risk Profiles](#risk-profiles) | [Strategies](#strategies) | [CLI Commands](#cli-commands) | [Contributing](#contributing)
 
 ## Ethos (what we care about)
 
@@ -691,11 +691,12 @@ YOLO Mode is TrendLab's autonomous strategy discovery engine. It continuously ex
 2. **Warmup Period**: First N iterations (default 50) focus on exploration without winner exploitation, building coverage across the parameter space
 3. **Adaptive Exploration**: After warmup, switches between exploration modes based on coverage: MaximizeCoverage, PureRandom, LocalJitter, and ExploitWinner
 4. **True Winner Exploitation**: Post-warmup, ExploitWinner mode selects top configs from the leaderboard and jitters around their exact parameters
-5. **Parallel Execution**: Runs backtests across all selected tickers simultaneously
-6. **Leaderboard Ranking**: Maintains top N configurations ranked by weighted score (risk profile dependent)
-7. **Cross-Symbol Aggregation**: Identifies configs that work across multiple symbols
-8. **Artifact Auto-Export**: Automatically exports StrategyArtifact JSON for new top performers
-9. **Session Persistence**: Results persist across sessions for long-running research
+5. **Combo Strategy Iterations**: Alternates between single strategies and combo/ensemble strategies to discover synergistic combinations
+6. **Parallel Execution**: Runs backtests across all selected tickers simultaneously
+7. **Leaderboard Ranking**: Maintains top N configurations ranked by weighted score (risk profile dependent)
+8. **Cross-Symbol Aggregation**: Identifies configs that work across multiple symbols
+9. **Artifact Auto-Export**: Automatically exports StrategyArtifact JSON for new top performers
+10. **Session Persistence**: Results persist across sessions for long-running research
 
 ### Automatic Data Refresh
 
@@ -708,6 +709,208 @@ When you select a date range (e.g., 30 years), YOLO mode:
 - Proceeds with sweeps once all data is available
 
 This ensures your backtests always use the full historical range you requested, not just whatever was previously cached.
+
+## GPU Mega-Sweep
+
+GPU Mega-Sweep is a Python side-quest tool that mirrors TrendLab's Rust abstractions but runs on GPU via cuPy. It's designed for massive parameter sweeps (100k+ configs) with potential 5-10x speedup on modern GPUs.
+
+### Quick Start (GPU)
+
+```bash
+# Install dependencies (requires CUDA 12.x)
+pip install -r scripts/gpu_sweep/requirements-gpu.txt
+
+# Set PYTHONPATH (required for module resolution)
+export PYTHONPATH="$PWD/scripts"  # Linux/Mac
+$env:PYTHONPATH = "$PWD\scripts"  # PowerShell
+
+# Check GPU is detected
+python -m gpu_sweep gpu-info
+
+# Run from YAML config (recommended)
+python -m gpu_sweep run --config configs/gpu_mega_sweep.yaml
+
+# Dry run to see config count
+python -m gpu_sweep run --config configs/gpu_mega_sweep.yaml --dry-run
+
+# Quick single-strategy test
+python -m gpu_sweep run \
+  --data-dir data/parquet \
+  --symbols SPY,QQQ,AAPL \
+  --strategy ma_crossover \
+  --output results/gpu_sweep.parquet
+```
+
+**Windows (recommended):** Use the setup script for automatic venv and PYTHONPATH:
+
+```powershell
+# First time setup
+powershell -ExecutionPolicy Bypass -File scripts\gpu_sweep\setup_and_run.ps1 -SetupOnly
+
+# Run with config
+powershell -ExecutionPolicy Bypass -File scripts\gpu_sweep\setup_and_run.ps1 -Config configs\gpu_mega_sweep.yaml
+
+# Or use the batch file (after setup)
+.\gpu-sweep.bat run --config configs\gpu_mega_sweep.yaml --dry-run
+```
+
+### Requirements
+
+| Requirement | Version | Notes |
+|-------------|---------|-------|
+| **Python** | 3.10+ | Type hints used throughout |
+| **CUDA** | 12.x | RTX 30/40/50 series GPUs |
+| **cuPy** | 13.0+ | `cupy-cuda12x` package |
+| **Polars** | 0.20+ | Data loading (CPU) |
+| **VRAM** | 8GB+ | 16GB recommended for large sweeps |
+
+### Package Structure
+
+```
+scripts/gpu_sweep/
+├── __init__.py          # Package exports
+├── __main__.py          # Entry point for python -m
+├── cli.py               # Click CLI interface
+├── config.py            # Config dataclasses (mirrors Rust)
+├── data.py              # Polars parquet loading
+├── indicators.py        # GPU indicator computation (cuPy)
+├── position_scan.py     # Parallel prefix scan for positions
+├── metrics.py           # GPU metrics (exact Rust parity)
+├── engine.py            # Sweep orchestration with batching
+├── results.py           # Result aggregation & analysis
+└── strategies/
+    ├── __init__.py
+    └── base.py          # Strategy ABC (mirrors StrategyV2)
+```
+
+### Supported Strategies
+
+All 16 TrendLab strategy families are supported:
+
+| Category | Strategies |
+|----------|------------|
+| **Breakout** | Donchian |
+| **Moving Average** | MA Crossover |
+| **Momentum** | TSMOM |
+| **Volatility** | Supertrend, Keltner, STARC, Bollinger |
+| **Price Structure** | 52-Week High, Parabolic SAR |
+| **Directional** | DMI/ADX, Aroon |
+| **Oscillators** | RSI, MACD, Stochastic |
+
+### YAML Configuration
+
+```yaml
+# configs/gpu_mega_sweep.yaml
+data:
+  base_dir: data/parquet
+  timeframe: 1d
+  start_date: 2015-01-01
+  end_date: 2024-12-31
+
+symbols:
+  - SPY
+  - QQQ
+  - AAPL
+  # Or: file: configs/sp500_symbols.txt
+
+backtest:
+  initial_cash: 100000
+  fees_bps: 10      # 10 basis points per side
+  qty_per_trade: 100
+
+strategies:
+  donchian:
+    enabled: true
+    entry_lookbacks: [10, 20, 30, 40, 55, 89]
+    exit_lookbacks: [5, 10, 15, 20, 25]
+
+  ma_crossover:
+    enabled: true
+    fast_periods: [5, 10, 20, 50]
+    slow_periods: [20, 50, 100, 200]
+    ma_types: [sma, ema]
+
+  supertrend:
+    enabled: true
+    atr_periods: [7, 10, 14, 20]
+    multipliers: [2.0, 2.5, 3.0, 3.5]
+
+output:
+  dir: results/gpu_sweeps
+  format: parquet
+```
+
+### Memory Batching
+
+GPU Mega-Sweep automatically batches configs based on available VRAM:
+
+```
+Per config memory (500 symbols x 2500 bars):
+  OHLCV (f32x5):     25 MB
+  Indicators (f32x4): 20 MB
+  Signals (bool x2):  2.5 MB
+  Position (i8):      1.25 MB
+  Equity (f32):       5 MB
+  Total:             ~54 MB per config layer
+
+With 12 GB usable VRAM: ~220 configs per batch
+100,000 configs = ~450 batches (automatic)
+```
+
+### Metrics Parity
+
+All metrics match Rust `trendlab-core` exactly (within 1e-6):
+
+| Metric | Formula | Notes |
+|--------|---------|-------|
+| **Sharpe** | (mean_ret × 252) / (std × sqrt(252)) | Annualized, 252 trading days |
+| **Sortino** | (mean_ret × 252) / (downside_std × sqrt(252)) | Only negative returns in denominator |
+| **CAGR** | (final / initial)^(1/years) - 1 | Compound annual growth |
+| **Max Drawdown** | max((peak - equity) / peak) | Running peak tracking |
+| **Calmar** | CAGR / max_drawdown | Return-to-risk ratio |
+| **Profit Factor** | gross_profit / gross_loss | Win/loss magnitude ratio |
+| **Win Rate** | winning_trades / total_trades | Trade-level success rate |
+
+### Result Analysis
+
+```python
+from gpu_sweep import load_results, filter_results, strategy_summary
+
+# Load results
+df = load_results("results/gpu_sweep.parquet")
+
+# Filter by thresholds
+filtered = filter_results(df, min_sharpe=0.5, max_drawdown=0.2)
+
+# Strategy comparison
+summary = strategy_summary(df)
+print(summary)
+
+# Robustness analysis (cross-symbol consistency)
+from gpu_sweep import robustness_analysis
+robust = robustness_analysis(df)
+```
+
+### Validation Mode
+
+Compare GPU results against Rust for parity verification:
+
+```bash
+python -m gpu_sweep \
+  --validate \
+  --rust-results reports/runs/sweep_123/results.parquet
+```
+
+### Why GPU?
+
+| Aspect | Rust (Rayon) | Python (cuPy) |
+|--------|--------------|---------------|
+| **100k configs** | ~10 min | ~2 min (5x faster) |
+| **Memory** | CPU RAM limited | VRAM batched |
+| **Parallelism** | Thread-level | SIMD-level (thousands of cores) |
+| **Best for** | Daily use | Massive research sweeps |
+
+The GPU version is a research tool for exploring large parameter spaces quickly. Results can be validated against Rust and imported back into TrendLab.
 
 ### Artifact Auto-Export
 
@@ -785,6 +988,81 @@ After warmup completes:
 - **Focused jitter**: Tight 50% jitter around the winner's exact parameters
 
 This ensures statistically meaningful data before exploiting early winners.
+
+### Parameter Space Exploration
+
+YOLO mode uses aligned jitter bounds that match the exploration module's parameter ranges. This ensures full coverage of the parameter space rather than biased sampling around default values.
+
+**Strategy Parameter Bounds:**
+
+| Strategy | Parameter | Exploration Range | Notes |
+|----------|-----------|-------------------|-------|
+| Supertrend | atr_period | 3-100 | Wide range for regime detection |
+| Supertrend | multiplier | 0.5-10.0 | From tight to loose trailing stops |
+| 52-Week High | period | 20-1000 | From monthly to multi-year highs |
+| 52-Week High | entry_pct | 0.50-1.0 | Entry threshold (% of high) |
+| 52-Week High | exit_pct | 0.30-0.99 | Exit threshold (% of high) |
+| Keltner/STARC | ema/sma_period | 3-200 | Short to long-term trend |
+| Keltner/STARC | atr_period | 3-100 | Volatility measurement window |
+| Keltner/STARC | multiplier | 0.3-8.0 | Channel width |
+| Donchian | entry_lookback | 5-500 | Breakout detection window |
+| Donchian | exit_lookback | 2-200 | Exit channel window |
+| MA Crossover | fast_period | 3-200 | Fast MA period |
+| MA Crossover | slow_period | 10-1000 | Slow MA period |
+| Parabolic SAR | af_start/step | 0.005-0.20 | Acceleration factor |
+| Parabolic SAR | af_max | 0.1-1.0 | Maximum acceleration |
+| LarryWilliams | multipliers | 0.3-8.0 | Range/ATR multipliers |
+| Bollinger Squeeze | std_mult | 0.5-6.0 | Standard deviation bands |
+
+These wide bounds enable discovery of unconventional but potentially profitable configurations that wouldn't be found with narrow parameter ranges.
+
+### Combo Strategy Iterations
+
+YOLO mode automatically tests ensemble/combo strategies alongside single strategies:
+
+| Iteration | Type | Description |
+|-----------|------|-------------|
+| Odd (1, 3, 5...) | Single | Individual strategy configurations |
+| Even (2, 4, 8, 10...) | 2-Way Combo | Two strategies must confirm each other |
+| Every 6th (6, 12, 18...) | 3-Way Combo | Three strategies must confirm each other |
+| Every 20th (20, 40, 60...) | 4-Way Combo | Four strategies must confirm each other |
+
+**Combo Generation:**
+
+- Each combo iteration generates **1 random combo** (fast iterations)
+- Components are randomly selected from enabled strategies
+- Each component gets random parameters from the jittered grid
+- Voting method is randomly chosen: Majority, UnanimousEntry, or WeightedByHorizon
+
+**Voting Methods:**
+
+| Method | Entry Rule | Exit Rule |
+|--------|------------|-----------|
+| **Majority** | >50% of strategies signal entry | >50% signal exit |
+| **UnanimousEntry** | All strategies must agree to enter | Any can trigger exit |
+| **WeightedByHorizon** | Longer lookbacks weighted more heavily | Same weighted logic |
+
+**Mixed Competition:**
+
+Combos compete directly with single strategies for leaderboard slots. This helps discover:
+
+- Synergistic strategy pairs that outperform individuals
+- Robust multi-confirmation setups with fewer false signals
+- Optimal voting methods for different market conditions
+
+**Example Iteration Pattern:**
+
+```text
+Iter 1:  Single strategies
+Iter 2:  2-way combo (e.g., Donchian+TSMOM)
+Iter 3:  Single strategies
+Iter 4:  2-way combo
+Iter 5:  Single strategies
+Iter 6:  3-way combo (e.g., MA+Donchian+52WkHigh)
+...
+Iter 20: 4-way combo (e.g., MA+Donchian+TSMOM+Supertrend)
+...
+```
 
 ### TUI Controls
 

@@ -14,21 +14,24 @@ use std::thread::{self, JoinHandle};
 use chrono::{NaiveDate, Utc};
 use std::collections::HashMap;
 use tracing::{debug, info, trace};
+
+use crate::app::ComboMode;
 use trendlab_core::{
-    bars_to_dataframe, build_exploration_state_from_history, build_yahoo_chart_url,
-    combine_equity_curves_simple, compute_analysis, create_artifact_from_config, dataframe_to_bars,
-    export_artifact_to_file, get_parquet_date_range, normalize_config, one_sided_mean_pvalue,
-    parse_yahoo_chart_json, run_donchian_sweep_polars, run_strategy_sweep_polars_cached,
+    bars_to_dataframe, build_exploration_state_from_history, build_tested_configs_index,
+    build_yahoo_chart_url, combine_equity_curves_simple, compute_analysis,
+    create_artifact_from_config, dataframe_to_bars, export_artifact_to_file,
+    get_parquet_date_range, normalize_config, one_sided_mean_pvalue, parse_yahoo_chart_json,
+    run_donchian_sweep_polars, run_strategy_sweep_polars_cached,
     run_strategy_sweep_polars_parallel, scan_symbol_parquet_lazy,
     select_exploration_mode_with_config, write_partitioned_parquet, AggregatedConfigResult,
     AggregatedMetrics, AggregatedPortfolioResult, AnalysisConfig, BacktestConfig, BacktestResult,
     Bar, CostModel, CrossSymbolLeaderboard, CrossSymbolRankMetric, DataQualityChecker,
     DataQualityReport, DonchianBacktestConfig, ExplorationConfig, ExplorationMode,
-    ExplorationState, HistoryLogger, IntoLazy,
-    Leaderboard, LeaderboardEntry, Metrics, MultiStrategyGrid, MultiStrategySweepResult,
-    MultiSweepResult, OpeningPeriod, PolarsBacktestConfig, RankMetric, StatisticalAnalysis,
-    StrategyBestResult, StrategyConfigId, StrategyGridConfig, StrategyParams, StrategyTypeId,
-    SweepConfigResult, SweepGrid, SweepResult, VotingMethod, WalkForwardConfig, WalkForwardResult,
+    ExplorationState, HistoryLogger, IntoLazy, Leaderboard, LeaderboardEntry, Metrics,
+    MultiStrategyGrid, MultiStrategySweepResult, MultiSweepResult, OpeningPeriod,
+    PolarsBacktestConfig, RankMetric, StatisticalAnalysis, StrategyBestResult, StrategyConfigId,
+    StrategyGridConfig, StrategyParams, StrategyTypeId, SweepConfigResult, SweepGrid, SweepResult,
+    TestedConfigsIndex, VotingMethod, WalkForwardConfig, WalkForwardResult,
 };
 
 /// Commands sent from TUI thread to worker thread.
@@ -150,6 +153,10 @@ pub enum WorkerCommand {
         outer_threads: Option<usize>,
         /// Number of warmup iterations before winner exploitation begins
         warmup_iterations: u32,
+        /// Number of warmup iterations before combo strategies are tested
+        combo_warmup_iterations: u32,
+        /// Combo strategy mode (None, 2-Way, 2+3-Way, All)
+        combo_mode: ComboMode,
     },
 }
 
@@ -329,6 +336,9 @@ pub enum WorkerUpdate {
         /// Per-symbol leaderboard (secondary)
         per_symbol_leaderboard: Leaderboard,
         configs_tested_this_round: usize,
+        /// All aggregated results created THIS iteration (for session tracking)
+        /// These bypass the top-N displacement and go directly to session leaderboard
+        session_results: Vec<AggregatedConfigResult>,
     },
     YoloProgress {
         iteration: u32,
@@ -527,6 +537,8 @@ fn worker_loop(
                 polars_max_threads,
                 outer_threads,
                 warmup_iterations,
+                combo_warmup_iterations,
+                combo_mode,
             } => {
                 rt.block_on(handle_yolo_mode(
                     &symbols,
@@ -543,6 +555,8 @@ fn worker_loop(
                     polars_max_threads,
                     outer_threads,
                     warmup_iterations,
+                    combo_warmup_iterations,
+                    combo_mode,
                     &update_tx,
                     &cancel_flag,
                 ));
@@ -1875,6 +1889,8 @@ async fn handle_yolo_mode(
     polars_max_threads: Option<usize>,
     outer_threads: Option<usize>,
     warmup_iterations: u32,
+    combo_warmup_iterations: u32,
+    combo_mode: ComboMode,
     update_tx: &Sender<WorkerUpdate>,
     cancel_flag: &Arc<AtomicBool>,
 ) {
@@ -1900,14 +1916,31 @@ async fn handle_yolo_mode(
     }
 
     let parquet_dir = Path::new("data/parquet");
-    let per_symbol_path = Path::new("artifacts/leaderboard.json");
-    let cross_symbol_path = Path::new("artifacts/cross_symbol_leaderboard.json");
+    let artifacts = trendlab_core::artifacts_dir();
+    let per_symbol_path = artifacts.join("leaderboard.json");
+    let cross_symbol_path = artifacts.join("cross_symbol_leaderboard.json");
 
     // Initialize or continue leaderboards
+    let had_existing_per_symbol = existing_per_symbol_leaderboard.is_some();
+    let had_existing_cross_symbol = existing_cross_symbol_leaderboard.is_some();
+    let existing_per_symbol_count = existing_per_symbol_leaderboard.as_ref().map(|lb| lb.entries.len()).unwrap_or(0);
+    let existing_cross_symbol_count = existing_cross_symbol_leaderboard.as_ref().map(|lb| lb.entries.len()).unwrap_or(0);
+
     let mut per_symbol_leaderboard =
         existing_per_symbol_leaderboard.unwrap_or_else(|| Leaderboard::new(4));
     let mut cross_symbol_leaderboard = existing_cross_symbol_leaderboard
         .unwrap_or_else(|| CrossSymbolLeaderboard::new(4, CrossSymbolRankMetric::AvgSharpe));
+
+    // Log what the worker is starting with
+    info!(
+        had_existing_per_symbol = had_existing_per_symbol,
+        had_existing_cross_symbol = had_existing_cross_symbol,
+        existing_per_symbol_count = existing_per_symbol_count,
+        existing_cross_symbol_count = existing_cross_symbol_count,
+        current_per_symbol_count = per_symbol_leaderboard.entries.len(),
+        current_cross_symbol_count = cross_symbol_leaderboard.entries.len(),
+        "YOLO worker: initializing leaderboards"
+    );
 
     // Always set the requested date range (overrides any previous range stored)
     cross_symbol_leaderboard.set_requested_range(start, end);
@@ -1916,8 +1949,9 @@ async fn handle_yolo_mode(
     let session_id_for_history = session_id
         .clone()
         .unwrap_or_else(trendlab_core::generate_session_id);
-    let history_path =
-        Path::new("artifacts/yolo_history").join(format!("{}.jsonl", &session_id_for_history));
+    let history_path = artifacts
+        .join("yolo_history")
+        .join(format!("{}.jsonl", &session_id_for_history));
     let mut history_logger = match HistoryLogger::new(&history_path, &session_id_for_history) {
         Ok(logger) => Some(logger),
         Err(e) => {
@@ -1927,20 +1961,23 @@ async fn handle_yolo_mode(
     };
 
     // Load or build exploration state for history-informed coverage
-    let exploration_path = Path::new("artifacts/exploration_state.json");
-    let mut exploration_state = ExplorationState::load_or_default(exploration_path);
+    let exploration_path = artifacts.join("exploration_state.json");
+    let mut exploration_state = ExplorationState::load_or_default(&exploration_path);
     // Exploration config: controls forced random, non-local jump, and warmup
     // force_random_every_n: every N iterations, force PureRandom mode (default 5)
-    // nonlocal_jump_probability: chance any param jumps to random value (default 0.15)
+    // nonlocal_jump_probability: chance any param jumps to random value (now from UI's Randomize %)
     // warmup_iterations: iterations before winner exploitation begins (default 50)
     let exploration_config = ExplorationConfig {
         warmup_iterations,
+        // Connect user's "Randomize %" setting to actual random jump probability
+        // 100% randomize = 1.0 jump_prob = every param gets a random value within bounds
+        nonlocal_jump_probability: randomization_pct,
         ..ExplorationConfig::default()
     };
+    let history_dir = artifacts.join("yolo_history");
     if exploration_state.coverage.is_empty() {
         // No saved state - try to build from history logs
-        let history_dir = Path::new("artifacts/yolo_history");
-        match build_exploration_state_from_history(history_dir) {
+        match build_exploration_state_from_history(&history_dir) {
             Ok(state) if !state.coverage.is_empty() => {
                 info!(
                     sessions = state.contributing_sessions.len(),
@@ -1965,6 +2002,26 @@ async fn handle_yolo_mode(
     // Register this session
     exploration_state.add_session(&session_id_for_history);
 
+    // Build tested configs index for deduplication
+    // This allows us to skip configs that were already tested with similar date ranges
+    let mut tested_configs_index = match build_tested_configs_index(&history_dir) {
+        Ok(index) => {
+            if index.unique_configs() > 0 {
+                info!(
+                    unique_configs = index.unique_configs(),
+                    total_records = index.total_records(),
+                    "Loaded tested configs index for deduplication"
+                );
+            }
+            index
+        }
+        Err(e) => {
+            debug!(error = %e, "Failed to build tested configs index, starting fresh");
+            TestedConfigsIndex::new()
+        }
+    };
+    let mut configs_skipped_as_duplicates = 0u64;
+
     // Track the intended span once so we can drop short-history symbols later.
     let requested_span_days = (end - start).num_days().abs().max(1) as f64;
     // Allow some slack for newer listings (e.g., IPOs) without letting them
@@ -1972,7 +2029,9 @@ async fn handle_yolo_mode(
     const YOLO_MAX_START_LAG_DAYS: i64 = 365; // 1 year after requested start
     const YOLO_MIN_COVERAGE_RATIO: f64 = 0.60; // Require at least 60% of span
 
-    let mut iteration = cross_symbol_leaderboard.total_iterations;
+    // Session iteration starts at 0; all-time total_iterations loaded from leaderboard
+    let mut session_iteration: u32 = 0;
+    let all_time_iteration_offset = cross_symbol_leaderboard.total_iterations;
 
     // Create seeded RNG for reproducibility (but different each run)
     let seed = std::time::SystemTime::now()
@@ -2091,7 +2150,7 @@ async fn handle_yolo_mode(
                 let _ = update_tx.send(WorkerUpdate::YoloStopped {
                     cross_symbol_leaderboard,
                     per_symbol_leaderboard,
-                    total_iterations: iteration,
+                    total_iterations: 0, // No iterations completed during data refresh
                     total_configs_tested: 0,
                 });
                 return;
@@ -2210,7 +2269,7 @@ async fn handle_yolo_mode(
         let _ = update_tx.send(WorkerUpdate::YoloStopped {
             cross_symbol_leaderboard,
             per_symbol_leaderboard,
-            total_iterations: iteration,
+            total_iterations: 0, // No iterations completed - no symbols loaded
             total_configs_tested: 0,
         });
         return;
@@ -2219,10 +2278,12 @@ async fn handle_yolo_mode(
     // Send initial status with symbol counts
     let _ = update_tx.send(WorkerUpdate::YoloProgress {
         iteration: 0,
-        phase: format!("Loaded {} symbols ({} cached, {} fetched)",
+        phase: format!(
+            "Loaded {} symbols ({} cached, {} fetched)",
             total_loaded,
             total_requested.saturating_sub(symbols_needing_refresh.len()),
-            symbols_needing_refresh.len()),
+            symbols_needing_refresh.len()
+        ),
         completed_configs: 0,
         total_configs: 0,
         jitter_summary: String::new(),
@@ -2232,14 +2293,15 @@ async fn handle_yolo_mode(
     loop {
         // Check cancellation at the start of each iteration
         if cancel_flag.load(Ordering::SeqCst) {
-            let _ = per_symbol_leaderboard.save(per_symbol_path);
-            let _ = cross_symbol_leaderboard.save(cross_symbol_path);
+            let _ = per_symbol_leaderboard.save(&per_symbol_path);
+            let _ = cross_symbol_leaderboard.save(&cross_symbol_path);
             // Save exploration state on cancellation
-            let _ = exploration_state.save(exploration_path);
+            let _ = exploration_state.save(&exploration_path);
             let total_configs = cross_symbol_leaderboard.total_configs_tested;
             if let Some(ref logger) = history_logger {
                 info!(
                     entries = logger.entries_logged(),
+                    duplicates_skipped = configs_skipped_as_duplicates,
                     path = %logger.path().display(),
                     "YOLO history log written"
                 );
@@ -2247,17 +2309,19 @@ async fn handle_yolo_mode(
             let _ = update_tx.send(WorkerUpdate::YoloStopped {
                 cross_symbol_leaderboard,
                 per_symbol_leaderboard,
-                total_iterations: iteration,
+                total_iterations: session_iteration,
                 total_configs_tested: total_configs,
             });
             return;
         }
 
-        iteration += 1;
-        per_symbol_leaderboard.total_iterations = iteration;
-        cross_symbol_leaderboard.total_iterations = iteration;
+        session_iteration += 1;
+        // All-time iteration = offset + session iteration
+        let all_time_iteration = all_time_iteration_offset + session_iteration;
+        per_symbol_leaderboard.total_iterations = all_time_iteration;
+        cross_symbol_leaderboard.total_iterations = all_time_iteration;
 
-        debug!(iteration = iteration, "Starting YOLO iteration");
+        debug!(session_iteration = session_iteration, all_time_iteration = all_time_iteration, "Starting YOLO iteration");
 
         // 1. Select exploration mode based on coverage history
         // Uses exploration_config to force PureRandom every N iterations
@@ -2270,7 +2334,7 @@ async fn handle_yolo_mode(
             &mut rng,
             &exploration_state,
             primary_strategy,
-            iteration,
+            session_iteration,
             &exploration_config,
         );
 
@@ -2305,27 +2369,66 @@ async fn handle_yolo_mode(
 
         // 2b. For ExploitWinner mode, pick a random winner and center the grid on it
         // This provides TRUE winner exploitation - jittering around the best known config
-        let effective_grid = if exploration_mode == ExplorationMode::ExploitWinner
+        //
+        // COMBO HANDLING: Combos can't be exploited directly (their parameter space is a
+        // cartesian product of component strategies). So we:
+        // 1. Prefer single-strategy winners for exploitation
+        // 2. If no singles available or exploitation fails, use wider jitter to stay exploratory
+        // 3. Track whether we're in "combo fallback" mode to adjust jitter accordingly
+        let (effective_grid, is_combo_fallback) = if exploration_mode
+            == ExplorationMode::ExploitWinner
             && !cross_symbol_leaderboard.entries.is_empty()
         {
-            // Pick a random winner from the leaderboard (top entries are best)
-            let winner_idx = rng.gen_range(0..cross_symbol_leaderboard.entries.len().min(5));
-            let winner = &cross_symbol_leaderboard.entries[winner_idx];
+            // Separate single strategy winners from combo winners
+            let single_winners: Vec<_> = cross_symbol_leaderboard
+                .entries
+                .iter()
+                .take(10) // Look at top 10
+                .filter(|e| !e.config_id.is_combo())
+                .collect();
 
-            // Try to create a centered grid around this winner
-            if let Some(centered) = create_winner_centered_grid(base_grid, &winner.config_id) {
-                trace!(
-                    winner_strategy = %winner.strategy_type.id(),
-                    winner_config = ?winner.config_id,
-                    "ExploitWinner: centering grid on leaderboard winner"
-                );
-                centered
+            if !single_winners.is_empty() {
+                // Prefer single strategy winners - we can actually exploit these
+                let winner_idx = rng.gen_range(0..single_winners.len().min(5));
+                let winner = single_winners[winner_idx];
+
+                if let Some(centered) = create_winner_centered_grid(base_grid, &winner.config_id) {
+                    trace!(
+                        winner_strategy = %winner.strategy_type.id(),
+                        winner_config = ?winner.config_id,
+                        "ExploitWinner: centering grid on single-strategy winner"
+                    );
+                    (centered, false)
+                } else {
+                    // Shouldn't happen for singles, but fall back gracefully
+                    (base_grid.clone(), true)
+                }
             } else {
-                // Fall back to base grid if conversion fails
-                base_grid.clone()
+                // All top winners are combos - we can't exploit them directly
+                // Fall back to base grid but mark as combo fallback for wider jitter
+                trace!(
+                    "ExploitWinner: top winners are all combos, using conservative exploration"
+                );
+                (base_grid.clone(), true)
             }
         } else {
-            base_grid.clone()
+            (base_grid.clone(), false)
+        };
+
+        // When we're in combo fallback during exploitation, use much wider jitter
+        // This prevents "fake exploitation" where we think we're refining but aren't
+        let iter_pct = if is_combo_fallback {
+            // Use 2.5x normal jitter when we can't properly exploit
+            // This keeps the exploration broad since we don't have a good anchor
+            let wide_pct = randomization_pct * 2.5;
+            trace!(
+                original_pct = %iter_pct,
+                wide_pct = %wide_pct,
+                "Combo fallback: widening jitter since we can't exploit combo winners"
+            );
+            wide_pct
+        } else {
+            iter_pct
         };
 
         // Use non-local jump probability from config
@@ -2336,7 +2439,7 @@ async fn handle_yolo_mode(
             jitter_multi_strategy_grid_with_jump(&effective_grid, iter_pct, jump_prob, &mut rng);
 
         trace!(
-            iteration = iteration,
+            iteration = session_iteration,
             mode = %exploration_mode.short_name(),
             jitter_pct = %iter_pct,
             wide = wide,
@@ -2353,10 +2456,69 @@ async fn handle_yolo_mode(
 
         // Generate jitter summary showing what parameters were jittered
         let jitter_summary = summarize_jittered_grid(base_grid, &jittered_grid);
-        let total_configs_this_iter = jittered_grid.total_configs() * loaded_symbols.len();
+
+        // Determine iteration type (single strategies vs combos)
+        // Combos don't start until after combo_warmup_iterations to let singles establish baseline
+        let iteration_type =
+            determine_iteration_type(session_iteration, combo_mode, combo_warmup_iterations);
+        let combos_per_iteration = 1; // Test 1 combo per combo iteration (fast)
+
+        // Generate combos if this is a combo iteration
+        let combo_configs: Vec<StrategyConfigId> = match iteration_type {
+            YoloIterationType::TwoWayCombo => {
+                debug!(iteration = session_iteration, "Running 2-way combo iteration");
+                generate_random_combos(
+                    &enabled_strategies,
+                    &jittered_grid,
+                    2,
+                    combos_per_iteration,
+                    &mut rng,
+                )
+            }
+            YoloIterationType::ThreeWayCombo => {
+                debug!(iteration = session_iteration, "Running 3-way combo iteration");
+                generate_random_combos(
+                    &enabled_strategies,
+                    &jittered_grid,
+                    3,
+                    combos_per_iteration,
+                    &mut rng,
+                )
+            }
+            YoloIterationType::FourWayCombo => {
+                debug!(iteration = session_iteration, "Running 4-way combo iteration");
+                generate_random_combos(
+                    &enabled_strategies,
+                    &jittered_grid,
+                    4,
+                    combos_per_iteration,
+                    &mut rng,
+                )
+            }
+            YoloIterationType::SingleStrategy => Vec::new(),
+        };
+
+        let is_combo_iteration = !combo_configs.is_empty();
+        let total_configs_this_iter = if is_combo_iteration {
+            combo_configs.len() * loaded_symbols.len()
+        } else {
+            jittered_grid.total_configs() * loaded_symbols.len()
+        };
+
+        // Update phase message for combo iterations
+        let phase = if is_combo_iteration {
+            format!(
+                "[{:?}] {} combos (±{:.0}%)",
+                iteration_type,
+                combo_configs.len(),
+                iter_pct * 100.0
+            )
+        } else {
+            phase
+        };
 
         let _ = update_tx.send(WorkerUpdate::YoloProgress {
-            iteration,
+            iteration: session_iteration,
             phase: phase.clone(),
             completed_configs: 0,
             total_configs: total_configs_this_iter,
@@ -2450,7 +2612,7 @@ async fn handle_yolo_mode(
 
                     if idx % 3 == 0 {
                         let _ = update_tx.send(WorkerUpdate::YoloProgress {
-                            iteration,
+                            iteration: session_iteration,
                             phase: phase.clone(),
                             completed_configs: done.min(total_configs_this_iter),
                             total_configs: total_configs_this_iter,
@@ -2460,20 +2622,138 @@ async fn handle_yolo_mode(
                 });
         };
 
-        if let Some(threads) = outer_threads {
-            let capped = threads.max(1).min(available_threads);
-            if let Ok(pool) = ThreadPoolBuilder::new().num_threads(capped).build() {
-                pool.install(run_symbol_parallel);
+        // Execute either single strategies or combos based on iteration type
+        if is_combo_iteration {
+            // === COMBO ITERATION ===
+            // Run each combo config across all symbols
+            let combo_configs_arc = Arc::new(combo_configs.clone());
+
+            let run_combo_parallel = || {
+                loaded_symbols
+                    .par_iter()
+                    .enumerate()
+                    .for_each(|(idx, symbol)| {
+                        if cancel_flag.load(Ordering::Relaxed) {
+                            return;
+                        }
+
+                        let df = match symbol_dfs.get(symbol) {
+                            Some(df) => df,
+                            None => return,
+                        };
+
+                        // Convert DataFrame to bars for backtest
+                        let bars: Vec<Bar> = match dataframe_to_bars(df) {
+                            Ok(b) => b,
+                            Err(_) => return,
+                        };
+
+                        #[allow(clippy::type_complexity)]
+                        let mut local_results: Vec<(
+                            (StrategyTypeId, StrategyConfigId),
+                            (String, Metrics, Vec<f64>, Vec<DateTime<Utc>>),
+                        )> = Vec::new();
+
+                        for combo_config in combo_configs_arc.iter() {
+                            if cancel_flag.load(Ordering::Relaxed) {
+                                return;
+                            }
+
+                            // Run the combo strategy backtest
+                            // Create a BacktestConfig from the polars config settings
+                            let bt_config = trendlab_core::BacktestConfig {
+                                initial_cash: polars_config.initial_cash,
+                                fill_model: trendlab_core::FillModel::NextOpen,
+                                cost_model: polars_config.cost_model,
+                                qty: polars_config.qty,
+                                pyramid_config: trendlab_core::PyramidConfig::default(),
+                            };
+                            if let Some(cfg_result) = trendlab_core::run_single_config_backtest(
+                                &bars,
+                                combo_config,
+                                bt_config,
+                            ) {
+                                let strategy_type = combo_config.strategy_type();
+                                let equity: Vec<f64> = cfg_result
+                                    .backtest_result
+                                    .equity
+                                    .iter()
+                                    .map(|e| e.equity)
+                                    .collect();
+                                let dates: Vec<DateTime<Utc>> = cfg_result
+                                    .backtest_result
+                                    .equity
+                                    .iter()
+                                    .map(|e| e.ts)
+                                    .collect();
+
+                                local_results.push((
+                                    (strategy_type, combo_config.clone()),
+                                    (symbol.clone(), cfg_result.metrics, equity, dates),
+                                ));
+                            }
+                        }
+
+                        if local_results.is_empty() {
+                            return;
+                        }
+
+                        {
+                            let mut guard = accum.lock().unwrap();
+                            for (key, (sym, metrics, equity, dates)) in local_results {
+                                let entry = guard.entry(key).or_default();
+                                entry.per_symbol_metrics.insert(sym.clone(), metrics);
+                                entry.per_symbol_equity.insert(sym.clone(), equity);
+                                entry.per_symbol_dates.insert(sym, dates);
+                            }
+                        }
+
+                        let done = completed_configs
+                            .fetch_add(combo_configs_arc.len(), Ordering::SeqCst)
+                            + combo_configs_arc.len();
+
+                        if idx % 3 == 0 {
+                            let _ = update_tx.send(WorkerUpdate::YoloProgress {
+                                iteration: session_iteration,
+                                phase: phase.clone(),
+                                completed_configs: done.min(total_configs_this_iter),
+                                total_configs: total_configs_this_iter,
+                                jitter_summary: jitter_summary.clone(),
+                            });
+                        }
+                    });
+            };
+
+            if let Some(threads) = outer_threads {
+                let capped = threads.max(1).min(available_threads);
+                if let Ok(pool) = ThreadPoolBuilder::new().num_threads(capped).build() {
+                    pool.install(run_combo_parallel);
+                } else {
+                    run_combo_parallel();
+                }
+            } else {
+                run_combo_parallel();
+            }
+        } else {
+            // === SINGLE STRATEGY ITERATION ===
+            if let Some(threads) = outer_threads {
+                let capped = threads.max(1).min(available_threads);
+                if let Ok(pool) = ThreadPoolBuilder::new().num_threads(capped).build() {
+                    pool.install(run_symbol_parallel);
+                } else {
+                    run_symbol_parallel();
+                }
             } else {
                 run_symbol_parallel();
             }
-        } else {
-            run_symbol_parallel();
         }
 
         let mut configs_tested_this_round = 0usize;
         let mut best_aggregate_this_round: Option<AggregatedConfigResult> = None;
         let mut best_per_symbol_this_round: Option<StrategyBestResult> = None;
+        // Collect ALL aggregated results this iteration for session tracking
+        // (bypasses top-N displacement in all-time leaderboard)
+        let mut session_results_this_round: Vec<AggregatedConfigResult> = Vec::new();
 
         let accum_guard = accum.lock().unwrap();
         for ((strategy_type, config_id), acc) in accum_guard.iter() {
@@ -2514,10 +2794,23 @@ async fn handle_yolo_mode(
 
             // Skip if no symbols had valid results
             if per_symbol_metrics.is_empty() {
+                trace!(
+                    strategy = ?strategy_type,
+                    config = ?config_id,
+                    "YOLO DEBUG: All symbols pruned for this config"
+                );
                 continue;
             }
 
             configs_tested_this_round += per_symbol_metrics.len();
+
+            // DEBUG: Log how many symbols passed coverage filter
+            debug!(
+                strategy = ?strategy_type,
+                config = %config_id.display(),
+                symbols_remaining = per_symbol_metrics.len(),
+                "YOLO DEBUG: Config has valid symbols after pruning"
+            );
 
             let best_single_symbol = per_symbol_metrics
                 .iter()
@@ -2582,7 +2875,8 @@ async fn handle_yolo_mode(
                 combined_equity_curve: combined_equity,
                 dates: combined_dates,
                 discovered_at: Utc::now(),
-                iteration,
+                iteration: all_time_iteration,
+                session_iteration: Some(session_iteration),
                 session_id: session_id.clone(),
                 confidence_grade,
                 walk_forward_grade: wf_grade,
@@ -2593,6 +2887,19 @@ async fn handle_yolo_mode(
                 oos_p_value: oos_pval,
                 fdr_adjusted_p_value: None,
             };
+
+            // DEBUG: Log the aggregated result we're about to insert
+            debug!(
+                strategy = ?strategy_type,
+                config = %config_id.display(),
+                avg_sharpe = aggregated_result.aggregate_metrics.avg_sharpe,
+                symbols_count = aggregated_result.symbols.len(),
+                session_id = ?aggregated_result.session_id,
+                "YOLO DEBUG: Created aggregated result"
+            );
+
+            // Add to session results (bypasses top-N displacement for session display)
+            session_results_this_round.push(aggregated_result.clone());
 
             // Track best aggregate this round
             let is_new_best_aggregate = best_aggregate_this_round
@@ -2627,26 +2934,62 @@ async fn handle_yolo_mode(
                 }
             }
 
-            // Log to append-only history (logs ALL configs, not just winners)
-            if let Some(ref mut logger) = history_logger {
-                if let Err(e) = logger.log(&aggregated_result, iteration) {
-                    trace!(error = %e, "Failed to write history entry");
+            // Check if this config was already tested with a similar date range
+            let config_hash = aggregated_result.config_hash();
+            let is_duplicate =
+                tested_configs_index.was_tested_with_similar_range(config_hash, start, end);
+
+            if is_duplicate {
+                // Skip logging and exploration update for duplicate configs
+                configs_skipped_as_duplicates += 1;
+                trace!(
+                    config_hash = config_hash,
+                    strategy = ?strategy_type,
+                    "Skipping duplicate config (already tested with similar date range)"
+                );
+            } else {
+                // Log to append-only history with date range
+                if let Some(ref mut logger) = history_logger {
+                    if let Err(e) =
+                        logger.log_with_dates(&aggregated_result, all_time_iteration, Some(start), Some(end))
+                    {
+                        trace!(error = %e, "Failed to write history entry");
+                    }
+                }
+
+                // Add to tested configs index for future deduplication
+                tested_configs_index.add(config_hash, start, end);
+
+                // Update exploration state with this config
+                if let Some(normalized) = normalize_config(config_id) {
+                    let is_winner = aggregated_result.aggregate_metrics.avg_sharpe > 0.0;
+                    exploration_state.record_test(*strategy_type, &normalized, is_winner);
                 }
             }
 
-            // Update exploration state with this config
-            if let Some(normalized) = normalize_config(config_id) {
-                let is_winner = aggregated_result.aggregate_metrics.avg_sharpe > 0.0;
-                exploration_state.record_test(*strategy_type, &normalized, is_winner);
-            }
-
             // Try to insert into cross-symbol leaderboard
-            yolo_try_insert_best_per_strategy(&mut cross_symbol_leaderboard, aggregated_result);
+            let inserted = yolo_try_insert_best_per_strategy(&mut cross_symbol_leaderboard, aggregated_result);
+            debug!(
+                inserted = inserted,
+                leaderboard_size = cross_symbol_leaderboard.entries.len(),
+                "YOLO DEBUG: Leaderboard insertion result"
+            );
         }
+
+        // DEBUG: Log iteration summary before sending
+        debug!(
+            iteration = session_iteration,
+            configs_tested = configs_tested_this_round,
+            cross_symbol_entries = cross_symbol_leaderboard.entries.len(),
+            per_symbol_entries = per_symbol_leaderboard.entries.len(),
+            has_best_aggregate = best_aggregate_this_round.is_some(),
+            has_best_per_symbol = best_per_symbol_this_round.is_some(),
+            "YOLO DEBUG: Iteration complete summary"
+        );
 
         // Send a final per-iteration progress update
         let _ = update_tx.send(WorkerUpdate::YoloProgress {
-            iteration,
+            iteration: session_iteration,
             phase: phase.clone(),
             completed_configs: configs_tested_this_round.min(total_configs_this_iter),
             total_configs: total_configs_this_iter,
@@ -2655,14 +2998,15 @@ async fn handle_yolo_mode(
 
         // Check if we were cancelled during the sweep
         if cancel_flag.load(Ordering::SeqCst) {
-            let _ = per_symbol_leaderboard.save(per_symbol_path);
-            let _ = cross_symbol_leaderboard.save(cross_symbol_path);
+            let _ = per_symbol_leaderboard.save(&per_symbol_path);
+            let _ = cross_symbol_leaderboard.save(&cross_symbol_path);
             // Save exploration state on cancellation
-            let _ = exploration_state.save(exploration_path);
+            let _ = exploration_state.save(&exploration_path);
             let total_configs = cross_symbol_leaderboard.total_configs_tested;
             if let Some(ref logger) = history_logger {
                 info!(
                     entries = logger.entries_logged(),
+                    duplicates_skipped = configs_skipped_as_duplicates,
                     path = %logger.path().display(),
                     "YOLO history log written"
                 );
@@ -2670,7 +3014,7 @@ async fn handle_yolo_mode(
             let _ = update_tx.send(WorkerUpdate::YoloStopped {
                 cross_symbol_leaderboard,
                 per_symbol_leaderboard,
-                total_iterations: iteration,
+                total_iterations: session_iteration,
                 total_configs_tested: total_configs,
             });
             return;
@@ -2695,7 +3039,8 @@ async fn handle_yolo_mode(
                 equity_curve: best.equity_curve.clone(),
                 dates: vec![], // Could extract from backtest result if needed
                 discovered_at: Utc::now(),
-                iteration,
+                iteration: all_time_iteration,
+                session_iteration: Some(session_iteration),
                 session_id: session_id.clone(),
                 confidence_grade,
                 // Walk-forward fields (per-symbol, not used in primary YOLO flow)
@@ -2725,16 +3070,16 @@ async fn handle_yolo_mode(
         );
 
         // 6. Persist leaderboards (every iteration for crash safety)
-        let _ = per_symbol_leaderboard.save(per_symbol_path);
-        let _ = cross_symbol_leaderboard.save(cross_symbol_path);
+        let _ = per_symbol_leaderboard.save(&per_symbol_path);
+        let _ = cross_symbol_leaderboard.save(&cross_symbol_path);
 
         // 6b. Save exploration state periodically (every 5 iterations to reduce I/O)
-        if iteration.is_multiple_of(5) {
-            if let Err(e) = exploration_state.save(exploration_path) {
+        if session_iteration.is_multiple_of(5) {
+            if let Err(e) = exploration_state.save(&exploration_path) {
                 trace!(error = %e, "Failed to save exploration state (non-fatal)");
             } else {
                 trace!(
-                    iteration = iteration,
+                    session_iteration = session_iteration,
                     total_tested = exploration_state
                         .coverage
                         .values()
@@ -2770,13 +3115,18 @@ async fn handle_yolo_mode(
         }
 
         // 8. Send iteration complete update
+        debug!(
+            session_results_count = session_results_this_round.len(),
+            "YOLO DEBUG: Sending session_results to TUI"
+        );
         let _ = update_tx.send(WorkerUpdate::YoloIterationComplete {
-            iteration,
+            iteration: session_iteration,
             best_aggregate: best_aggregate_this_round,
             best_per_symbol: best_per_symbol_this_round,
             cross_symbol_leaderboard: cross_symbol_leaderboard.clone(),
             per_symbol_leaderboard: per_symbol_leaderboard.clone(),
             configs_tested_this_round,
+            session_results: session_results_this_round,
         });
     }
 }
@@ -3326,7 +3676,11 @@ fn config_id_to_single_params(config: &StrategyConfigId) -> Option<StrategyParam
             entry_lookbacks: vec![*entry_lookback],
             exit_lookbacks: vec![*exit_lookback],
         },
-        StrategyConfigId::MACrossover { fast, slow, ma_type } => StrategyParams::MACrossover {
+        StrategyConfigId::MACrossover {
+            fast,
+            slow,
+            ma_type,
+        } => StrategyParams::MACrossover {
             fast_periods: vec![*fast],
             slow_periods: vec![*slow],
             ma_types: vec![*ma_type],
@@ -3444,6 +3798,150 @@ fn create_winner_centered_grid(
         .collect();
 
     Some(MultiStrategyGrid { strategies })
+}
+
+// =============================================================================
+// YOLO Combo Iteration Support
+// =============================================================================
+
+/// Type of iteration in YOLO mode.
+/// Controls whether we test single strategies or combo strategies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum YoloIterationType {
+    /// Test individual strategies (default)
+    SingleStrategy,
+    /// Test 2-way combo strategies (two strategies must confirm each other)
+    TwoWayCombo,
+    /// Test 3-way combo strategies (three strategies must confirm each other)
+    ThreeWayCombo,
+    /// Test 4-way combo strategies (four strategies must confirm each other)
+    FourWayCombo,
+}
+
+/// Determine iteration type based on iteration number, combo mode, and warmup.
+/// Pattern (when combo mode allows and past combo warmup):
+/// - Odd iterations (1, 3, 5...): Single strategies
+/// - Every 20th (20, 40, 60...): 4-way combo (if ComboMode::All)
+/// - Every 6th (6, 12, 18... but not 20th multiples): 3-way combo (if TwoAndThreeWay or All)
+/// - Other even (2, 4, 8, 10...): 2-way combo (if TwoWay, TwoAndThreeWay, or All)
+///
+/// The `combo_warmup` parameter delays combo testing until single strategies have been
+/// explored first. This lets singles establish a baseline before testing combinations.
+pub fn determine_iteration_type(
+    iteration: u32,
+    combo_mode: ComboMode,
+    combo_warmup: u32,
+) -> YoloIterationType {
+    if iteration == 0 {
+        return YoloIterationType::SingleStrategy;
+    }
+
+    // If combos are disabled, always return single strategy
+    if combo_mode == ComboMode::None {
+        return YoloIterationType::SingleStrategy;
+    }
+
+    // During combo warmup, only test single strategies
+    // This lets singles establish a baseline before we start combining them
+    if iteration < combo_warmup {
+        return YoloIterationType::SingleStrategy;
+    }
+
+    // Every 20th iteration (20, 40, 60...) is a 4-way combo (if All mode)
+    if iteration.is_multiple_of(20) && combo_mode == ComboMode::All {
+        YoloIterationType::FourWayCombo
+    }
+    // Every 6th iteration (6, 12, 18...) is a 3-way combo (if TwoAndThreeWay or All)
+    else if iteration.is_multiple_of(6)
+        && (combo_mode == ComboMode::TwoAndThreeWay || combo_mode == ComboMode::All)
+    {
+        YoloIterationType::ThreeWayCombo
+    }
+    // Every other even iteration (2, 4, 8, 10...) is a 2-way combo
+    else if iteration.is_multiple_of(2) {
+        YoloIterationType::TwoWayCombo
+    } else {
+        YoloIterationType::SingleStrategy
+    }
+}
+
+use rand::seq::SliceRandom;
+
+/// Generate random combo strategies by combining enabled strategies.
+///
+/// # Arguments
+/// * `enabled_strategies` - List of enabled strategy configurations
+/// * `jittered_grid` - The jittered grid to sample configs from
+/// * `combo_size` - Number of strategies per combo (2 or 3)
+/// * `count` - Number of combos to generate (e.g., 10)
+/// * `rng` - Random number generator
+///
+/// # Returns
+/// Vector of StrategyConfigId::Combo variants ready for backtesting
+pub fn generate_random_combos(
+    _enabled_strategies: &[&StrategyGridConfig],
+    jittered_grid: &MultiStrategyGrid,
+    combo_size: usize,
+    count: usize,
+    rng: &mut impl Rng,
+) -> Vec<StrategyConfigId> {
+    let voting_methods = [
+        VotingMethod::Majority,
+        VotingMethod::UnanimousEntry,
+        VotingMethod::WeightedByHorizon,
+    ];
+
+    let mut combos = Vec::new();
+
+    // Filter to strategies that have configs
+    let strategies_with_configs: Vec<(&StrategyGridConfig, Vec<StrategyConfigId>)> = jittered_grid
+        .strategies
+        .iter()
+        .filter(|s| s.enabled)
+        .map(|s| {
+            let configs = s.params.generate_configs();
+            (s, configs)
+        })
+        .filter(|(_, configs)| !configs.is_empty())
+        .collect();
+
+    if strategies_with_configs.len() < combo_size {
+        // Not enough enabled strategies to form combos
+        return combos;
+    }
+
+    for _ in 0..count {
+        // Pick combo_size different strategy types
+        let mut indices: Vec<usize> = (0..strategies_with_configs.len()).collect();
+        indices.shuffle(rng);
+        indices.truncate(combo_size);
+
+        // For each selected strategy, pick a random config
+        let mut components: Vec<(StrategyTypeId, Box<StrategyConfigId>)> = indices
+            .iter()
+            .filter_map(|&idx| {
+                let (strategy_config, configs) = &strategies_with_configs[idx];
+                let config = configs.choose(rng)?;
+                Some((strategy_config.strategy_type, Box::new(config.clone())))
+            })
+            .collect();
+
+        if components.len() != combo_size {
+            continue;
+        }
+
+        // Sort components by StrategyTypeId string id for consistent hashing
+        components.sort_by_key(|(t, _)| t.id());
+
+        // Pick a random voting method
+        let voting = *voting_methods
+            .choose(rng)
+            .unwrap_or(&VotingMethod::Majority);
+
+        combos.push(StrategyConfigId::Combo { components, voting });
+    }
+
+    combos
 }
 
 // =============================================================================
@@ -3685,8 +4183,26 @@ fn jitter_strategy_params_with_jump(
             entry_lookbacks,
             exit_lookbacks,
         } => StrategyParams::Donchian {
-            entry_lookbacks: jitter_usize_vec_with_jump(entry_lookbacks, pct, 5, 5, 200, jump_prob, rng),
-            exit_lookbacks: jitter_usize_vec_with_jump(exit_lookbacks, pct, 5, 2, 100, jump_prob, rng),
+            // WIDENED: [5,200] → [5,500] to match exploration bounds
+            entry_lookbacks: jitter_usize_vec_with_jump(
+                entry_lookbacks,
+                pct,
+                5,
+                5,
+                500,
+                jump_prob,
+                rng,
+            ),
+            // WIDENED: [2,100] → [2,200] to match exploration bounds
+            exit_lookbacks: jitter_usize_vec_with_jump(
+                exit_lookbacks,
+                pct,
+                5,
+                2,
+                200,
+                jump_prob,
+                rng,
+            ),
         },
 
         StrategyParams::TurtleS1 => StrategyParams::TurtleS1,
@@ -3697,13 +4213,24 @@ fn jitter_strategy_params_with_jump(
             slow_periods,
             ma_types,
         } => StrategyParams::MACrossover {
-            fast_periods: jitter_usize_vec_with_jump(fast_periods, pct, 5, 5, 100, jump_prob, rng),
-            slow_periods: jitter_usize_vec_with_jump(slow_periods, pct, 10, 20, 500, jump_prob, rng),
+            // WIDENED: [5,100] → [3,200] to match exploration bounds
+            fast_periods: jitter_usize_vec_with_jump(fast_periods, pct, 1, 3, 200, jump_prob, rng),
+            // WIDENED: [20,500] → [10,1000] to match exploration bounds
+            slow_periods: jitter_usize_vec_with_jump(
+                slow_periods,
+                pct,
+                5,
+                10,
+                1000,
+                jump_prob,
+                rng,
+            ),
             ma_types: ma_types.clone(), // Don't jitter enum types
         },
 
         StrategyParams::Tsmom { lookbacks } => StrategyParams::Tsmom {
-            lookbacks: jitter_usize_vec_with_jump(lookbacks, pct, 5, 5, 500, jump_prob, rng),
+            // WIDENED: [5,500] → [5,750] to match exploration bounds
+            lookbacks: jitter_usize_vec_with_jump(lookbacks, pct, 5, 5, 750, jump_prob, rng),
         },
 
         StrategyParams::DmiAdx {
@@ -3711,13 +4238,25 @@ fn jitter_strategy_params_with_jump(
             adx_periods,
             adx_thresholds,
         } => StrategyParams::DmiAdx {
-            di_periods: jitter_usize_vec_with_jump(di_periods, pct, 1, 5, 50, jump_prob, rng),
-            adx_periods: jitter_usize_vec_with_jump(adx_periods, pct, 1, 5, 50, jump_prob, rng),
-            adx_thresholds: jitter_f64_vec_with_jump(adx_thresholds, pct, 1.0, 10.0, 50.0, jump_prob, rng),
+            // WIDENED: [5,50] → [3,100] to match exploration bounds
+            di_periods: jitter_usize_vec_with_jump(di_periods, pct, 1, 3, 100, jump_prob, rng),
+            // WIDENED: [5,50] → [3,100] to match exploration bounds
+            adx_periods: jitter_usize_vec_with_jump(adx_periods, pct, 1, 3, 100, jump_prob, rng),
+            // WIDENED: [10.0,50.0] → [5.0,70.0] to match exploration bounds
+            adx_thresholds: jitter_f64_vec_with_jump(
+                adx_thresholds,
+                pct,
+                1.0,
+                5.0,
+                70.0,
+                jump_prob,
+                rng,
+            ),
         },
 
         StrategyParams::Aroon { periods } => StrategyParams::Aroon {
-            periods: jitter_usize_vec_with_jump(periods, pct, 1, 5, 100, jump_prob, rng),
+            // WIDENED: [5,100] → [3,200] to match exploration bounds
+            periods: jitter_usize_vec_with_jump(periods, pct, 1, 3, 200, jump_prob, rng),
         },
 
         StrategyParams::BollingerSqueeze {
@@ -3725,10 +4264,20 @@ fn jitter_strategy_params_with_jump(
             std_mults,
             squeeze_thresholds,
         } => StrategyParams::BollingerSqueeze {
-            periods: jitter_usize_vec_with_jump(periods, pct, 1, 5, 100, jump_prob, rng),
-            std_mults: jitter_f64_vec_with_jump(std_mults, pct, 0.1, 1.0, 4.0, jump_prob, rng),
-            // Use bounded jitter since typical values (0.02-0.05) are near the min (0.01)
-            squeeze_thresholds: jitter_f64_bounded_with_jump(squeeze_thresholds, pct, 0.01, 0.01, 0.5, jump_prob, rng),
+            // WIDENED: [5,100] → [3,200] to match exploration bounds
+            periods: jitter_usize_vec_with_jump(periods, pct, 1, 3, 200, jump_prob, rng),
+            // WIDENED: [1.0,4.0] → [0.5,6.0] to match exploration bounds
+            std_mults: jitter_f64_vec_with_jump(std_mults, pct, 0.1, 0.5, 6.0, jump_prob, rng),
+            // WIDENED: [0.01,0.5] → [0.005,0.8] to match exploration bounds
+            squeeze_thresholds: jitter_f64_bounded_with_jump(
+                squeeze_thresholds,
+                pct,
+                0.005,
+                0.005,
+                0.8,
+                jump_prob,
+                rng,
+            ),
         },
 
         StrategyParams::Keltner {
@@ -3736,9 +4285,12 @@ fn jitter_strategy_params_with_jump(
             atr_periods,
             multipliers,
         } => StrategyParams::Keltner {
-            ema_periods: jitter_usize_vec_with_jump(ema_periods, pct, 1, 5, 100, jump_prob, rng),
-            atr_periods: jitter_usize_vec_with_jump(atr_periods, pct, 1, 5, 50, jump_prob, rng),
-            multipliers: jitter_f64_vec_with_jump(multipliers, pct, 0.1, 0.5, 5.0, jump_prob, rng),
+            // WIDENED: [5,100] → [3,200] to match exploration bounds
+            ema_periods: jitter_usize_vec_with_jump(ema_periods, pct, 1, 3, 200, jump_prob, rng),
+            // WIDENED: [5,50] → [3,100] to match exploration bounds
+            atr_periods: jitter_usize_vec_with_jump(atr_periods, pct, 1, 3, 100, jump_prob, rng),
+            // WIDENED: [0.5,5.0] → [0.3,8.0] to match exploration bounds
+            multipliers: jitter_f64_vec_with_jump(multipliers, pct, 0.1, 0.3, 8.0, jump_prob, rng),
         },
 
         StrategyParams::STARC {
@@ -3746,17 +4298,22 @@ fn jitter_strategy_params_with_jump(
             atr_periods,
             multipliers,
         } => StrategyParams::STARC {
-            sma_periods: jitter_usize_vec_with_jump(sma_periods, pct, 1, 5, 100, jump_prob, rng),
-            atr_periods: jitter_usize_vec_with_jump(atr_periods, pct, 1, 5, 50, jump_prob, rng),
-            multipliers: jitter_f64_vec_with_jump(multipliers, pct, 0.1, 0.5, 5.0, jump_prob, rng),
+            // WIDENED: [5,100] → [3,200] to match exploration bounds
+            sma_periods: jitter_usize_vec_with_jump(sma_periods, pct, 1, 3, 200, jump_prob, rng),
+            // WIDENED: [5,50] → [3,100] to match exploration bounds
+            atr_periods: jitter_usize_vec_with_jump(atr_periods, pct, 1, 3, 100, jump_prob, rng),
+            // WIDENED: [0.5,5.0] → [0.3,8.0] to match exploration bounds
+            multipliers: jitter_f64_vec_with_jump(multipliers, pct, 0.1, 0.3, 8.0, jump_prob, rng),
         },
 
         StrategyParams::Supertrend {
             atr_periods,
             multipliers,
         } => StrategyParams::Supertrend {
-            atr_periods: jitter_usize_vec_with_jump(atr_periods, pct, 1, 5, 50, jump_prob, rng),
-            multipliers: jitter_f64_vec_with_jump(multipliers, pct, 0.1, 1.0, 5.0, jump_prob, rng),
+            // WIDENED: [5,50] → [3,100] to match exploration bounds
+            atr_periods: jitter_usize_vec_with_jump(atr_periods, pct, 1, 3, 100, jump_prob, rng),
+            // WIDENED: [1.0,5.0] → [0.5,10.0] to match exploration bounds
+            multipliers: jitter_f64_vec_with_jump(multipliers, pct, 0.1, 0.5, 10.0, jump_prob, rng),
         },
 
         StrategyParams::FiftyTwoWeekHigh {
@@ -3764,29 +4321,70 @@ fn jitter_strategy_params_with_jump(
             entry_pcts,
             exit_pcts,
         } => StrategyParams::FiftyTwoWeekHigh {
-            periods: jitter_usize_vec_with_jump(periods, pct, 5, 50, 500, jump_prob, rng),
-            // Widened bounds: entry can go from 70% to 100% (was 80-100%)
-            entry_pcts: jitter_f64_bounded_with_jump(entry_pcts, pct, 0.01, 0.70, 1.0, jump_prob, rng),
-            // Widened bounds: exit can go from 40% to 95% (was 50-95%)
-            exit_pcts: jitter_f64_bounded_with_jump(exit_pcts, pct, 0.01, 0.40, 0.95, jump_prob, rng),
+            // WIDENED: [50,500] → [20,1000] to match exploration bounds
+            periods: jitter_usize_vec_with_jump(periods, pct, 5, 20, 1000, jump_prob, rng),
+            // WIDENED: [0.70,1.0] → [0.50,1.0] to match exploration bounds
+            entry_pcts: jitter_f64_bounded_with_jump(
+                entry_pcts, pct, 0.01, 0.50, 1.0, jump_prob, rng,
+            ),
+            // WIDENED: [0.40,0.95] → [0.30,0.99] to match exploration bounds
+            exit_pcts: jitter_f64_bounded_with_jump(
+                exit_pcts, pct, 0.01, 0.30, 0.99, jump_prob, rng,
+            ),
         },
 
         StrategyParams::DarvasBox {
             box_confirmation_bars,
         } => StrategyParams::DarvasBox {
-            box_confirmation_bars: jitter_usize_vec_with_jump(box_confirmation_bars, pct, 1, 2, 20, jump_prob, rng),
+            // WIDENED: [2,20] → [1,30] to match exploration bounds
+            box_confirmation_bars: jitter_usize_vec_with_jump(
+                box_confirmation_bars,
+                pct,
+                1,
+                1,
+                30,
+                jump_prob,
+                rng,
+            ),
         },
 
         StrategyParams::LarryWilliams {
             range_multipliers,
             atr_stop_mults,
         } => StrategyParams::LarryWilliams {
-            range_multipliers: jitter_f64_vec_with_jump(range_multipliers, pct, 0.1, 0.5, 5.0, jump_prob, rng),
-            atr_stop_mults: jitter_f64_vec_with_jump(atr_stop_mults, pct, 0.1, 0.5, 5.0, jump_prob, rng),
+            // WIDENED: [0.5,5.0] → [0.3,8.0] to match exploration bounds
+            range_multipliers: jitter_f64_vec_with_jump(
+                range_multipliers,
+                pct,
+                0.1,
+                0.3,
+                8.0,
+                jump_prob,
+                rng,
+            ),
+            // WIDENED: [0.5,5.0] → [0.3,8.0] to match exploration bounds
+            atr_stop_mults: jitter_f64_vec_with_jump(
+                atr_stop_mults,
+                pct,
+                0.1,
+                0.3,
+                8.0,
+                jump_prob,
+                rng,
+            ),
         },
 
         StrategyParams::HeikinAshi { confirmation_bars } => StrategyParams::HeikinAshi {
-            confirmation_bars: jitter_usize_vec_with_jump(confirmation_bars, pct, 1, 1, 10, jump_prob, rng),
+            // WIDENED: [1,10] → [1,20] to match exploration bounds
+            confirmation_bars: jitter_usize_vec_with_jump(
+                confirmation_bars,
+                pct,
+                1,
+                1,
+                20,
+                jump_prob,
+                rng,
+            ),
         },
 
         StrategyParams::ParabolicSar {
@@ -3794,10 +4392,14 @@ fn jitter_strategy_params_with_jump(
             af_steps,
             af_maxs,
         } => StrategyParams::ParabolicSar {
-            // Use bounded jitter since typical values (0.02) are near the min (0.01)
-            af_starts: jitter_f64_bounded_with_jump(af_starts, pct, 0.005, 0.01, 0.1, jump_prob, rng),
-            af_steps: jitter_f64_bounded_with_jump(af_steps, pct, 0.005, 0.01, 0.1, jump_prob, rng),
-            af_maxs: jitter_f64_bounded_with_jump(af_maxs, pct, 0.01, 0.1, 0.5, jump_prob, rng),
+            // WIDENED: [0.01,0.1] → [0.005,0.20] to match exploration bounds
+            af_starts: jitter_f64_bounded_with_jump(
+                af_starts, pct, 0.005, 0.005, 0.20, jump_prob, rng,
+            ),
+            // WIDENED: [0.01,0.1] → [0.005,0.20] to match exploration bounds
+            af_steps: jitter_f64_bounded_with_jump(af_steps, pct, 0.005, 0.005, 0.20, jump_prob, rng),
+            // WIDENED: [0.1,0.5] → [0.1,1.0] to match exploration bounds
+            af_maxs: jitter_f64_bounded_with_jump(af_maxs, pct, 0.01, 0.1, 1.0, jump_prob, rng),
         },
 
         StrategyParams::OpeningRangeBreakout {
@@ -4112,7 +4714,7 @@ fn auto_export_aggregate_artifact(
         .map_err(|e| format!("Failed to create artifact: {}", e))?;
 
     // Build output path
-    let output_dir = std::path::Path::new("artifacts/exports").join(session_id);
+    let output_dir = trendlab_core::artifacts_dir().join("exports").join(session_id);
     let filename = format!("{}_{}", agg.strategy_type.id(), agg.config_id.file_id());
 
     // Export

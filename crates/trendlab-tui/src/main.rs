@@ -18,7 +18,6 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
-use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use trendlab_logging::LogConfig;
@@ -32,6 +31,7 @@ use trendlab_engine::app::{
     TickerCurve, WinningConfig, YoloConfigField,
 };
 use trendlab_engine::worker::{spawn_worker, WorkerChannels, WorkerCommand, WorkerUpdate};
+use tracing::debug;
 
 fn main() -> Result<()> {
     // Initialize logging from environment (set by launcher)
@@ -162,24 +162,47 @@ enum KeyResult {
     Continue,
 }
 
+/// Create a backup of a file if it exists.
+fn backup_file(path: &std::path::Path) {
+    if path.exists() {
+        let backup_path = path.with_extension("json.backup");
+        if let Err(e) = std::fs::copy(path, &backup_path) {
+            tracing::warn!(error = %e, path = ?path, "Failed to create backup");
+        } else {
+            tracing::debug!(path = ?backup_path, "Created backup");
+        }
+    }
+}
+
 /// Save all-time leaderboards to disk before exiting.
 /// This ensures leaderboard data persists across TUI sessions.
 fn save_leaderboards_on_exit(yolo: &trendlab_engine::app::YoloState) {
-    let per_symbol_path = Path::new("artifacts/leaderboard.json");
-    let cross_symbol_path = Path::new("artifacts/cross_symbol_leaderboard.json");
+    let artifacts = trendlab_core::artifacts_dir();
+    tracing::info!(path = ?artifacts, "Saving leaderboards on exit");
 
-    if let Err(e) = yolo.all_time_leaderboard.save(per_symbol_path) {
-        tracing::warn!("Failed to save all-time per-symbol leaderboard: {}", e);
+    let per_symbol_path = artifacts.join("leaderboard.json");
+    let cross_symbol_path = artifacts.join("cross_symbol_leaderboard.json");
+
+    // Create backups before saving (safety net for data recovery)
+    backup_file(&per_symbol_path);
+    backup_file(&cross_symbol_path);
+
+    let per_symbol_entries = yolo.all_time_leaderboard.entries.len();
+    if let Err(e) = yolo.all_time_leaderboard.save(&per_symbol_path) {
+        tracing::warn!(error = %e, path = ?per_symbol_path, "Failed to save per-symbol leaderboard");
     } else {
-        tracing::info!("Saved all-time per-symbol leaderboard on exit");
+        tracing::info!(entries = per_symbol_entries, path = ?per_symbol_path, "Saved per-symbol leaderboard");
     }
 
     if let Some(ref cross) = yolo.all_time_cross_symbol_leaderboard {
-        if let Err(e) = cross.save(cross_symbol_path) {
-            tracing::warn!("Failed to save all-time cross-symbol leaderboard: {}", e);
+        let cross_entries = cross.entries.len();
+        if let Err(e) = cross.save(&cross_symbol_path) {
+            tracing::warn!(error = %e, path = ?cross_symbol_path, "Failed to save cross-symbol leaderboard");
         } else {
-            tracing::info!("Saved all-time cross-symbol leaderboard on exit");
+            tracing::info!(entries = cross_entries, path = ?cross_symbol_path, "Saved cross-symbol leaderboard");
         }
+    } else {
+        tracing::info!("No cross-symbol leaderboard to save");
     }
 }
 
@@ -791,6 +814,15 @@ fn handle_yolo_config_key(app: &mut App, code: KeyCode, channels: &WorkerChannel
                     app.yolo.config.warmup_iterations =
                         app.yolo.config.warmup_iterations.saturating_sub(5);
                 }
+                YoloConfigField::ComboMode => {
+                    // Cycle to previous combo mode
+                    app.yolo.config.combo_mode = app.yolo.config.combo_mode.prev();
+                }
+                YoloConfigField::ComboWarmup => {
+                    // Decrease by 5 (minimum 0)
+                    app.yolo.config.combo_warmup_iterations =
+                        app.yolo.config.combo_warmup_iterations.saturating_sub(5);
+                }
             }
             KeyResult::Continue
         }
@@ -854,6 +886,15 @@ fn handle_yolo_config_key(app: &mut App, code: KeyCode, channels: &WorkerChannel
                     // Increase by 5 (maximum 200)
                     app.yolo.config.warmup_iterations =
                         (app.yolo.config.warmup_iterations + 5).min(200);
+                }
+                YoloConfigField::ComboMode => {
+                    // Cycle to next combo mode
+                    app.yolo.config.combo_mode = app.yolo.config.combo_mode.next();
+                }
+                YoloConfigField::ComboWarmup => {
+                    // Increase by 5 (maximum 100)
+                    app.yolo.config.combo_warmup_iterations =
+                        (app.yolo.config.combo_warmup_iterations + 5).min(100);
                 }
             }
             KeyResult::Continue
@@ -1379,13 +1420,36 @@ fn apply_update(app: &mut App, update: WorkerUpdate, channels: &WorkerChannels) 
             cross_symbol_leaderboard,
             per_symbol_leaderboard,
             configs_tested_this_round,
+            session_results,
         } => {
+            // DEBUG: Log what we received from worker
+            debug!(
+                iteration = iteration,
+                configs_tested = configs_tested_this_round,
+                cross_symbol_entries = cross_symbol_leaderboard.entries.len(),
+                per_symbol_entries = per_symbol_leaderboard.entries.len(),
+                session_results_count = session_results.len(),
+                has_best_aggregate = best_aggregate.is_some(),
+                "YOLO DEBUG: TUI received YoloIterationComplete"
+            );
+
             app.yolo.iteration = iteration;
             // Update both session and all-time leaderboards
-            app.yolo.update_leaderboards(
+            // Pass session_results directly to bypass session_id filtering issues
+            app.yolo.update_leaderboards_with_session(
                 per_symbol_leaderboard.clone(),
                 cross_symbol_leaderboard.clone(),
                 configs_tested_this_round,
+                session_results,
+            );
+
+            // DEBUG: Log final state after update
+            debug!(
+                session_leaderboard_size = app.yolo.session_leaderboard.entries.len(),
+                session_cross_symbol_size = app.yolo.session_cross_symbol_leaderboard.as_ref().map(|lb| lb.entries.len()).unwrap_or(0),
+                all_time_leaderboard_size = app.yolo.all_time_leaderboard.entries.len(),
+                view_scope = ?app.yolo.view_scope,
+                "YOLO DEBUG: TUI state after update_leaderboards"
             );
 
             // Update status message with cross-symbol best

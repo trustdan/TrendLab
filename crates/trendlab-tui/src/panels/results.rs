@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use crate::ui::{colors, panel_block};
-use trendlab_core::ConfidenceGrade;
+use trendlab_core::{ConfidenceGrade, LeaderboardScope};
 use trendlab_engine::app::{App, Panel, ResultsViewMode};
 
 /// Sector statistics: (sector_name, hit_rate_percentage)
@@ -247,13 +247,13 @@ fn draw_single_symbol_table(f: &mut Frame, app: &App, area: Rect, is_active: boo
         .collect();
 
     let widths = [
-        Constraint::Length(8),
-        Constraint::Length(6),
-        Constraint::Length(8),
-        Constraint::Length(7),
-        Constraint::Length(8),
-        Constraint::Length(7),
-        Constraint::Length(6),
+        Constraint::Min(8),  // Entry - min width, can grow
+        Constraint::Min(6),  // Exit
+        Constraint::Min(8),  // CAGR %
+        Constraint::Min(7),  // Sharpe
+        Constraint::Min(8),  // MaxDD %
+        Constraint::Min(7),  // Trades
+        Constraint::Fill(1), // Win % - takes remaining space
     ];
 
     let scroll_indicator = if max_scroll > 0 {
@@ -339,13 +339,13 @@ fn draw_per_ticker_table(f: &mut Frame, app: &App, area: Rect, is_active: bool) 
         .collect();
 
     let widths = [
-        Constraint::Length(12),
-        Constraint::Length(6),
-        Constraint::Length(5),
-        Constraint::Length(8),
-        Constraint::Length(7),
-        Constraint::Length(8),
-        Constraint::Length(7),
+        Constraint::Fill(1), // Symbol - expands
+        Constraint::Min(6),  // Entry
+        Constraint::Min(5),  // Exit
+        Constraint::Min(8),  // CAGR %
+        Constraint::Min(7),  // Sharpe
+        Constraint::Min(8),  // MaxDD %
+        Constraint::Min(7),  // Trades
     ];
 
     let title = format!(
@@ -633,6 +633,8 @@ fn draw_leaderboard_table(
         Cell::from("Min Sharpe").style(header_style),
         Cell::from("Hit Rate").style(header_style),
         Cell::from("FDR p").style(header_style), // FDR-adjusted p-value
+        Cell::from("Iter").style(header_style),  // Which iteration found this
+        Cell::from("Run").style(header_style),   // Which session/run found this
     ]);
 
     // Build rows with expansion support (optional)
@@ -711,13 +713,27 @@ fn draw_leaderboard_table(
             None => ("-".to_string(), Style::default().fg(colors::FG_DARK)),
         };
 
+        // Format session_id as short run identifier (last 6 chars of timestamp)
+        let run_text = entry
+            .session_id
+            .as_ref()
+            .map(|s| {
+                // Session ID is like "20260104T173245", show just time part "173245"
+                if s.len() > 6 {
+                    s[s.len() - 6..].to_string()
+                } else {
+                    s.clone()
+                }
+            })
+            .unwrap_or_else(|| "-".to_string());
+
         // Main row
         rows.push(Row::new(vec![
             rank_cell,
             Cell::from(conf_text).style(conf_style),
             Cell::from(wf_text).style(wf_style),
             Cell::from(entry.strategy_type.name()).style(base_style),
-            Cell::from(truncate_config(&entry.config_id.display(), 18)).style(base_style),
+            Cell::from(entry.config_id.display()).style(base_style),
             Cell::from(format!("{}", entry.symbols.len())).style(base_style),
             Cell::from(format!("{:.3}", entry.aggregate_metrics.avg_sharpe)).style(sharpe_style),
             Cell::from(oos_text).style(oos_style),
@@ -725,6 +741,16 @@ fn draw_leaderboard_table(
             Cell::from(format!("{:.1}%", entry.aggregate_metrics.hit_rate * 100.0))
                 .style(hit_style),
             Cell::from(fdr_text).style(fdr_style),
+            // Show session_iteration in Session view, all-time iteration in AllTime view
+            Cell::from(format!(
+                "{}",
+                match app.yolo.view_scope {
+                    LeaderboardScope::Session => entry.session_iteration.unwrap_or(entry.iteration),
+                    LeaderboardScope::AllTime => entry.iteration,
+                }
+            ))
+            .style(base_style),
+            Cell::from(run_text).style(base_style),
         ]));
 
         // If expanded, add detail rows
@@ -859,17 +885,19 @@ fn draw_leaderboard_table(
     }
 
     let widths = [
-        Constraint::Length(3),  // Rank
-        Constraint::Length(4),  // Confidence
-        Constraint::Length(3),  // WF (Walk-forward grade)
-        Constraint::Length(14), // Strategy
-        Constraint::Length(18), // Config
-        Constraint::Length(5),  // Symbols
-        Constraint::Length(10), // Avg Sharpe
+        Constraint::Length(3),  // Rank - fixed (medals/numbers)
+        Constraint::Length(4),  // Confidence - fixed (checkmarks)
+        Constraint::Length(3),  // WF - fixed (grade letter)
+        Constraint::Min(14),    // Strategy - minimum width for names
+        Constraint::Fill(1),    // Config - expands to fill remaining space
+        Constraint::Length(4),  // Symbols - fixed (small number)
+        Constraint::Length(10), // Avg Sharpe - fixed width
         Constraint::Length(10), // OOS Sharpe
         Constraint::Length(10), // Min Sharpe
         Constraint::Length(9),  // Hit Rate
-        Constraint::Length(7),  // FDR p
+        Constraint::Length(9),  // FDR p
+        Constraint::Length(5),  // Iter - iteration number
+        Constraint::Length(7),  // Run - session time (HHMMSS)
     ];
 
     let scope_label = app.yolo.view_scope.display_name();
@@ -1208,14 +1236,14 @@ fn draw_per_symbol_leaderboard(f: &mut Frame, app: &mut App, area: Rect, is_acti
         .collect();
 
     let widths = [
-        Constraint::Length(3),  // Rank
-        Constraint::Length(4),  // Confidence
-        Constraint::Length(14), // Strategy
-        Constraint::Length(8),  // Symbol
-        Constraint::Length(8),  // Sharpe
-        Constraint::Length(8),  // CAGR
-        Constraint::Length(8),  // MaxDD
-        Constraint::Length(6),  // Win%
+        Constraint::Length(3), // Rank - fixed (medals/numbers)
+        Constraint::Length(4), // Confidence - fixed (checkmarks)
+        Constraint::Fill(1),   // Strategy - expands
+        Constraint::Min(8),    // Symbol
+        Constraint::Min(8),    // Sharpe
+        Constraint::Min(8),    // CAGR
+        Constraint::Min(8),    // MaxDD
+        Constraint::Fill(1),   // Win% - takes remaining space
     ];
 
     let scope_label = app.yolo.view_scope.display_name();
@@ -1248,7 +1276,7 @@ fn truncate_config(s: &str, max_len: usize) -> String {
     }
 }
 
-/// Create a detail row with 9 cells (matching leaderboard column count).
+/// Create a detail row with 11 cells (matching leaderboard column count).
 /// Spreads content across multiple columns to have enough display width.
 fn detail_row(text: String, style: Style) -> Row<'static> {
     // Strip leading whitespace from tree-drawing characters
@@ -1264,29 +1292,33 @@ fn detail_row(text: String, style: Style) -> Row<'static> {
         (text.to_string(), String::new())
     };
 
-    // For long data, split across remaining columns (approx 10 chars each)
-    // Columns available for data: Config(20) + Syms(5) + AvgSharpe(10) + MinSharpe(10) + HitRate(9) + AvgCAGR(10)
-    let (data1, data2) = if data.len() > 24 {
+    // For long data, split across remaining columns
+    let (data1, data2) = if data.len() > 30 {
         // Split at a space near the middle
-        let split_point = data[..24.min(data.len())]
+        let split_point = data[..30.min(data.len())]
             .rfind(' ')
-            .unwrap_or(24.min(data.len()));
+            .unwrap_or(30.min(data.len()));
         let (d1, d2) = data.split_at(split_point);
         (d1.to_string(), d2.trim().to_string())
     } else {
         (data, String::new())
     };
 
+    // 13 columns: Rank, Conf, WF, Strategy, Config, Syms, AvgSharpe, OOSSharpe, MinSharpe, HitRate, FDRp, Iter, Run
     Row::new(vec![
-        Cell::from(""),                 // Rank (3 chars)
-        Cell::from(""),                 // Conf (4 chars)
-        Cell::from(label).style(style), // Strategy (14 chars) - label
-        Cell::from(data1).style(style), // Config (20 chars) - data part 1
-        Cell::from(""),                 // Syms (5 chars)
-        Cell::from(data2).style(style), // Avg Sharpe (10 chars) - data part 2 overflow
-        Cell::from(""),                 // Min Sharpe (10 chars)
-        Cell::from(""),                 // Hit Rate (9 chars)
-        Cell::from(""),                 // Avg CAGR (10 chars)
+        Cell::from(""),                 // Rank
+        Cell::from(""),                 // Conf
+        Cell::from(""),                 // WF
+        Cell::from(label).style(style), // Strategy - label goes here
+        Cell::from(data1).style(style), // Config - data part 1
+        Cell::from(""),                 // Syms
+        Cell::from(data2).style(style), // Avg Sharpe - data part 2 overflow
+        Cell::from(""),                 // OOS Sharpe
+        Cell::from(""),                 // Min Sharpe
+        Cell::from(""),                 // Hit Rate
+        Cell::from(""),                 // FDR p
+        Cell::from(""),                 // Iter
+        Cell::from(""),                 // Run
     ])
 }
 

@@ -1,10 +1,57 @@
 //! YOLO Mode state - continuous auto-optimization.
 
 use chrono::{DateTime, NaiveDate, Utc};
+use tracing::debug;
 use trendlab_core::{
-    generate_session_id, CrossSymbolLeaderboard, Leaderboard, LeaderboardScope, RiskProfile,
-    SweepDepth,
+    generate_session_id, AggregatedConfigResult, CrossSymbolLeaderboard, Leaderboard,
+    LeaderboardScope, RiskProfile, SweepDepth,
 };
+
+/// Combo strategy mode for YOLO iterations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ComboMode {
+    /// No combo strategies - only single strategies
+    None,
+    /// 2-way combos only (every other iteration)
+    #[default]
+    TwoWay,
+    /// 2-way and 3-way combos (every other + every 6th)
+    TwoAndThreeWay,
+    /// All combos: 2-way, 3-way, and 4-way
+    All,
+}
+
+impl ComboMode {
+    /// Cycle to the next combo mode
+    pub fn next(self) -> Self {
+        match self {
+            Self::None => Self::TwoWay,
+            Self::TwoWay => Self::TwoAndThreeWay,
+            Self::TwoAndThreeWay => Self::All,
+            Self::All => Self::None,
+        }
+    }
+
+    /// Cycle to the previous combo mode
+    pub fn prev(self) -> Self {
+        match self {
+            Self::None => Self::All,
+            Self::TwoWay => Self::None,
+            Self::TwoAndThreeWay => Self::TwoWay,
+            Self::All => Self::TwoAndThreeWay,
+        }
+    }
+
+    /// Display name for the combo mode
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::TwoWay => "2-Way",
+            Self::TwoAndThreeWay => "2+3-Way",
+            Self::All => "2+3+4-Way",
+        }
+    }
+}
 
 /// YOLO Mode state - continuous auto-optimization
 #[derive(Debug, Clone)]
@@ -76,8 +123,13 @@ pub struct YoloConfigState {
     pub polars_max_threads: Option<usize>,
     /// Optional cap for outer Rayon pool (symbol-level parallelism)
     pub outer_threads: Option<usize>,
-    /// Number of warmup iterations before winner exploitation begins
+    /// Number of warmup iterations before winner exploitation begins (single strategies)
     pub warmup_iterations: u32,
+    /// Number of warmup iterations before combo strategies are tested (default 10)
+    /// Combos start after this many iterations to let singles establish a baseline
+    pub combo_warmup_iterations: u32,
+    /// Combo strategy mode (None, 2-Way, 2+3-Way, All)
+    pub combo_mode: ComboMode,
 }
 
 /// Fields in the YOLO config modal
@@ -91,6 +143,8 @@ pub enum YoloConfigField {
     PolarsThreads,
     OuterThreads,
     WarmupIterations,
+    ComboMode,
+    ComboWarmup,
 }
 
 impl Default for YoloConfigState {
@@ -106,6 +160,8 @@ impl Default for YoloConfigState {
             polars_max_threads: None,
             outer_threads: None,
             warmup_iterations: 50,
+            combo_warmup_iterations: 10,
+            combo_mode: ComboMode::TwoWay,
         }
     }
 }
@@ -120,13 +176,15 @@ impl YoloConfigField {
             Self::SweepDepth => Self::PolarsThreads,
             Self::PolarsThreads => Self::OuterThreads,
             Self::OuterThreads => Self::WarmupIterations,
-            Self::WarmupIterations => Self::StartDate,
+            Self::WarmupIterations => Self::ComboMode,
+            Self::ComboMode => Self::ComboWarmup,
+            Self::ComboWarmup => Self::StartDate,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Self::StartDate => Self::WarmupIterations,
+            Self::StartDate => Self::ComboWarmup,
             Self::EndDate => Self::StartDate,
             Self::Randomization => Self::EndDate,
             Self::WfSharpeThreshold => Self::Randomization,
@@ -134,6 +192,8 @@ impl YoloConfigField {
             Self::PolarsThreads => Self::SweepDepth,
             Self::OuterThreads => Self::PolarsThreads,
             Self::WarmupIterations => Self::OuterThreads,
+            Self::ComboMode => Self::WarmupIterations,
+            Self::ComboWarmup => Self::ComboMode,
         }
     }
 }
@@ -144,10 +204,10 @@ impl Default for YoloState {
             enabled: false,
             iteration: 0,
             // Session leaderboards (fresh each app launch)
-            session_leaderboard: Leaderboard::new(4),
+            session_leaderboard: Leaderboard::new(500), // Reasonable limit for session display
             session_cross_symbol_leaderboard: None,
             // All-time leaderboards (will be loaded from disk in App::new)
-            all_time_leaderboard: Leaderboard::new(16), // Larger capacity for historical data
+            all_time_leaderboard: Leaderboard::new(500), // Larger capacity for historical data
             all_time_cross_symbol_leaderboard: None,
             // Default to showing session results
             view_scope: LeaderboardScope::Session,
@@ -209,12 +269,105 @@ impl YoloState {
         cross_symbol: CrossSymbolLeaderboard,
         configs_tested_this_round: usize,
     ) {
-        // Update session leaderboards
-        self.session_leaderboard = per_symbol.clone();
-        self.session_cross_symbol_leaderboard = Some(cross_symbol.clone());
+        // DEBUG: Log incoming data
+        debug!(
+            incoming_per_symbol = per_symbol.entries.len(),
+            incoming_cross_symbol = cross_symbol.entries.len(),
+            my_session_id = %self.session_id,
+            configs_tested = configs_tested_this_round,
+            "YOLO DEBUG: update_leaderboards called"
+        );
+
+        // ACCUMULATE session entries: add new entries from this session (by config hash)
+        // This preserves entries even after they're displaced from all-time top-N
+        let existing_per_symbol_hashes: std::collections::HashSet<u64> = self
+            .session_leaderboard
+            .entries
+            .iter()
+            .map(|e| e.config_hash())
+            .collect();
+
+        let mut per_symbol_added = 0;
+        let mut per_symbol_session_match = 0;
+        for entry in per_symbol.entries.iter() {
+            if entry.session_id.as_ref() == Some(&self.session_id) {
+                per_symbol_session_match += 1;
+                let hash = entry.config_hash();
+                if !existing_per_symbol_hashes.contains(&hash) {
+                    self.session_leaderboard.entries.push(entry.clone());
+                    per_symbol_added += 1;
+                }
+            }
+        }
+        debug!(
+            session_match = per_symbol_session_match,
+            new_added = per_symbol_added,
+            total_session_entries = self.session_leaderboard.entries.len(),
+            "YOLO DEBUG: per-symbol session filtering"
+        );
+        self.session_leaderboard.total_iterations = per_symbol.total_iterations;
+        self.session_leaderboard.last_updated = per_symbol.last_updated;
+        // Re-rank session entries by Sharpe
+        self.session_leaderboard.sort_and_rerank();
+
+        // ACCUMULATE cross-symbol session entries similarly
+        // Initialize with EMPTY leaderboard (same settings, no entries) - NOT a clone of all-time!
+        // Use reasonable limits to avoid O(n log n) sort overhead on huge entry lists
+        let session_cross = self
+            .session_cross_symbol_leaderboard
+            .get_or_insert_with(|| {
+                CrossSymbolLeaderboard::with_max_per_strategy(
+                    1000, // Reasonable limit for session display
+                    cross_symbol.rank_by,
+                    100, // Per-strategy limit for session
+                )
+            });
+
+        let existing_cross_hashes: std::collections::HashSet<u64> = session_cross
+            .entries
+            .iter()
+            .map(|e| e.config_hash())
+            .collect();
+
+        let mut cross_symbol_added = 0;
+        let mut cross_symbol_session_match = 0;
+        for entry in cross_symbol.entries.iter() {
+            // DEBUG: Log each entry's session_id for comparison
+            if cross_symbol_added == 0 && cross_symbol_session_match == 0 {
+                // Only log first entry to avoid spam
+                debug!(
+                    entry_session_id = ?entry.session_id,
+                    expected_session_id = %self.session_id,
+                    "YOLO DEBUG: First cross-symbol entry session_id comparison"
+                );
+            }
+            if entry.session_id.as_ref() == Some(&self.session_id) {
+                cross_symbol_session_match += 1;
+                let hash = entry.config_hash();
+                if !existing_cross_hashes.contains(&hash) {
+                    session_cross.entries.push(entry.clone());
+                    cross_symbol_added += 1;
+                }
+            }
+        }
+        debug!(
+            session_match = cross_symbol_session_match,
+            new_added = cross_symbol_added,
+            total_session_entries = session_cross.entries.len(),
+            "YOLO DEBUG: cross-symbol session filtering"
+        );
+        // Update metadata
+        session_cross.last_updated = cross_symbol.last_updated;
+        if let (Some(start), Some(end)) = (cross_symbol.requested_start, cross_symbol.requested_end)
+        {
+            session_cross.set_requested_range(start, end);
+        }
+        // Re-rank session cross-symbol entries
+        session_cross.sort_and_rerank();
+
         self.session_configs_tested += configs_tested_this_round as u64;
 
-        // Merge into all-time leaderboards
+        // Merge into all-time leaderboards (unchanged logic)
         for entry in per_symbol.entries.iter() {
             self.all_time_leaderboard.try_insert(entry.clone());
         }
@@ -222,7 +375,90 @@ impl YoloState {
             for entry in cross_symbol.entries.iter() {
                 all_time_cross.try_insert(entry.clone());
             }
-            // Update requested dates to match the current session (most recent test)
+            if let (Some(start), Some(end)) =
+                (cross_symbol.requested_start, cross_symbol.requested_end)
+            {
+                all_time_cross.set_requested_range(start, end);
+            }
+        } else {
+            self.all_time_cross_symbol_leaderboard = Some(cross_symbol);
+        }
+        self.total_configs_tested += configs_tested_this_round as u64;
+    }
+
+    /// Update leaderboards with direct session results from worker.
+    ///
+    /// This method receives session_results directly from the worker, bypassing
+    /// the session_id filtering that was causing entries to be lost when they
+    /// were displaced from the all-time top-N leaderboard.
+    pub fn update_leaderboards_with_session(
+        &mut self,
+        per_symbol: Leaderboard,
+        cross_symbol: CrossSymbolLeaderboard,
+        configs_tested_this_round: usize,
+        session_results: Vec<AggregatedConfigResult>,
+    ) {
+        debug!(
+            incoming_per_symbol = per_symbol.entries.len(),
+            incoming_cross_symbol = cross_symbol.entries.len(),
+            session_results_count = session_results.len(),
+            my_session_id = %self.session_id,
+            configs_tested = configs_tested_this_round,
+            "YOLO DEBUG: update_leaderboards_with_session called"
+        );
+
+        // Initialize session cross-symbol leaderboard if needed
+        let session_cross = self
+            .session_cross_symbol_leaderboard
+            .get_or_insert_with(|| {
+                CrossSymbolLeaderboard::with_max_per_strategy(
+                    1000, // Reasonable limit for session display
+                    cross_symbol.rank_by,
+                    100, // Per-strategy limit for session
+                )
+            });
+
+        // Directly add session_results to session leaderboard (no session_id filtering needed)
+        let existing_hashes: std::collections::HashSet<u64> = session_cross
+            .entries
+            .iter()
+            .map(|e| e.config_hash())
+            .collect();
+
+        let mut added = 0;
+        for entry in session_results {
+            let hash = entry.config_hash();
+            if !existing_hashes.contains(&hash) {
+                session_cross.entries.push(entry);
+                added += 1;
+            }
+        }
+
+        debug!(
+            new_added = added,
+            total_session_entries = session_cross.entries.len(),
+            "YOLO DEBUG: Direct session results added"
+        );
+
+        // Update metadata
+        session_cross.last_updated = cross_symbol.last_updated;
+        if let (Some(start), Some(end)) = (cross_symbol.requested_start, cross_symbol.requested_end)
+        {
+            session_cross.set_requested_range(start, end);
+        }
+        // Re-rank session cross-symbol entries
+        session_cross.sort_and_rerank();
+
+        self.session_configs_tested += configs_tested_this_round as u64;
+
+        // Merge into all-time leaderboards (unchanged logic)
+        for entry in per_symbol.entries.iter() {
+            self.all_time_leaderboard.try_insert(entry.clone());
+        }
+        if let Some(ref mut all_time_cross) = self.all_time_cross_symbol_leaderboard {
+            for entry in cross_symbol.entries.iter() {
+                all_time_cross.try_insert(entry.clone());
+            }
             if let (Some(start), Some(end)) =
                 (cross_symbol.requested_start, cross_symbol.requested_end)
             {

@@ -81,17 +81,16 @@ pub use data::{
 };
 pub use error::TrendLabError;
 pub use exploration::{
-    build_exploration_state_from_history, denormalize_to_params, generate_random_config,
-    get_param_bounds, normalize_config, record_history_entry, select_exploration_mode,
-    select_exploration_mode_with_config, ExplorationConfig, ExplorationMode, ExplorationState,
-    NormalizedConfig, ParamBounds, StrategyCoverage,
+    build_exploration_state_from_history, build_tested_configs_index,
+    calculate_exploit_probability, denormalize_to_params, generate_lhs_for_strategy,
+    generate_random_config, get_param_bounds, lhs_samples_to_normalized, normalize_config,
+    record_history_entry, select_exploration_mode, select_exploration_mode_with_config,
+    ExplorationConfig, ExplorationMode, ExplorationState, NormalizedConfig, ParamBounds,
+    StrategyCoverage, TestedConfigsIndex, DEFAULT_CELL_SIZE,
 };
 pub use indicator_cache::{
     collect_indicator_requirements, extract_indicator_requirements, CacheStats, IndicatorCache,
     IndicatorKey, LazyIndicatorCache,
-};
-pub use latin_hypercube::{
-    generate_lhs_2d, generate_lhs_3d, generate_lhs_samples, LatinHypercubeSampler, LhsConfig,
 };
 pub use indicators::{
     aroon, aroon_down, aroon_up, atr, atr_wilder, bollinger_bands, cci, darvas_boxes, dmi,
@@ -113,6 +112,9 @@ pub use indicators_polars::{
     minus_dm_smoothed_expr, plus_di_expr, plus_dm_expr, plus_dm_smoothed_expr, roc_expr,
     rolling_std_expr, rsi_expr, sma_close_expr, starc_bands_exprs, supertrend_basic_exprs,
     true_range_expr, williams_r_expr, IndicatorSet, IndicatorSpec,
+};
+pub use latin_hypercube::{
+    generate_lhs_2d, generate_lhs_3d, generate_lhs_samples, LatinHypercubeSampler, LhsConfig,
 };
 pub use leaderboard::{
     combine_equity_curves_realistic, combine_equity_curves_simple, compute_confidence_from_equity,
@@ -177,6 +179,44 @@ pub use validation::{
     CVSplit, FoldResult, TimeSeriesCVConfig, ValidationError, WalkForwardConfig, WalkForwardFold,
     WalkForwardResult,
 };
+
+use std::path::{Path, PathBuf};
+
+/// Returns the absolute path to the artifacts directory.
+///
+/// Resolves project root based on executable location, handling the case where
+/// the binary is in `target/release/` or `target/debug/`.
+///
+/// Priority:
+/// 1. `TRENDLAB_ARTIFACTS` environment variable (if set)
+/// 2. Derived from executable location (goes up from target/release to project root)
+/// 3. Falls back to `./artifacts` relative to current working directory
+pub fn artifacts_dir() -> PathBuf {
+    // Check environment variable first
+    if let Ok(dir) = std::env::var("TRENDLAB_ARTIFACTS") {
+        return PathBuf::from(dir);
+    }
+
+    // Derive from executable location
+    if let Ok(exe_path) = std::env::current_exe() {
+        let dir = exe_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+
+        // If in target/release or target/debug, go up to project root
+        if dir.ends_with("release") || dir.ends_with("debug") {
+            if let Some(target) = dir.parent() {
+                if let Some(project_root) = target.parent() {
+                    return project_root.join("artifacts");
+                }
+            }
+        }
+
+        // Not in target directory, use artifacts relative to exe dir
+        return dir.join("artifacts");
+    }
+
+    // Fallback to relative path
+    PathBuf::from("artifacts")
+}
 
 /// Re-export commonly used types
 pub mod prelude {

@@ -206,7 +206,9 @@ impl DataState {
         }
         // If selection is below viewport, scroll down
         else if self.selected_sector_index >= self.sector_scroll_offset + visible_height {
-            self.sector_scroll_offset = self.selected_sector_index.saturating_sub(visible_height - 1);
+            self.sector_scroll_offset = self
+                .selected_sector_index
+                .saturating_sub(visible_height - 1);
         }
     }
 
@@ -221,7 +223,9 @@ impl DataState {
         }
         // If selection is below viewport, scroll down
         else if self.selected_ticker_index >= self.ticker_scroll_offset + visible_height {
-            self.ticker_scroll_offset = self.selected_ticker_index.saturating_sub(visible_height - 1);
+            self.ticker_scroll_offset = self
+                .selected_ticker_index
+                .saturating_sub(visible_height - 1);
         }
     }
 

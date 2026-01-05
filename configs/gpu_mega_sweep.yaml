@@ -1,0 +1,138 @@
+# GPU Mega-Sweep Configuration
+# Example configuration for running large-scale parameter sweeps on GPU
+#
+# Usage:
+#   python -m gpu_sweep --config configs/gpu_mega_sweep.yaml
+#   python -m gpu_sweep --config configs/gpu_mega_sweep.yaml --dry-run
+
+data:
+  base_dir: data/parquet
+  timeframe: 1d
+  start_date: 2015-01-01
+  end_date: 2024-12-31
+
+# Symbols can be a list or a file reference
+symbols:
+  - SPY
+  - QQQ
+  - AAPL
+  - MSFT
+  - NVDA
+  - GOOGL
+  - AMZN
+  - META
+  - TSLA
+  - AMD
+  # Or use a file:
+  # file: configs/sp500_symbols.txt
+
+backtest:
+  initial_cash: 100000
+  fees_bps: 10  # 10 basis points per side (0.1%)
+  qty_per_trade: 100
+  slippage_bps: 0
+
+strategies:
+  # Breakout Strategies
+  donchian:
+    enabled: true
+    entry_lookbacks: [10, 20, 30, 40, 55, 89]
+    exit_lookbacks: [5, 10, 15, 20, 25]
+
+  # Moving Average Strategies
+  ma_crossover:
+    enabled: true
+    fast_periods: [5, 10, 20, 50]
+    slow_periods: [20, 50, 100, 200]
+    ma_types: [sma, ema]
+
+  # Volatility-Based Strategies
+  supertrend:
+    enabled: true
+    atr_periods: [7, 10, 14, 20]
+    multipliers: [2.0, 2.5, 3.0, 3.5]
+
+  # 52-Week High Strategy
+  fifty_two_week:
+    enabled: true
+    periods: [50, 126, 252]
+    entry_pcts: [0.90, 0.95, 0.98]
+    exit_pcts: [0.70, 0.80, 0.85]
+
+  # Parabolic SAR
+  parabolic_sar:
+    enabled: true
+    af_starts: [0.01, 0.02, 0.03]
+    af_steps: [0.01, 0.02]
+    af_maxes: [0.1, 0.2, 0.3]
+
+  # Channel Strategies
+  keltner:
+    enabled: true
+    ema_periods: [10, 20, 30]
+    atr_periods: [10, 14, 20]
+    multipliers: [1.5, 2.0, 2.5]
+
+  starc:
+    enabled: true
+    sma_periods: [5, 10, 15]
+    atr_periods: [10, 14, 20]
+    multipliers: [1.5, 2.0, 2.5]
+
+  bollinger:
+    enabled: true
+    periods: [10, 20, 30]
+    std_mults: [1.5, 2.0, 2.5]
+    squeeze_thresholds: [0.5, 1.0, 1.5]
+
+  # Directional Strategies
+  aroon:
+    enabled: true
+    periods: [14, 20, 25, 30]
+
+  dmi_adx:
+    enabled: true
+    di_periods: [10, 14, 20]
+    adx_periods: [10, 14, 20]
+    adx_thresholds: [20.0, 25.0, 30.0]
+
+  # Momentum Strategies
+  tsmom:
+    enabled: true
+    lookbacks: [21, 63, 126, 252]
+
+  # Oscillator Strategies (Mean Reversion)
+  rsi:
+    enabled: true
+    periods: [7, 14, 21]
+    overboughts: [70.0, 75.0, 80.0]
+    oversolds: [20.0, 25.0, 30.0]
+
+  macd:
+    enabled: true
+    fast_periods: [8, 12, 16]
+    slow_periods: [21, 26, 30]
+    signal_periods: [7, 9, 12]
+
+  stochastic:
+    enabled: true
+    k_periods: [5, 9, 14]
+    d_periods: [3, 5]
+    overboughts: [80.0]
+    oversolds: [20.0]
+
+  # Additional Strategies (disabled by default)
+  larry_williams:
+    enabled: false
+    range_mults: [1.0, 1.5, 2.0]
+    atr_stop_mults: [2.0, 2.5, 3.0]
+    atr_periods: [10, 14, 20]
+
+  heikin_ashi:
+    enabled: false
+    confirmation_bars: [1, 2, 3]
+
+output:
+  dir: results/gpu_sweeps
+  format: parquet  # or csv
+  include_equity_curves: false  # Set to true to save equity curves (large!)

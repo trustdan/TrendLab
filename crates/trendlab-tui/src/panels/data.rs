@@ -215,10 +215,7 @@ fn draw_ticker_list(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
     };
     let title = format!(
         "{} [{}/{}]{}",
-        sector.name,
-        selected_in_sector,
-        total_tickers,
-        scroll_indicator
+        sector.name, selected_in_sector, total_tickers, scroll_indicator
     );
 
     let list = List::new(items).block(panel_block(&title, is_ticker_focused));
@@ -357,10 +354,7 @@ fn draw_sector_summary(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
                 Span::styled("▶ ", Style::default().fg(colors::YELLOW)),
-                Span::styled(
-                    "Press ",
-                    Style::default().fg(colors::YELLOW),
-                ),
+                Span::styled("Press ", Style::default().fg(colors::YELLOW)),
                 Span::styled(
                     "f",
                     Style::default()
@@ -406,6 +400,19 @@ fn draw_sector_summary(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
             "Press → or Enter to browse tickers",
             Style::default().fg(colors::FG_DARK),
         )]));
+        lines.push(Line::from(vec![
+            Span::styled("Press ", Style::default().fg(colors::FG_DARK)),
+            Span::styled(
+                "s",
+                Style::default()
+                    .fg(colors::CYAN)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " to search for any symbol",
+                Style::default().fg(colors::FG_DARK),
+            ),
+        ]));
     }
 
     // Operation status
@@ -437,10 +444,19 @@ fn draw_sector_summary(f: &mut Frame, app: &App, area: Rect, is_active: bool) {
         "  a: Select ALL  n: Deselect ALL  f: Fetch",
         Style::default().fg(colors::FG_DARK),
     )]));
-    lines.push(Line::from(vec![Span::styled(
-        "  s: Search symbols",
-        Style::default().fg(colors::FG_DARK),
-    )]));
+    lines.push(Line::from(vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            "s",
+            Style::default()
+                .fg(colors::CYAN)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            ": Search for any symbol",
+            Style::default().fg(colors::FG_DARK),
+        ),
+    ]));
 
     let para = Paragraph::new(lines).block(panel_block("Selection Summary", is_active));
     f.render_widget(para, area);

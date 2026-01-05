@@ -736,6 +736,9 @@ pub enum StrategyTypeId {
     MacdAdx,
     OscillatorConfluence,
     Ichimoku,
+    // Combo strategies (combinations of different strategy types)
+    Combo2, // 2-way combo (two strategies confirming each other)
+    Combo3, // 3-way combo (three strategies confirming each other)
 }
 
 impl StrategyTypeId {
@@ -783,7 +786,14 @@ impl StrategyTypeId {
             Self::MacdAdx,
             Self::OscillatorConfluence,
             Self::Ichimoku,
+            // Note: Combo2 and Combo3 are not included in all() since they're
+            // dynamically generated during YOLO combo iterations, not user-selectable
         ]
+    }
+
+    /// Check if this is a combo strategy type.
+    pub fn is_combo(&self) -> bool {
+        matches!(self, Self::Combo2 | Self::Combo3)
     }
 
     /// Get display name.
@@ -826,6 +836,8 @@ impl StrategyTypeId {
             Self::MacdAdx => "MACD + ADX Filter",
             Self::OscillatorConfluence => "Oscillator Confluence",
             Self::Ichimoku => "Ichimoku Cloud",
+            Self::Combo2 => "2-Way Combo",
+            Self::Combo3 => "3-Way Combo",
         }
     }
 
@@ -869,6 +881,8 @@ impl StrategyTypeId {
             Self::MacdAdx => "macd_adx",
             Self::OscillatorConfluence => "oscillator_confluence",
             Self::Ichimoku => "ichimoku",
+            Self::Combo2 => "combo2",
+            Self::Combo3 => "combo3",
         }
     }
 }
@@ -1058,6 +1072,14 @@ pub enum StrategyConfigId {
         tenkan_period: usize,
         kijun_period: usize,
         senkou_b_period: usize,
+    },
+    /// Combo strategy combining multiple different strategy types.
+    /// Components are sorted by StrategyTypeId for order-independent hashing.
+    Combo {
+        /// Component strategies (type + config), sorted by type ID for consistent hashing
+        components: Vec<(StrategyTypeId, Box<StrategyConfigId>)>,
+        /// Voting method for signal aggregation
+        voting: VotingMethod,
     },
 }
 
@@ -1508,6 +1530,24 @@ impl PartialEq for StrategyConfigId {
                     senkou_b_period: s2,
                 },
             ) => t1 == t2 && k1 == k2 && s1 == s2,
+            (
+                Self::Combo {
+                    components: c1,
+                    voting: v1,
+                },
+                Self::Combo {
+                    components: c2,
+                    voting: v2,
+                },
+            ) => {
+                // Components are already sorted by StrategyTypeId, so direct comparison works
+                v1 == v2
+                    && c1.len() == c2.len()
+                    && c1
+                        .iter()
+                        .zip(c2.iter())
+                        .all(|((t1, cfg1), (t2, cfg2))| t1 == t2 && cfg1 == cfg2)
+            }
             _ => false,
         }
     }
@@ -1813,6 +1853,15 @@ impl std::hash::Hash for StrategyConfigId {
                 kijun_period.hash(state);
                 senkou_b_period.hash(state);
             }
+            Self::Combo { components, voting } => {
+                // Components are already sorted by StrategyTypeId for order-independence
+                components.len().hash(state);
+                for (strategy_type, config) in components {
+                    strategy_type.hash(state);
+                    config.hash(state);
+                }
+                voting.hash(state);
+            }
         }
     }
 }
@@ -1861,7 +1910,19 @@ impl StrategyConfigId {
             Self::MacdAdx { .. } => StrategyTypeId::MacdAdx,
             Self::OscillatorConfluence { .. } => StrategyTypeId::OscillatorConfluence,
             Self::Ichimoku { .. } => StrategyTypeId::Ichimoku,
+            Self::Combo { components, .. } => {
+                if components.len() == 2 {
+                    StrategyTypeId::Combo2
+                } else {
+                    StrategyTypeId::Combo3
+                }
+            }
         }
+    }
+
+    /// Check if this is a combo strategy config.
+    pub fn is_combo(&self) -> bool {
+        matches!(self, Self::Combo { .. })
     }
 
     /// Get display string for this config.
@@ -2117,6 +2178,11 @@ impl StrategyConfigId {
                 "Ichimoku {}/{}/{}",
                 tenkan_period, kijun_period, senkou_b_period
             ),
+            Self::Combo { components, voting } => {
+                let names: Vec<String> =
+                    components.iter().map(|(t, _)| t.id().to_string()).collect();
+                format!("Combo[{}|{:?}]", names.join("+"), voting)
+            }
         }
     }
 
@@ -2355,6 +2421,13 @@ impl StrategyConfigId {
                 kijun_period,
                 senkou_b_period,
             } => format!("{}_{}_{}", tenkan_period, kijun_period, senkou_b_period),
+            Self::Combo { components, voting } => {
+                let ids: Vec<String> = components
+                    .iter()
+                    .map(|(t, c)| format!("{}_{}", t.id(), c.file_id()))
+                    .collect();
+                format!("{:?}_{}", voting, ids.join("_"))
+            }
         }
     }
 
@@ -2451,6 +2524,14 @@ impl StrategyConfigId {
                 kijun_period,
                 ..
             } => ConfigId::new(*tenkan_period, *kijun_period),
+            Self::Combo { components, .. } => {
+                // For legacy compat, use first component's params (best effort)
+                if let Some((_, first_config)) = components.first() {
+                    first_config.to_legacy_config_id()
+                } else {
+                    ConfigId::new(0, 0)
+                }
+            }
         }
     }
 
@@ -5615,6 +5696,20 @@ pub fn create_strategy_from_config(config: &StrategyConfigId) -> Box<dyn Strateg
             *kijun_period,
             *senkou_b_period,
         )),
+        // Combo strategies (2-way and 3-way combinations of different strategy types)
+        StrategyConfigId::Combo { components, voting } => {
+            // Build each component strategy recursively
+            let strategies: Vec<Box<dyn Strategy>> = components
+                .iter()
+                .map(|(_, config)| create_strategy_from_config(config))
+                .collect();
+            // Use each component's warmup period as its "horizon" for weighted voting
+            let horizons: Vec<usize> = strategies
+                .iter()
+                .map(|s| s.warmup_period().max(1))
+                .collect();
+            Box::new(EnsembleStrategy::new(strategies, horizons, *voting))
+        }
     }
 }
 

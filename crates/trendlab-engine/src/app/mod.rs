@@ -49,7 +49,7 @@ pub use strategies::{
 };
 pub use sweep::SweepState;
 pub use utils::{calculate_drawdown, scan_parquet_directory};
-pub use yolo::{YoloConfigField, YoloConfigState, YoloState};
+pub use yolo::{ComboMode, YoloConfigField, YoloConfigState, YoloState};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -408,14 +408,69 @@ impl App {
             auto: AutoRunState::default(),
             yolo: {
                 // Load existing leaderboards on startup for persistence
-                let all_time_per_symbol =
-                    Leaderboard::load(std::path::Path::new("artifacts/leaderboard.json"))
-                        .ok()
-                        .unwrap_or_else(|| Leaderboard::new(4));
-                let all_time_cross_symbol = CrossSymbolLeaderboard::load(std::path::Path::new(
-                    "artifacts/cross_symbol_leaderboard.json",
-                ))
-                .ok();
+                let artifacts = trendlab_core::artifacts_dir();
+                tracing::info!(
+                    path = ?artifacts,
+                    exists = artifacts.exists(),
+                    "Loading leaderboards from artifacts directory"
+                );
+
+                let per_symbol_path = artifacts.join("leaderboard.json");
+                tracing::debug!(
+                    path = ?per_symbol_path,
+                    exists = per_symbol_path.exists(),
+                    "Per-symbol leaderboard file status"
+                );
+                let all_time_per_symbol = match Leaderboard::load(&per_symbol_path) {
+                    Ok(lb) => {
+                        tracing::info!(
+                            entries = lb.entries.len(),
+                            path = ?per_symbol_path,
+                            "Loaded per-symbol leaderboard"
+                        );
+                        lb
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            path = ?per_symbol_path,
+                            exists = per_symbol_path.exists(),
+                            "Failed to load per-symbol leaderboard, starting fresh"
+                        );
+                        Leaderboard::new(4)
+                    }
+                };
+
+                let cross_symbol_path = artifacts.join("cross_symbol_leaderboard.json");
+                tracing::debug!(
+                    path = ?cross_symbol_path,
+                    exists = cross_symbol_path.exists(),
+                    "Cross-symbol leaderboard file status"
+                );
+                let all_time_cross_symbol = match CrossSymbolLeaderboard::load(&cross_symbol_path) {
+                    Ok(lb) => {
+                        // Log unique session IDs from loaded entries
+                        let sessions: std::collections::HashSet<_> = lb.entries.iter()
+                            .filter_map(|e| e.session_id.as_ref())
+                            .collect();
+                        tracing::info!(
+                            entries = lb.entries.len(),
+                            sessions = ?sessions,
+                            path = ?cross_symbol_path,
+                            "Loaded cross-symbol leaderboard"
+                        );
+                        Some(lb)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            path = ?cross_symbol_path,
+                            exists = cross_symbol_path.exists(),
+                            "Failed to load cross-symbol leaderboard, starting fresh"
+                        );
+                        None
+                    }
+                };
                 YoloState {
                     // Session leaderboards start fresh each launch
                     session_leaderboard: Leaderboard::new(10),
@@ -841,7 +896,9 @@ impl App {
                         if self.data.selected_sector_index
                             >= self.data.sector_scroll_offset + DEFAULT_VISIBLE_HEIGHT
                         {
-                            self.data.sector_scroll_offset = self.data.selected_sector_index
+                            self.data.sector_scroll_offset = self
+                                .data
+                                .selected_sector_index
                                 .saturating_sub(DEFAULT_VISIBLE_HEIGHT - 1);
                         }
                     }
@@ -854,7 +911,9 @@ impl App {
                         if self.data.selected_ticker_index
                             >= self.data.ticker_scroll_offset + DEFAULT_VISIBLE_HEIGHT
                         {
-                            self.data.ticker_scroll_offset = self.data.selected_ticker_index
+                            self.data.ticker_scroll_offset = self
+                                .data
+                                .selected_ticker_index
                                 .saturating_sub(DEFAULT_VISIBLE_HEIGHT - 1);
                         }
                     }
@@ -2124,16 +2183,18 @@ impl App {
             pyramid_config: PyramidConfig::default(),
         };
 
-        // Try to load existing leaderboards (boxed to reduce enum size)
-        let existing_per_symbol_leaderboard = Box::new(
-            Leaderboard::load(std::path::Path::new("artifacts/leaderboard.json")).ok(),
+        // Use the already-loaded all-time leaderboards from app startup.
+        // This ensures consistency: the worker gets the same data that was loaded
+        // at startup, avoiding potential issues where a second load from disk fails
+        // or returns different data (race condition, file corruption, etc.).
+        tracing::info!(
+            per_symbol_entries = self.yolo.all_time_leaderboard.entries.len(),
+            cross_symbol_entries = self.yolo.all_time_cross_symbol_leaderboard.as_ref().map(|lb| lb.entries.len()).unwrap_or(0),
+            "YOLO start: using already-loaded all-time leaderboards"
         );
-        let existing_cross_symbol_leaderboard = Box::new(
-            CrossSymbolLeaderboard::load(std::path::Path::new(
-                "artifacts/cross_symbol_leaderboard.json",
-            ))
-            .ok(),
-        );
+
+        let existing_per_symbol_leaderboard = Box::new(Some(self.yolo.all_time_leaderboard.clone()));
+        let existing_cross_symbol_leaderboard = Box::new(self.yolo.all_time_cross_symbol_leaderboard.clone());
 
         // Provide symbol -> sector_id mapping so YOLO can do sector-aware validation.
         let sector_lookup = self.data.universe.build_sector_id_lookup();
@@ -2161,6 +2222,8 @@ impl App {
             polars_max_threads: self.yolo.polars_max_threads,
             outer_threads: self.yolo.outer_threads,
             warmup_iterations: self.yolo.warmup_iterations,
+            combo_warmup_iterations: self.yolo.config.combo_warmup_iterations,
+            combo_mode: self.yolo.config.combo_mode,
         };
 
         let symbols_count = selected.len();

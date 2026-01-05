@@ -10,11 +10,21 @@
 use crate::metrics::Metrics;
 use crate::statistics::{benjamini_hochberg, ConfidenceGrade};
 use crate::sweep::{StrategyConfigId, StrategyTypeId};
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use chrono::{DateTime, NaiveDate, Utc};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
+
+/// Deserialize a field that may be null as the default value.
+fn deserialize_null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    let opt = Option::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
+}
 
 // =============================================================================
 // Leaderboard Scope (Session vs All-Time)
@@ -91,8 +101,12 @@ pub struct LeaderboardEntry {
     /// When this entry was discovered
     pub discovered_at: DateTime<Utc>,
 
-    /// Which YOLO iteration found this config
+    /// Which YOLO iteration found this config (all-time counter)
     pub iteration: u32,
+
+    /// Session-relative iteration number (starts at 1 each session)
+    #[serde(default)]
+    pub session_iteration: Option<u32>,
 
     /// Session ID that discovered this entry (for tracking session vs all-time)
     #[serde(default)]
@@ -488,8 +502,8 @@ impl Leaderboard {
         false
     }
 
-    /// Sort entries by Sharpe (descending) and update ranks.
-    fn sort_and_rerank(&mut self) {
+    /// Sort entries by Sharpe (descending), truncate to max_entries, and update ranks.
+    pub fn sort_and_rerank(&mut self) {
         // Sort by Sharpe descending
         self.entries.sort_by(|a, b| {
             b.metrics
@@ -497,6 +511,11 @@ impl Leaderboard {
                 .partial_cmp(&a.metrics.sharpe)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+
+        // Truncate to max_entries to prevent unbounded growth
+        if self.entries.len() > self.max_entries {
+            self.entries.truncate(self.max_entries);
+        }
 
         // Update ranks (1-based)
         for (i, entry) in self.entries.iter_mut().enumerate() {
@@ -801,28 +820,40 @@ impl RankingWeights {
 
 /// Aggregated metrics computed across multiple symbols.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct AggregatedMetrics {
     /// Average Sharpe ratio across all symbols
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub avg_sharpe: f64,
     /// Minimum Sharpe (worst-performing symbol)
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub min_sharpe: f64,
     /// Maximum Sharpe (best-performing symbol)
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub max_sharpe: f64,
     /// Geometric mean of (1 + CAGR) - 1
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub geo_mean_cagr: f64,
     /// Arithmetic mean CAGR
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub avg_cagr: f64,
     /// Worst max drawdown across all symbols
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub worst_max_drawdown: f64,
     /// Average max drawdown
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub avg_max_drawdown: f64,
     /// Number of symbols where CAGR > 0
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub profitable_count: usize,
     /// Total number of symbols tested
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub total_symbols: usize,
     /// Hit rate (profitable_count / total_symbols)
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub hit_rate: f64,
     /// Average number of trades
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub avg_trades: f64,
 
     // =========================================================================
@@ -1759,8 +1790,12 @@ pub struct AggregatedConfigResult {
     /// When this entry was discovered
     pub discovered_at: DateTime<Utc>,
 
-    /// Which YOLO iteration found this config
+    /// Which YOLO iteration found this config (all-time counter)
     pub iteration: u32,
+
+    /// Session-relative iteration number (starts at 1 each session)
+    #[serde(default)]
+    pub session_iteration: Option<u32>,
 
     /// Session ID that discovered this entry (for tracking session vs all-time)
     #[serde(default)]
@@ -1912,8 +1947,10 @@ impl CrossSymbolLeaderboard {
         max_per_strategy: usize,
     ) -> Self {
         let now = Utc::now();
+        // Cap pre-allocation to avoid capacity overflow with usize::MAX
+        let initial_capacity = max_entries.min(10_000);
         Self {
-            entries: Vec::with_capacity(max_entries),
+            entries: Vec::with_capacity(initial_capacity),
             max_entries,
             max_per_strategy,
             rank_by,
@@ -2105,14 +2142,19 @@ impl CrossSymbolLeaderboard {
         grouped
     }
 
-    /// Sort entries by rank metric (descending) and update ranks.
-    fn sort_and_rerank(&mut self) {
+    /// Sort entries by rank metric (descending), truncate to max_entries, and update ranks.
+    pub fn sort_and_rerank(&mut self) {
         let rank_by = self.rank_by;
         self.entries.sort_by(|a, b| {
             let va = a.aggregate_metrics.rank_value(rank_by);
             let vb = b.aggregate_metrics.rank_value(rank_by);
             vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
         });
+
+        // Truncate to max_entries to prevent unbounded growth
+        if self.entries.len() > self.max_entries {
+            self.entries.truncate(self.max_entries);
+        }
 
         for (i, entry) in self.entries.iter_mut().enumerate() {
             entry.rank = i + 1;
@@ -2278,11 +2320,32 @@ pub struct HistoryEntry {
     pub avg_cagr: f64,
     /// Average max drawdown across symbols
     pub avg_max_drawdown: f64,
+
+    // Date range for deduplication (added in v2)
+    /// Start date of the backtest period
+    #[serde(default)]
+    pub tested_start: Option<NaiveDate>,
+    /// End date of the backtest period
+    #[serde(default)]
+    pub tested_end: Option<NaiveDate>,
 }
 
 impl HistoryEntry {
-    /// Create a history entry from an aggregated config result.
+    /// Create a history entry from an aggregated config result (without date range).
     pub fn from_aggregated(result: &AggregatedConfigResult, iteration: u32) -> Self {
+        Self::from_aggregated_with_dates(result, iteration, None, None)
+    }
+
+    /// Create a history entry from an aggregated config result with date range.
+    ///
+    /// The date range is used for deduplication - configs tested with similar date
+    /// ranges (±6 months combined) are considered duplicates.
+    pub fn from_aggregated_with_dates(
+        result: &AggregatedConfigResult,
+        iteration: u32,
+        start_date: Option<NaiveDate>,
+        end_date: Option<NaiveDate>,
+    ) -> Self {
         Self {
             tested_at: Utc::now(),
             iteration,
@@ -2296,6 +2359,8 @@ impl HistoryEntry {
             hit_rate: result.aggregate_metrics.hit_rate,
             avg_cagr: result.aggregate_metrics.avg_cagr,
             avg_max_drawdown: result.aggregate_metrics.avg_max_drawdown,
+            tested_start: start_date,
+            tested_end: end_date,
         }
     }
 }
@@ -2334,14 +2399,29 @@ impl HistoryLogger {
         })
     }
 
-    /// Log a single config result.
+    /// Log a single config result (without date range).
     ///
     /// Appends a single JSON line to the log file.
     /// Thread-safe through OS-level atomic appends for small writes.
     pub fn log(&mut self, result: &AggregatedConfigResult, iteration: u32) -> io::Result<()> {
+        self.log_with_dates(result, iteration, None, None)
+    }
+
+    /// Log a single config result with the backtest date range.
+    ///
+    /// The date range is used for deduplication - configs tested with similar date
+    /// ranges (±6 months combined) can be skipped on subsequent runs.
+    pub fn log_with_dates(
+        &mut self,
+        result: &AggregatedConfigResult,
+        iteration: u32,
+        start_date: Option<NaiveDate>,
+        end_date: Option<NaiveDate>,
+    ) -> io::Result<()> {
         use std::io::Write;
 
-        let entry = HistoryEntry::from_aggregated(result, iteration);
+        let entry =
+            HistoryEntry::from_aggregated_with_dates(result, iteration, start_date, end_date);
         let json = serde_json::to_string(&entry)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 

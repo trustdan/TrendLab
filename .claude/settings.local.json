@@ -124,7 +124,31 @@
       "Bash(sort:*)",
       "Bash(python3:*)",
       "Bash(python scripts/analyze_yolo_randomness.py:*)",
-      "Bash(timeout /t 3 /nobreak)"
+      "Bash(timeout /t 3 /nobreak)",
+      "Bash(python -m py_compile:*)",
+      "Bash(if not exist \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\configs\" mkdir \"c:\\\\Users\\\\Dan\\\\TrendLab\\\\configs\")",
+      "Bash(dir \"C:\\\\Program Files\\\\NVIDIA GPU Computing Toolkit\\\\CUDA\")",
+      "Bash(dir /s /b \"C:\\\\Program Files\\\\NVIDIA*\")",
+      "Bash(dir /s /b \"C:\\\\*nvrtc64*.dll\")",
+      "Bash(./.venv-gpu/Scripts/python.exe:*)",
+      "Bash(./.venv-gpu/Scripts/pip.exe:*)",
+      "Bash(PATH=\"$PATH:c:/Users/Dan/TrendLab/.venv-gpu/Lib/site-packages/nvidia/cuda_nvrtc/bin:c:/Users/Dan/TrendLab/.venv-gpu/Lib/site-packages/nvidia/cuda_runtime/bin\" ./.venv-gpu/Scripts/python.exe:*)",
+      "Bash(git checkout:*)",
+      "Bash(PYTHONIOENCODING=utf-8 ./.venv-gpu/Scripts/python.exe:*)",
+      "Bash(timeout 30 ./.venv-gpu/Scripts/python.exe:*)",
+      "Bash(..venv-gpuScriptspython.exe:*)",
+      "Bash(powershell -Command \"cd ''C:\\\\Users\\\\Dan\\\\TrendLab''; & ''.\\\\.venv-gpu\\\\Scripts\\\\python.exe'' -c ''from scripts.gpu_sweep.indicator_graph import IndicatorSpec, IndicatorType, collect_strategy_indicators; specs = collect_strategy_indicators\\(\"\"ma_crossover\"\", [{\"\"fast_period\"\": 10, \"\"slow_period\"\": 50, \"\"ma_type\"\": \"\"sma\"\"}]\\); print\\(f\"\"Collected specs: {specs}\"\"\\)''\")",
+      "Bash(powershell -Command \"Set-Location ''C:\\\\Users\\\\Dan\\\\TrendLab''; & ''.\\\\.venv-gpu\\\\Scripts\\\\python.exe'' ''scripts\\\\test_batched.py''\")",
+      "Bash(python scripts/test_kernels.py:*)",
+      "Bash(\".venv-gpu\\\\Scripts\\\\python.exe\" -u scripts/test_import_only.py)",
+      "Bash(\".venv-gpu\\\\Scripts\\\\python.exe\" -c:*)",
+      "Bash(\".venv-gpu\\\\Scripts\\\\python.exe\":*)",
+      "Bash(gpu-sweep.bat run:*)",
+      "Bash(dir /s /b c:UsersDanTrendLabartifacts*.json)",
+      "Bash(dir /s /b c:UsersDanTrendLabtargetreleaseartifacts*.json)",
+      "Bash(python scripts/merge_leaderboards.py:*)",
+      "Bash(set RUST_LOG=info:*)",
+      "Bash(targetreleasetrendlab-tui.exe)"
     ]
   }
 }

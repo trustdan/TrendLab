@@ -237,6 +237,30 @@ After warmup, ExploitWinner mode unlocks (5-25% chance):
 
 This ensures statistical significance before exploiting early winners.
 
+Parameter Space Exploration:
+YOLO uses aligned jitter bounds matching the exploration module's ranges:
+- Supertrend: ATR 3-100, multiplier 0.5-10.0
+- 52-Week High: period 20-1000, entry 0.50-1.0, exit 0.30-0.99
+- Keltner/STARC: EMA/SMA 3-200, ATR 3-100, mult 0.3-8.0
+- Donchian: entry 5-500, exit 2-200
+- MA Cross: fast 3-200, slow 10-1000
+- Parabolic SAR: AF 0.005-0.20, max 0.1-1.0
+
+These wide bounds enable discovery of unconventional profitable configs.
+
+Combo Strategy Iterations:
+YOLO mode automatically tests ensemble strategies alongside singles:
+- Odd iterations (1, 3, 5...): Single strategy configs
+- Even iterations (2, 4, 8...): 1 random 2-way combo
+- Every 6th iteration (6, 12, 18...): 1 random 3-way combo
+- Every 20th iteration (20, 40, 60...): 1 random 4-way combo
+
+Combo Generation:
+- Randomly selects 2-4 enabled strategies per combo
+- Each component gets independent random parameter jitter
+- Random voting method: Majority, UnanimousEntry, or WeightedByHorizon
+- Combos compete with singles for leaderboard slots
+
 Artifact Auto-Export:
 When YOLO discovers a new top cross-symbol config, it auto-exports a
 StrategyArtifact JSON to artifacts/exports/{session}/. These artifacts
@@ -402,6 +426,10 @@ const FEATURES_HELP: HelpContent = HelpContent {
             description: "Compare multiple strategies simultaneously",
         },
         HelpEntry {
+            key: "Combo Strategies",
+            description: "Auto-test 2-way and 3-way strategy combos in YOLO",
+        },
+        HelpEntry {
             key: "Symbol Search",
             description: "Find any Yahoo Finance symbol",
         },
@@ -441,6 +469,20 @@ Run multiple strategies on the same data:
 - Compare performance side-by-side
 - Identify strategy correlation
 - Find diversification opportunities
+
+COMBO STRATEGIES (YOLO Mode)
+Automatically discovers winning strategy combinations:
+- 2-Way Combos (every other iteration): Two strategies must confirm
+- 3-Way Combos (every 6th iteration): Three strategies must confirm
+- 4-Way Combos (every 20th iteration): Four strategies must confirm
+
+Voting Methods:
+- Majority: Entry when >50% of strategies agree
+- UnanimousEntry: All strategies must signal entry
+- WeightedByHorizon: Faster strategies get more weight
+
+1 random combo per combo iteration. Combos compete with singles for
+leaderboard slots (mixed competition).
 "#,
 };
 

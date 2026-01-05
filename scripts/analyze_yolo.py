@@ -13,9 +13,43 @@ Analyzes sweep results to extract insights about winning strategies:
 2. Parameter patterns
 3. Sector analysis
 4. Robustness metrics
+5. Combo strategy analysis (if combo data present):
+   - Component frequency (which singles appear in winning combos)
+   - Synergy analysis (combo performance vs component averages)
+   - Voting method comparison
+   - Combo vs single head-to-head comparison
+   - Robustness: combo vs single
 
 Usage:
     python scripts/analyze_yolo.py [--export-csv] [--charts]
+
+Output Files (with --export-csv):
+    strategy_comparison.csv       - Strategy rankings by median Sharpe
+    sector_performance.csv        - Sector rankings
+    strategy_sector_combos.csv    - Best strategy+sector pairs
+    robustness_scores.csv         - Configs ranked by consistency
+    universal_winners.csv         - Configs that rank well universally
+    params_*.csv                  - Parameter analysis per strategy type
+
+    Combo-specific (if combo data present):
+    combo_component_frequency.csv - How often each single strategy appears in combos
+    combo_synergy_analysis.csv    - Synergy scores, best/worst strategy pairs
+    combo_voting_analysis.csv     - Performance by voting method
+    combo_vs_single_comparison.csv - Head-to-head performance comparison
+    combo_robustness.csv          - Robustness comparison
+
+Charts (with --charts):
+    strategy_comparison.png       - Strategy type bar chart
+    best_strategy_per_sector.png  - Best strategy for each sector
+    sector_performance.png        - Sector rankings
+    robust_configs.png            - Top 15 most robust configurations
+
+    Combo-specific (if combo data present):
+    combo_vs_single.png           - Combo vs Single comparison (3 metrics)
+    combo_component_frequency.png - Component frequency bar chart
+    combo_synergy.png             - Synergy score bar chart
+    combo_voting_methods.png      - Voting method performance
+    combo_robustness.png          - Robustness comparison
 """
 
 import json
@@ -32,12 +66,77 @@ if sys.platform == 'win32':
 import polars as pl
 pl.Config.set_fmt_str_lengths(50)
 
-# Try to import matplotlib
+# Try to import matplotlib (with protection against segfaults on some systems)
+MATPLOTLIB_AVAILABLE = False
 try:
+    import matplotlib
+    matplotlib.use('Agg')  # Use non-interactive backend to avoid display issues
     import matplotlib.pyplot as plt
     MATPLOTLIB_AVAILABLE = True
-except ImportError:
-    MATPLOTLIB_AVAILABLE = False
+except (ImportError, RuntimeError):
+    pass
+
+
+# =============================================================================
+# Combo Strategy Helpers
+# =============================================================================
+
+def is_combo_strategy(strategy_type: str) -> bool:
+    """Check if strategy is a combo type."""
+    return strategy_type in ["Combo2", "Combo3"]
+
+
+def parse_combo_config(config: dict) -> dict | None:
+    """
+    Extract components and voting from combo config.
+
+    Returns dict with:
+      - components: List of [type, config] pairs
+      - voting: Voting method string
+      - component_types: Sorted list of component strategy types
+    """
+    if "Combo" not in config:
+        return None
+    combo = config["Combo"]
+    return {
+        "components": combo.get("components", []),
+        "voting": combo.get("voting", "Unknown"),
+        "component_types": sorted([c[0] for c in combo.get("components", [])])
+    }
+
+
+def get_combo_component_key(components: list) -> str:
+    """Create sortable key like 'Donchian+Supertrend'."""
+    types = sorted([c[0] for c in components])
+    return "+".join(types)
+
+
+def flatten_combo_params(combo_info: dict) -> dict:
+    """
+    Flatten all component parameters with prefixed column names.
+
+    Returns dict like:
+      comp1_Supertrend_period: 10
+      comp1_Supertrend_multiplier: 3.0
+      comp2_Donchian_entry_lookback: 20
+      ...
+
+    Handles both:
+      - Nested dict configs: {"Supertrend": {"period": 10}}
+      - Unit struct configs (no params): "TurtleS1" (string)
+    """
+    params = {}
+    for i, (comp_type, comp_config) in enumerate(combo_info["components"], start=1):
+        # comp_config can be:
+        # - dict like {"Supertrend": {"period": 10, "multiplier": 3.0}}
+        # - string like "TurtleS1" for unit structs with no params
+        if isinstance(comp_config, dict):
+            inner_params = comp_config.get(comp_type, {})
+            if isinstance(inner_params, dict):
+                for k, v in inner_params.items():
+                    params[f"comp{i}_{comp_type}_{k}"] = v
+        # For string configs (unit structs), no params to add
+    return params
 
 
 # =============================================================================
@@ -79,6 +178,7 @@ def load_leaderboard(path: Path) -> pl.DataFrame:
             except Exception:
                 pass
 
+        # Build base row
         row = {
             'rank': entry.get('rank'),
             'strategy_type': strategy_type,
@@ -88,9 +188,30 @@ def load_leaderboard(path: Path) -> pl.DataFrame:
             'start_date': start_date,
             'end_date': end_date,
             'period_days': period_days,
-            **{f'param_{k}': v for k, v in params.items()},
             **entry.get('metrics', {})
         }
+
+        # Add combo-specific columns
+        row['is_combo'] = is_combo_strategy(strategy_type)
+        if row['is_combo']:
+            combo_info = parse_combo_config(config)
+            if combo_info:
+                row['combo_size'] = len(combo_info['components'])
+                row['voting_method'] = combo_info['voting']
+                row['component_types'] = get_combo_component_key(combo_info['components'])
+                # Flatten all component parameters
+                row.update(flatten_combo_params(combo_info))
+            else:
+                row['combo_size'] = None
+                row['voting_method'] = None
+                row['component_types'] = None
+        else:
+            row['combo_size'] = None
+            row['voting_method'] = None
+            row['component_types'] = None
+            # Add regular params for single strategies
+            row.update({f'param_{k}': v for k, v in params.items()})
+
         rows.append(row)
 
     return pl.DataFrame(rows)
@@ -141,6 +262,7 @@ def load_cross_symbol_leaderboard(path: Path) -> tuple[pl.DataFrame, pl.DataFram
             except Exception:
                 pass
 
+        # Build config row with combo detection
         config_row = {
             'rank': entry.get('rank'),
             'strategy_type': strategy_type,
@@ -150,8 +272,34 @@ def load_cross_symbol_leaderboard(path: Path) -> tuple[pl.DataFrame, pl.DataFram
             'start_date': start_date,
             'end_date': end_date,
             'period_days': period_days,
-            **{f'param_{k}': v for k, v in params.items()},
         }
+
+        # Add combo-specific columns
+        config_row['is_combo'] = is_combo_strategy(strategy_type)
+        combo_info = None
+        if config_row['is_combo']:
+            combo_info = parse_combo_config(config_id)
+            if combo_info:
+                config_row['combo_size'] = len(combo_info['components'])
+                config_row['voting_method'] = combo_info['voting']
+                config_row['component_types'] = get_combo_component_key(combo_info['components'])
+                # Store component types list for later analysis (as JSON string)
+                config_row['component_types_list'] = json.dumps(combo_info['component_types'])
+                # Flatten all component parameters
+                config_row.update(flatten_combo_params(combo_info))
+            else:
+                config_row['combo_size'] = None
+                config_row['voting_method'] = None
+                config_row['component_types'] = None
+                config_row['component_types_list'] = None
+        else:
+            config_row['combo_size'] = None
+            config_row['voting_method'] = None
+            config_row['component_types'] = None
+            config_row['component_types_list'] = None
+            # Add regular params for single strategies
+            config_row.update({f'param_{k}': v for k, v in params.items()})
+
         config_rows.append(config_row)
 
         # Per-symbol metrics
@@ -169,12 +317,31 @@ def load_cross_symbol_leaderboard(path: Path) -> tuple[pl.DataFrame, pl.DataFram
                 'start_date': start_date,
                 'end_date': end_date,
                 'period_days': period_days,
-                **{f'param_{k}': v for k, v in params.items()},
                 **metrics
             }
+
+            # Add combo-specific columns (same as config_row)
+            ps_row['is_combo'] = is_combo_strategy(strategy_type)
+            if ps_row['is_combo'] and combo_info:
+                ps_row['combo_size'] = len(combo_info['components'])
+                ps_row['voting_method'] = combo_info['voting']
+                ps_row['component_types'] = get_combo_component_key(combo_info['components'])
+                ps_row['component_types_list'] = json.dumps(combo_info['component_types'])
+                ps_row.update(flatten_combo_params(combo_info))
+            else:
+                ps_row['combo_size'] = None
+                ps_row['voting_method'] = None
+                ps_row['component_types'] = None
+                ps_row['component_types_list'] = None
+                if not ps_row['is_combo']:
+                    ps_row.update({f'param_{k}': v for k, v in params.items()})
+
             per_symbol_rows.append(ps_row)
 
-    return pl.DataFrame(config_rows), pl.DataFrame(per_symbol_rows)
+    # Create DataFrames with explicit schema for mixed-type columns
+    config_df = pl.DataFrame(config_rows, infer_schema_length=None)
+    per_symbol_df = pl.DataFrame(per_symbol_rows, infer_schema_length=None)
+    return config_df, per_symbol_df
 
 
 # =============================================================================
@@ -356,6 +523,266 @@ def find_universal_winners(per_symbol_df: pl.DataFrame, min_symbols: int = 20) -
 
 
 # =============================================================================
+# Combo-Specific Analysis Functions
+# =============================================================================
+
+def analyze_combo_components(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Analyze frequency of single strategies appearing in winning combos.
+
+    Returns DataFrame with columns:
+      - component_strategy: The single strategy type
+      - appearance_count: How many combos include this strategy
+      - avg_combo_sharpe: Average Sharpe of combos containing this strategy
+      - pct_of_combos: What % of all combos include this strategy
+    """
+    # Filter to combos only
+    combo_df = df.filter(pl.col('is_combo') == True)
+
+    if len(combo_df) == 0:
+        return pl.DataFrame({
+            'component_strategy': [],
+            'appearance_count': [],
+            'avg_combo_sharpe': [],
+            'pct_of_combos': []
+        })
+
+    # Parse component_types_list and explode
+    total_combos = len(combo_df)
+
+    # Explode the component types
+    rows = []
+    for row in combo_df.iter_rows(named=True):
+        comp_list_str = row.get('component_types_list')
+        if comp_list_str:
+            try:
+                comp_list = json.loads(comp_list_str)
+                for comp in comp_list:
+                    rows.append({
+                        'component_strategy': comp,
+                        'sharpe': row.get('sharpe', 0),
+                        'config_str': row.get('config_str', '')
+                    })
+            except json.JSONDecodeError:
+                pass
+
+    if not rows:
+        return pl.DataFrame({
+            'component_strategy': [],
+            'appearance_count': [],
+            'avg_combo_sharpe': [],
+            'pct_of_combos': []
+        })
+
+    exploded = pl.DataFrame(rows)
+
+    return exploded.group_by('component_strategy').agg([
+        pl.count().alias('appearance_count'),
+        pl.col('sharpe').mean().alias('avg_combo_sharpe'),
+        pl.col('sharpe').median().alias('median_combo_sharpe'),
+        pl.col('config_str').n_unique().alias('unique_combos'),
+    ]).with_columns([
+        (pl.col('unique_combos') / total_combos * 100).alias('pct_of_combos')
+    ]).sort('appearance_count', descending=True)
+
+
+def analyze_synergy(per_symbol_df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Calculate synergy scores: combo performance vs average of component singles.
+
+    Synergy > 0 means combo outperforms the average of its components.
+
+    Returns DataFrame with:
+      - component_types: The combo pair/triple (e.g., "Donchian+Supertrend")
+      - voting_method: Voting method used
+      - combo_sharpe: Average Sharpe of this combo type
+      - avg_component_sharpe: Average Sharpe of component singles
+      - synergy_score: combo_sharpe - avg_component_sharpe
+    """
+    if 'is_combo' not in per_symbol_df.columns:
+        return pl.DataFrame()
+
+    # Get combo results
+    combo_df = per_symbol_df.filter(pl.col('is_combo') == True)
+    single_df = per_symbol_df.filter(pl.col('is_combo') == False)
+
+    if len(combo_df) == 0 or len(single_df) == 0:
+        return pl.DataFrame()
+
+    # Calculate average Sharpe per single strategy type
+    single_avg = single_df.group_by('strategy_type').agg([
+        pl.col('sharpe').mean().alias('single_avg_sharpe')
+    ])
+
+    # For each combo, calculate average Sharpe of its components
+    combo_results = []
+    for row in combo_df.iter_rows(named=True):
+        comp_list_str = row.get('component_types_list')
+        if not comp_list_str:
+            continue
+
+        try:
+            comp_list = json.loads(comp_list_str)
+        except json.JSONDecodeError:
+            continue
+
+        # Look up average Sharpe for each component
+        component_sharpes = []
+        for comp in comp_list:
+            avg_row = single_avg.filter(pl.col('strategy_type') == comp)
+            if len(avg_row) > 0:
+                component_sharpes.append(avg_row['single_avg_sharpe'][0])
+
+        if component_sharpes:
+            avg_comp_sharpe = sum(component_sharpes) / len(component_sharpes)
+        else:
+            avg_comp_sharpe = 0.0
+
+        combo_results.append({
+            'component_types': row.get('component_types', ''),
+            'voting_method': row.get('voting_method', ''),
+            'symbol': row.get('symbol', ''),
+            'combo_sharpe': row.get('sharpe', 0),
+            'avg_component_sharpe': avg_comp_sharpe,
+        })
+
+    if not combo_results:
+        return pl.DataFrame()
+
+    result_df = pl.DataFrame(combo_results).with_columns([
+        (pl.col('combo_sharpe') - pl.col('avg_component_sharpe')).alias('synergy_score')
+    ])
+
+    # Aggregate by combo type and voting method
+    return result_df.group_by(['component_types', 'voting_method']).agg([
+        pl.count().alias('count'),
+        pl.col('combo_sharpe').mean().alias('avg_combo_sharpe'),
+        pl.col('combo_sharpe').median().alias('median_combo_sharpe'),
+        pl.col('avg_component_sharpe').mean().alias('avg_component_sharpe'),
+        pl.col('synergy_score').mean().alias('avg_synergy'),
+        pl.col('synergy_score').median().alias('median_synergy'),
+        pl.col('synergy_score').std().alias('std_synergy'),
+        # Count positive synergy occurrences
+        (pl.col('synergy_score') > 0).sum().alias('positive_synergy_count'),
+    ]).with_columns([
+        (pl.col('positive_synergy_count') / pl.col('count') * 100).alias('pct_positive_synergy')
+    ]).sort('avg_synergy', descending=True)
+
+
+def analyze_voting_methods(df: pl.DataFrame) -> pl.DataFrame:
+    """Compare performance by voting method across all combos."""
+    combo_df = df.filter(pl.col('is_combo') == True)
+
+    if len(combo_df) == 0:
+        return pl.DataFrame()
+
+    return combo_df.group_by('voting_method').agg([
+        pl.count().alias('count'),
+        pl.col('sharpe').median().alias('median_sharpe'),
+        pl.col('sharpe').mean().alias('mean_sharpe'),
+        pl.col('sharpe').std().alias('std_sharpe'),
+        pl.col('cagr').median().alias('median_cagr'),
+        pl.col('max_drawdown').mean().alias('avg_max_dd'),
+        pl.col('num_trades').mean().alias('avg_trades'),
+    ]).sort('median_sharpe', descending=True)
+
+
+def compare_combo_vs_single(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Head-to-head comparison of combos vs single strategies.
+
+    Returns DataFrame comparing:
+      - Sharpe, CAGR, drawdown, trades, win rate
+      - Robustness metrics (if available)
+    """
+    # Group by is_combo flag
+    comparison = df.group_by('is_combo').agg([
+        pl.count().alias('count'),
+        pl.col('sharpe').median().alias('median_sharpe'),
+        pl.col('sharpe').mean().alias('mean_sharpe'),
+        pl.col('sharpe').std().alias('std_sharpe'),
+        pl.col('cagr').median().alias('median_cagr'),
+        pl.col('cagr').mean().alias('mean_cagr'),
+        pl.col('max_drawdown').mean().alias('avg_max_dd'),
+        pl.col('max_drawdown').std().alias('std_max_dd'),
+        pl.col('num_trades').mean().alias('avg_trades'),
+        pl.col('num_trades').std().alias('std_trades'),
+        pl.col('win_rate').mean().alias('avg_win_rate'),
+        # Positive performance count
+        (pl.col('sharpe') > 0).sum().alias('positive_sharpe_count'),
+        (pl.col('cagr') > 0).sum().alias('positive_cagr_count'),
+    ]).with_columns([
+        pl.when(pl.col('is_combo') == True)
+          .then(pl.lit('Combo'))
+          .otherwise(pl.lit('Single'))
+          .alias('strategy_category'),
+        (pl.col('positive_sharpe_count') / pl.col('count') * 100).alias('pct_positive_sharpe'),
+    ]).select([
+        'strategy_category',
+        'count',
+        'median_sharpe',
+        'mean_sharpe',
+        'std_sharpe',
+        'median_cagr',
+        'avg_max_dd',
+        'avg_trades',
+        'avg_win_rate',
+        'pct_positive_sharpe',
+    ]).sort('strategy_category')
+
+    return comparison
+
+
+def analyze_combo_robustness(per_symbol_df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Calculate robustness metrics specifically for combo strategies.
+
+    Returns DataFrame comparing robustness of combos vs singles:
+      - Cross-symbol consistency
+      - Win ratio
+      - Sharpe stability
+    """
+    combo_df = per_symbol_df.filter(pl.col('is_combo') == True)
+    single_df = per_symbol_df.filter(pl.col('is_combo') == False)
+
+    def calc_robustness(df: pl.DataFrame, label: str) -> dict:
+        if len(df) == 0:
+            return {
+                'category': label,
+                'num_configs': 0,
+                'avg_symbol_win_ratio': 0,
+                'avg_sharpe': 0,
+                'avg_sharpe_std': 0,
+                'avg_robustness_score': 0,
+            }
+
+        # Calculate per-config stats
+        config_stats = df.group_by(['strategy_type', 'config_str']).agg([
+            pl.count().alias('num_symbols'),
+            pl.col('sharpe').mean().alias('avg_sharpe'),
+            pl.col('sharpe').std().alias('std_sharpe'),
+            (pl.col('sharpe') > 0).sum().alias('positive_sharpe_count'),
+        ]).with_columns([
+            (pl.col('positive_sharpe_count') / pl.col('num_symbols')).alias('symbol_win_ratio'),
+            (pl.col('avg_sharpe') / (1 + pl.col('std_sharpe').fill_null(0))).alias('robustness_score'),
+        ]).filter(pl.col('num_symbols') >= 5)
+
+        return {
+            'category': label,
+            'num_configs': len(config_stats),
+            'avg_symbol_win_ratio': config_stats['symbol_win_ratio'].mean() if len(config_stats) > 0 else 0,
+            'avg_sharpe': config_stats['avg_sharpe'].mean() if len(config_stats) > 0 else 0,
+            'avg_sharpe_std': config_stats['std_sharpe'].mean() if len(config_stats) > 0 else 0,
+            'avg_robustness_score': config_stats['robustness_score'].mean() if len(config_stats) > 0 else 0,
+        }
+
+    combo_robust = calc_robustness(combo_df, 'Combo')
+    single_robust = calc_robustness(single_df, 'Single')
+
+    return pl.DataFrame([combo_robust, single_robust])
+
+
+# =============================================================================
 # Output Functions
 # =============================================================================
 
@@ -499,6 +926,155 @@ def create_charts(strategy_comparison: pl.DataFrame, sector_perf: pl.DataFrame,
     print(f"Charts saved to {output_dir}")
 
 
+def create_combo_charts(
+    combo_vs_single: pl.DataFrame,
+    component_freq: pl.DataFrame,
+    synergy: pl.DataFrame,
+    voting_analysis: pl.DataFrame,
+    combo_robustness: pl.DataFrame,
+    output_dir: Path
+):
+    """Create combo-specific analysis charts."""
+    if not MATPLOTLIB_AVAILABLE:
+        print("Matplotlib not available - skipping combo charts")
+        return
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Combo vs Single comparison bar chart
+    if len(combo_vs_single) > 0:
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+        categories = combo_vs_single['strategy_category'].to_list()
+
+        # Sharpe comparison
+        sharpes = combo_vs_single['median_sharpe'].to_list()
+        bars = axes[0].bar(categories, sharpes, color=['#E74C3C', '#3498DB'])
+        axes[0].set_ylabel('Median Sharpe')
+        axes[0].set_title('Sharpe Ratio')
+        axes[0].axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+        for bar, val in zip(bars, sharpes):
+            axes[0].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                        f'{val:.3f}', ha='center', fontsize=10)
+
+        # CAGR comparison
+        cagrs = [v * 100 for v in combo_vs_single['median_cagr'].to_list()]
+        bars = axes[1].bar(categories, cagrs, color=['#E74C3C', '#3498DB'])
+        axes[1].set_ylabel('Median CAGR (%)')
+        axes[1].set_title('Annual Return')
+        axes[1].axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+        for bar, val in zip(bars, cagrs):
+            axes[1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
+                        f'{val:.1f}%', ha='center', fontsize=10)
+
+        # Win rate comparison
+        pct_positive = combo_vs_single['pct_positive_sharpe'].to_list()
+        bars = axes[2].bar(categories, pct_positive, color=['#E74C3C', '#3498DB'])
+        axes[2].set_ylabel('% Positive Sharpe')
+        axes[2].set_title('Win Rate')
+        for bar, val in zip(bars, pct_positive):
+            axes[2].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
+                        f'{val:.1f}%', ha='center', fontsize=10)
+
+        plt.suptitle('Combo vs Single Strategy Comparison', fontsize=14)
+        plt.tight_layout()
+        plt.savefig(output_dir / 'combo_vs_single.png', dpi=150)
+        plt.close()
+
+    # 2. Component frequency chart
+    if len(component_freq) > 0:
+        fig, ax = plt.subplots(figsize=(12, 6))
+        components = component_freq['component_strategy'].to_list()[:15]
+        counts = component_freq['appearance_count'].to_list()[:15]
+
+        bars = ax.barh(components, counts, color='#9B59B6')
+        ax.set_xlabel('Appearance Count in Combos')
+        ax.set_title('Component Strategy Frequency in Winning Combos')
+
+        for bar, count in zip(bars, counts):
+            ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height()/2,
+                   f'{count}', va='center')
+
+        plt.tight_layout()
+        plt.savefig(output_dir / 'combo_component_frequency.png', dpi=150)
+        plt.close()
+
+    # 3. Synergy heatmap (strategy pairs)
+    if len(synergy) > 0:
+        # Get unique component pairs and their synergy scores
+        fig, ax = plt.subplots(figsize=(14, 8))
+
+        combo_types = synergy['component_types'].to_list()[:15]
+        synergy_scores = synergy['avg_synergy'].to_list()[:15]
+
+        colors = ['#27AE60' if s > 0 else '#E74C3C' for s in synergy_scores]
+        bars = ax.barh(combo_types, synergy_scores, color=colors)
+        ax.set_xlabel('Average Synergy Score (Combo - Avg Component Sharpe)')
+        ax.set_title('Strategy Pair Synergy Analysis')
+        ax.axvline(x=0, color='black', linestyle='-', linewidth=1)
+
+        for bar, score in zip(bars, synergy_scores):
+            offset = 0.01 if score >= 0 else -0.05
+            ax.text(bar.get_width() + offset, bar.get_y() + bar.get_height()/2,
+                   f'{score:.3f}', va='center', fontsize=8)
+
+        plt.tight_layout()
+        plt.savefig(output_dir / 'combo_synergy.png', dpi=150)
+        plt.close()
+
+    # 4. Voting method comparison
+    if len(voting_analysis) > 0:
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        methods = voting_analysis['voting_method'].to_list()
+        sharpes = voting_analysis['median_sharpe'].to_list()
+
+        bars = ax.bar(methods, sharpes, color='#1ABC9C')
+        ax.set_ylabel('Median Sharpe Ratio')
+        ax.set_title('Performance by Voting Method')
+        ax.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+
+        for bar, sharpe in zip(bars, sharpes):
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                   f'{sharpe:.3f}', ha='center')
+
+        plt.xticks(rotation=45, ha='right')
+        plt.tight_layout()
+        plt.savefig(output_dir / 'combo_voting_methods.png', dpi=150)
+        plt.close()
+
+    # 5. Robustness comparison
+    if len(combo_robustness) > 0:
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+        categories = combo_robustness['category'].to_list()
+
+        # Win ratio
+        win_ratios = [v * 100 for v in combo_robustness['avg_symbol_win_ratio'].to_list()]
+        bars = axes[0].bar(categories, win_ratios, color=['#E74C3C', '#3498DB'])
+        axes[0].set_ylabel('Avg Symbol Win Ratio (%)')
+        axes[0].set_title('Cross-Symbol Consistency')
+        for bar, val in zip(bars, win_ratios):
+            axes[0].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
+                        f'{val:.1f}%', ha='center')
+
+        # Robustness score
+        robustness_scores = combo_robustness['avg_robustness_score'].to_list()
+        bars = axes[1].bar(categories, robustness_scores, color=['#E74C3C', '#3498DB'])
+        axes[1].set_ylabel('Avg Robustness Score')
+        axes[1].set_title('Robustness (Sharpe / (1 + StdDev))')
+        for bar, val in zip(bars, robustness_scores):
+            axes[1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                        f'{val:.3f}', ha='center')
+
+        plt.suptitle('Robustness: Combo vs Single Strategies', fontsize=14)
+        plt.tight_layout()
+        plt.savefig(output_dir / 'combo_robustness.png', dpi=150)
+        plt.close()
+
+    print(f"Combo charts saved to {output_dir}")
+
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -619,6 +1195,55 @@ def main():
         robustness = None
 
     # =================================
+    # 5. COMBO STRATEGY ANALYSIS
+    # =================================
+    print_section("5. Combo Strategy Analysis")
+
+    # Check if we have combo data
+    has_combos = 'is_combo' in analysis_df.columns and analysis_df.filter(pl.col('is_combo') == True).height > 0
+
+    if has_combos:
+        print(f"Found {analysis_df.filter(pl.col('is_combo') == True).height} combo entries")
+
+        # Component frequency
+        component_freq = analyze_combo_components(analysis_df)
+        if len(component_freq) > 0:
+            print_dataframe(component_freq, "\nComponent Strategy Frequency in Combos")
+
+        # Synergy analysis
+        if per_symbol_df is not None:
+            synergy = analyze_synergy(per_symbol_df)
+            if len(synergy) > 0:
+                print_dataframe(synergy.head(15), "\nStrategy Pair Synergy (top 15)")
+        else:
+            synergy = pl.DataFrame()
+
+        # Voting method analysis
+        voting_analysis = analyze_voting_methods(analysis_df)
+        if len(voting_analysis) > 0:
+            print_dataframe(voting_analysis, "\nPerformance by Voting Method")
+
+        # Combo vs Single comparison
+        combo_vs_single = compare_combo_vs_single(analysis_df)
+        if len(combo_vs_single) > 0:
+            print_dataframe(combo_vs_single, "\nCombo vs Single Strategy Comparison")
+
+        # Combo robustness
+        if per_symbol_df is not None:
+            combo_robustness = analyze_combo_robustness(per_symbol_df)
+            if len(combo_robustness) > 0:
+                print_dataframe(combo_robustness, "\nRobustness: Combo vs Single")
+        else:
+            combo_robustness = pl.DataFrame()
+    else:
+        print("No combo strategies found in data.")
+        component_freq = pl.DataFrame()
+        synergy = pl.DataFrame()
+        voting_analysis = pl.DataFrame()
+        combo_vs_single = pl.DataFrame()
+        combo_robustness = pl.DataFrame()
+
+    # =================================
     # EXPORT & CHARTS
     # =================================
     if args.export_csv:
@@ -636,12 +1261,36 @@ def main():
         for strategy_type, param_df in param_analysis.items():
             param_df.write_csv(args.output_dir / f'params_{strategy_type}.csv')
 
+        # Export combo-specific CSVs
+        if has_combos:
+            if len(component_freq) > 0:
+                component_freq.write_csv(args.output_dir / 'combo_component_frequency.csv')
+            if len(synergy) > 0:
+                synergy.write_csv(args.output_dir / 'combo_synergy_analysis.csv')
+            if len(voting_analysis) > 0:
+                voting_analysis.write_csv(args.output_dir / 'combo_voting_analysis.csv')
+            if len(combo_vs_single) > 0:
+                combo_vs_single.write_csv(args.output_dir / 'combo_vs_single_comparison.csv')
+            if len(combo_robustness) > 0:
+                combo_robustness.write_csv(args.output_dir / 'combo_robustness.csv')
+
         print(f"CSVs exported to {args.output_dir}")
 
     if args.charts:
         print_section("Generating Charts")
         if robustness is not None:
             create_charts(strategy_comparison, sector_perf, robustness, combo_perf, args.output_dir)
+
+        # Generate combo-specific charts
+        if has_combos:
+            create_combo_charts(
+                combo_vs_single,
+                component_freq,
+                synergy,
+                voting_analysis,
+                combo_robustness,
+                args.output_dir
+            )
 
     # =================================
     # SUMMARY INSIGHTS
@@ -664,6 +1313,46 @@ def main():
         print(f"\nMOST ROBUST CONFIG: {best_robust[0]} - {best_robust[1]}")
         print(f"  Avg Sharpe: {best_robust[3]:.3f}, Std: {best_robust[4]:.3f}")
         print(f"  Symbols with positive Sharpe: {int(best_robust[10])}/{best_robust[2]}")
+
+    # Combo insights
+    if has_combos and len(combo_vs_single) >= 2:
+        print("\n" + "="*40)
+        print("COMBO STRATEGY INSIGHTS")
+        print("="*40)
+
+        # Find combo and single rows
+        combo_row = combo_vs_single.filter(pl.col('strategy_category') == 'Combo')
+        single_row = combo_vs_single.filter(pl.col('strategy_category') == 'Single')
+
+        if len(combo_row) > 0 and len(single_row) > 0:
+            combo_sharpe = combo_row['median_sharpe'][0]
+            single_sharpe = single_row['median_sharpe'][0]
+            combo_count = combo_row['count'][0]
+            single_count = single_row['count'][0]
+
+            print(f"\nCombo vs Single Comparison:")
+            print(f"  Combos:  {combo_count} entries, median Sharpe {combo_sharpe:.3f}")
+            print(f"  Singles: {single_count} entries, median Sharpe {single_sharpe:.3f}")
+
+            if combo_sharpe > single_sharpe:
+                improvement = ((combo_sharpe / single_sharpe) - 1) * 100 if single_sharpe > 0 else 0
+                print(f"  -> Combos outperform by {improvement:.1f}%")
+            else:
+                print(f"  -> Singles outperform combos")
+
+        # Best synergy pair
+        if len(synergy) > 0:
+            best_synergy = synergy.row(0, named=True)
+            print(f"\nBEST SYNERGY PAIR: {best_synergy['component_types']}")
+            print(f"  Voting: {best_synergy['voting_method']}")
+            print(f"  Synergy Score: {best_synergy['avg_synergy']:.3f}")
+            print(f"  Positive Synergy Rate: {best_synergy['pct_positive_synergy']:.1f}%")
+
+        # Best voting method
+        if len(voting_analysis) > 0:
+            best_voting = voting_analysis.row(0, named=True)
+            print(f"\nBEST VOTING METHOD: {best_voting['voting_method']}")
+            print(f"  Median Sharpe: {best_voting['median_sharpe']:.3f}")
 
 
 if __name__ == '__main__':

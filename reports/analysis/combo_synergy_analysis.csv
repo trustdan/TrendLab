@@ -1,0 +1,6 @@
+component_types,voting_method,count,avg_combo_sharpe,median_combo_sharpe,avg_component_sharpe,avg_synergy,median_synergy,std_synergy,positive_synergy_count,pct_positive_synergy
+ParabolicSarFiltered+SupertrendCooldown,UnanimousEntry,222,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0
+DmiAdx+FiftyTwoWeekHighTrailing+SupertrendVolume+TurtleS1,UnanimousEntry,222,0.0,0.0,0.017316751811283053,-0.017316751811283053,-0.017316751811283053,0.0,0,0.0
+BollingerSqueeze+SupertrendVolume,Majority,222,0.0,0.0,0.025929564621566974,-0.025929564621566974,-0.025929564621566974,0.0,0,0.0
+Ensemble+ParabolicSarFiltered+Supertrend,Majority,20,0.18846713149104707,0.16918494706419332,0.21724526213882128,-0.028778130647774174,-0.048060315074627935,0.11228624612118114,7,35.0
+Donchian+MACrossover+ParabolicSar,UnanimousEntry,222,-0.0066032075707153255,0.0,0.2030521073249515,-0.2096553148956668,-0.2030521073249515,0.11876655024159032,10,4.504504504504505

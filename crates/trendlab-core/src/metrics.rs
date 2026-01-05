@@ -1,70 +1,75 @@
 //! Performance metrics calculations.
 
 use crate::backtest::{BacktestResult, Trade};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Deserialize a field that may be null as the default value.
+fn deserialize_null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    let opt = Option::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
+}
 
 /// Performance metrics for a backtest run.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct Metrics {
     /// Total return (as decimal, e.g., 0.25 = 25%)
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub total_return: f64,
 
     /// Compound annual growth rate
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub cagr: f64,
 
     /// Annualized Sharpe ratio (assuming 252 trading days)
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub sharpe: f64,
 
     /// Annualized Sortino ratio
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub sortino: f64,
 
     /// Maximum drawdown (as a positive percentage, e.g., 0.20 = 20%)
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub max_drawdown: f64,
 
     /// Calmar ratio (CAGR / Max Drawdown)
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub calmar: f64,
 
     /// Win rate (winning trades / total trades)
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub win_rate: f64,
 
     /// Profit factor (gross profit / gross loss)
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub profit_factor: f64,
 
     /// Total number of trades
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub num_trades: u32,
 
     /// Annual turnover (as multiple of capital)
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub turnover: f64,
 
     /// Maximum consecutive losing trades
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub max_consecutive_losses: u32,
 
     /// Maximum consecutive winning trades
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub max_consecutive_wins: u32,
 
     /// Average length of losing streaks
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub avg_losing_streak: f64,
 }
 
-impl Default for Metrics {
-    fn default() -> Self {
-        Self {
-            total_return: 0.0,
-            cagr: 0.0,
-            sharpe: 0.0,
-            sortino: 0.0,
-            max_drawdown: 0.0,
-            calmar: 0.0,
-            win_rate: 0.0,
-            profit_factor: 0.0,
-            num_trades: 0,
-            turnover: 0.0,
-            max_consecutive_losses: 0,
-            max_consecutive_wins: 0,
-            avg_losing_streak: 0.0,
-        }
-    }
-}
 
 /// Compute all metrics from a BacktestResult.
 pub fn compute_metrics(result: &BacktestResult, initial_cash: f64) -> Metrics {
@@ -143,10 +148,11 @@ pub fn compute_metrics(result: &BacktestResult, initial_cash: f64) -> Metrics {
         .filter(|t| t.net_pnl < 0.0)
         .map(|t| t.net_pnl.abs())
         .sum();
+    // Profit factor: cap at 999.99 when gross_loss is 0 to avoid JSON null (INFINITY → null)
     let profit_factor = if gross_loss > 0.0 {
-        gross_profit / gross_loss
+        (gross_profit / gross_loss).min(999.99)
     } else if gross_profit > 0.0 {
-        f64::INFINITY
+        999.99 // Capped: no losses means "infinite" profit factor
     } else {
         0.0
     };

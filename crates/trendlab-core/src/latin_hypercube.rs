@@ -153,10 +153,7 @@ pub fn generate_lhs_2d<R: Rng>(
     rng: &mut R,
 ) -> Vec<(f64, f64)> {
     let samples = generate_lhs_samples(n_samples, vec![bounds1, bounds2], rng);
-    samples
-        .into_iter()
-        .map(|s| (s[0], s[1]))
-        .collect()
+    samples.into_iter().map(|s| (s[0], s[1])).collect()
 }
 
 /// Generate LHS samples for a 3-parameter strategy.
@@ -170,10 +167,7 @@ pub fn generate_lhs_3d<R: Rng>(
     rng: &mut R,
 ) -> Vec<(f64, f64, f64)> {
     let samples = generate_lhs_samples(n_samples, vec![bounds1, bounds2, bounds3], rng);
-    samples
-        .into_iter()
-        .map(|s| (s[0], s[1], s[2]))
-        .collect()
+    samples.into_iter().map(|s| (s[0], s[1], s[2])).collect()
 }
 
 #[cfg(test)]
@@ -225,7 +219,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         let samples = generate_lhs_2d(
             5,
-            (10.0, 50.0, 5.0),  // e.g., ATR period
+            (10.0, 50.0, 5.0), // e.g., ATR period
             (1.0, 5.0, 0.5),   // e.g., multiplier
             &mut rng,
         );
@@ -242,9 +236,9 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         let samples = generate_lhs_3d(
             5,
-            (50.0, 500.0, 10.0),  // period
-            (0.70, 1.0, 0.01),    // entry_pct
-            (0.40, 0.95, 0.01),   // exit_pct
+            (50.0, 500.0, 10.0), // period
+            (0.70, 1.0, 0.01),   // entry_pct
+            (0.40, 0.95, 0.01),  // exit_pct
             &mut rng,
         );
 

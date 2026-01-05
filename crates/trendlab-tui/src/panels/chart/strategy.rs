@@ -12,27 +12,33 @@ use ratatui::{
 use crate::ui::{colors, panel_block};
 use trendlab_engine::app::{App, StrategyCurve, TickerBestStrategy};
 
-use super::colors::strategy_color;
+use super::colors::{strategy_color, CURVE_COLORS};
 use super::empty_states::draw_no_strategy_data;
 use super::formatters::{generate_date_labels, generate_index_labels};
 
 /// Maximum strategies to show in comparison chart (top N by Sharpe)
 const MAX_STRATEGY_CURVES: usize = 5;
 
-/// Create legend line for strategy comparison view with Sharpe ratios
+/// Create legend line for strategy comparison view with Sharpe ratios and params
 fn strategy_legend_line(curves: &[&StrategyCurve]) -> Line<'static> {
     let mut spans = vec![];
     for (i, curve) in curves.iter().enumerate() {
         if i > 0 {
             spans.push(Span::raw("  ")); // More spacing between entries
         }
-        let color = strategy_color(curve.strategy_type);
+        // Use index-based colors so each curve is distinct regardless of strategy type
+        let color = CURVE_COLORS[i % CURVE_COLORS.len()];
         spans.push(Span::styled("■", Style::default().fg(color)));
         spans.push(Span::styled(
-            format!("{} ", curve.strategy_type.name()),
+            format!("{}: ", curve.strategy_type.name()),
             Style::default().fg(colors::FG),
         ));
-        // Show Sharpe ratio for clarity
+        // Show config parameters
+        spans.push(Span::styled(
+            format!("{} ", curve.config_display),
+            Style::default().fg(colors::YELLOW),
+        ));
+        // Show Sharpe ratio
         spans.push(Span::styled(
             format!("({:.2})", curve.metrics.sharpe),
             Style::default().fg(colors::FG_DARK),
@@ -135,16 +141,19 @@ pub fn draw_strategy_comparison_chart(f: &mut Frame, app: &App, area: Rect, is_a
         y_max *= 1.05;
     }
 
-    // Create datasets for each top strategy
+    // Create datasets for each top strategy with distinct colors
     let datasets: Vec<Dataset> = all_data
         .iter()
         .zip(top_curves.iter())
-        .map(|(data, curve)| {
-            let color = strategy_color(curve.strategy_type);
-            // Concise name with Sharpe for chart legend
+        .enumerate()
+        .map(|(i, (data, curve))| {
+            // Use index-based colors so each curve is distinct
+            let color = CURVE_COLORS[i % CURVE_COLORS.len()];
+            // Concise name with config and Sharpe for chart legend
             let name = format!(
-                "{} ({:.2})",
+                "{} {} ({:.2})",
                 curve.strategy_type.name(),
+                curve.config_display,
                 curve.metrics.sharpe
             );
             Dataset::default()

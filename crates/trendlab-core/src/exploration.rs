@@ -5,12 +5,30 @@
 
 use crate::leaderboard::HistoryEntry;
 use crate::sweep::{StrategyConfigId, StrategyTypeId};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
+
+// =============================================================================
+// Cell Granularity Constants
+// =============================================================================
+
+/// Default cell size for coverage tracking (50 bins per dimension).
+/// Changed from 0.1 (10 bins) to 0.02 (50 bins) for finer-grained tracking.
+pub const DEFAULT_CELL_SIZE: f64 = 0.02;
+
+/// Minimum sample size for find_least_visited_cell().
+const MIN_SAMPLE_SIZE: usize = 1000;
+
+/// Maximum sample size for find_least_visited_cell().
+const MAX_SAMPLE_SIZE: usize = 10000;
+
+/// Reference cell count for effective_coverage_ratio normalization.
+/// Based on the old 3D system with 10 bins: 10^3 = 1000 cells.
+const REFERENCE_CELL_COUNT: f64 = 1000.0;
 
 /// Parameter bounds for a single parameter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,8 +128,12 @@ impl NormalizedConfig {
 /// Coverage statistics for a single strategy type.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StrategyCoverage {
-    /// Grid cell size (e.g., 0.1 = 10 bins per dimension)
+    /// Grid cell size (e.g., 0.02 = 50 bins per dimension)
     pub cell_size: f64,
+    /// Number of dimensions (parameters) for this strategy.
+    /// Used for accurate coverage ratio calculation.
+    #[serde(default = "default_dimensions")]
+    pub dimensions: usize,
     /// Which cells have been visited (cell_index -> visit count)
     pub visited_cells: HashMap<u64, u32>,
     /// Total configs tested for this strategy
@@ -127,10 +149,15 @@ fn default_max_winners() -> usize {
     500
 }
 
+fn default_dimensions() -> usize {
+    3 // Fallback for legacy data without dimensions field
+}
+
 impl StrategyCoverage {
-    pub fn new(cell_size: f64) -> Self {
+    pub fn new(cell_size: f64, dimensions: usize) -> Self {
         Self {
             cell_size,
+            dimensions: dimensions.max(1), // At least 1 dimension
             visited_cells: HashMap::new(),
             total_tested: 0,
             winner_configs: Vec::new(),
@@ -150,14 +177,28 @@ impl StrategyCoverage {
     }
 
     /// Calculate coverage ratio (fraction of cells visited at least once).
+    /// Uses the actual dimension count for this strategy.
     pub fn coverage_ratio(&self) -> f64 {
-        let dimensions = 3; // Typical strategy has 2-4 params, use 3 as average
         let cells_per_dim = (1.0 / self.cell_size).ceil() as u64;
-        let total_cells = cells_per_dim.pow(dimensions as u32);
+        let total_cells = cells_per_dim.pow(self.dimensions as u32);
         if total_cells == 0 {
             return 1.0;
         }
         self.visited_cells.len() as f64 / total_cells as f64
+    }
+
+    /// Calculate effective coverage ratio for exploration mode selection.
+    ///
+    /// This normalizes coverage across different dimension counts so that
+    /// exploration mode thresholds (0.3, 0.6) work consistently regardless
+    /// of whether the strategy has 1, 2, or 3 parameters.
+    ///
+    /// We scale relative to the old 3D 10-bin reference (1000 cells) so that
+    /// visiting the same absolute number of unique cells produces similar
+    /// mode selection behavior.
+    pub fn effective_coverage_ratio(&self) -> f64 {
+        let visited = self.visited_cells.len() as f64;
+        (visited / REFERENCE_CELL_COUNT).min(1.0)
     }
 
     /// Find a random least-visited cell.
@@ -169,8 +210,11 @@ impl StrategyCoverage {
         let mut min_visits = u32::MAX;
         let mut candidates = Vec::new();
 
-        // Sample random cells to find least-visited (more efficient than checking all)
-        let sample_size = (total_cells as usize).min(1000);
+        // Sample random cells to find least-visited.
+        // Scale sample size with total cells: ~10% coverage, capped between MIN and MAX.
+        let sample_size = (total_cells as usize / 10)
+            .clamp(MIN_SAMPLE_SIZE, MAX_SAMPLE_SIZE)
+            .min(total_cells as usize); // Never sample more than exists
         for _ in 0..sample_size {
             let cell_idx = rng.gen_range(0..total_cells);
             let visits = self.visited_cells.get(&cell_idx).copied().unwrap_or(0);
@@ -227,7 +271,10 @@ pub struct ExplorationState {
 }
 
 impl ExplorationState {
-    pub const CURRENT_VERSION: u32 = 1;
+    /// Schema version for exploration state.
+    /// v1: Original with 0.1 cell size (10 bins)
+    /// v2: Updated to 0.02 cell size (50 bins) + dimensions field
+    pub const CURRENT_VERSION: u32 = 2;
 
     pub fn new() -> Self {
         Self {
@@ -246,8 +293,22 @@ impl ExplorationState {
     }
 
     /// Load or create a new exploration state.
+    /// Automatically discards outdated versions (the state will be rebuilt from yolo_history).
     pub fn load_or_default(path: &Path) -> Self {
-        Self::load(path).unwrap_or_default()
+        match Self::load(path) {
+            Ok(state) if state.version >= Self::CURRENT_VERSION => state,
+            Ok(state) => {
+                // Outdated version - discard and start fresh.
+                // The state will be rebuilt from yolo_history/*.jsonl files anyway.
+                tracing::info!(
+                    old_version = state.version,
+                    new_version = Self::CURRENT_VERSION,
+                    "Discarding outdated exploration state (will rebuild from history)"
+                );
+                Self::new()
+            }
+            Err(_) => Self::new(),
+        }
     }
 
     /// Save exploration state to a file.
@@ -273,10 +334,12 @@ impl ExplorationState {
     }
 
     /// Get or create coverage for a strategy type.
+    /// Uses DEFAULT_CELL_SIZE (50 bins) and the actual dimension count for the strategy.
     pub fn get_coverage_mut(&mut self, strategy_type: StrategyTypeId) -> &mut StrategyCoverage {
+        let dimensions = get_param_bounds(strategy_type).len();
         self.coverage
             .entry(strategy_type)
-            .or_insert_with(|| StrategyCoverage::new(0.1)) // 10% cell size = 10 bins per dimension
+            .or_insert_with(|| StrategyCoverage::new(DEFAULT_CELL_SIZE, dimensions.max(1)))
     }
 
     /// Record a tested configuration.
@@ -622,16 +685,64 @@ pub struct ExplorationConfig {
     pub nonlocal_jump_probability: f64,
     /// Number of warmup iterations before winner exploitation begins (0 = no warmup)
     pub warmup_iterations: u32,
+
+    // ExploitWinner decay parameters
+    /// Initial probability of ExploitWinner mode (e.g., 0.25 = 25%)
+    pub initial_exploit_pct: f64,
+    /// Decay factor applied every `exploit_decay_interval` iterations (e.g., 0.9)
+    pub exploit_decay_factor: f64,
+    /// Number of iterations between decay steps (e.g., 100)
+    pub exploit_decay_interval: u32,
+    /// Minimum exploitation probability floor (e.g., 0.05 = 5%)
+    pub exploit_floor_pct: f64,
 }
 
 impl Default for ExplorationConfig {
     fn default() -> Self {
         Self {
-            force_random_every_n: 5,           // Force random every 5 iterations
-            nonlocal_jump_probability: 0.15,   // 15% chance of non-local jump
-            warmup_iterations: 50,             // 50 iterations before exploitation begins
+            force_random_every_n: 5,         // Force random every 5 iterations
+            nonlocal_jump_probability: 0.15, // 15% chance of non-local jump
+            warmup_iterations: 50,           // 50 iterations before exploitation begins
+
+            // ExploitWinner decay: starts at 25%, decays by 0.9× every 100 iterations, floor at 5%
+            initial_exploit_pct: 0.25,
+            exploit_decay_factor: 0.9,
+            exploit_decay_interval: 100,
+            exploit_floor_pct: 0.05,
         }
     }
+}
+
+/// Calculate the current exploitation probability based on iteration count.
+///
+/// The exploitation probability decays over time to encourage broader exploration
+/// as the search progresses. The formula is:
+///
+/// ```text
+/// prob = max(floor, initial * decay_factor^((iteration - warmup) / interval))
+/// ```
+///
+/// During warmup (iteration < warmup_iterations), returns 0.0.
+///
+/// Example decay schedule with defaults (initial=0.25, decay=0.9, interval=100, floor=0.05):
+/// - Iterations 0-49: 0% (warmup)
+/// - Iterations 50-149: 25%
+/// - Iterations 150-249: 22.5%
+/// - Iterations 250-349: 20.25%
+/// - Iterations 1000+: ~5% (floor)
+pub fn calculate_exploit_probability(iteration: u32, config: &ExplorationConfig) -> f64 {
+    if iteration < config.warmup_iterations {
+        return 0.0;
+    }
+
+    if config.exploit_decay_interval == 0 {
+        return config.initial_exploit_pct;
+    }
+
+    let periods_elapsed = (iteration - config.warmup_iterations) / config.exploit_decay_interval;
+    let decayed =
+        config.initial_exploit_pct * config.exploit_decay_factor.powi(periods_elapsed as i32);
+    decayed.max(config.exploit_floor_pct)
 }
 
 /// Select exploration mode based on coverage state.
@@ -668,42 +779,54 @@ pub fn select_exploration_mode_with_config(
     }
 
     // Force pure random mode every N iterations to break out of local optima
-    if config.force_random_every_n > 0 && iteration > 0 && iteration.is_multiple_of(config.force_random_every_n) {
+    if config.force_random_every_n > 0
+        && iteration > 0
+        && iteration.is_multiple_of(config.force_random_every_n)
+    {
         return ExplorationMode::PureRandom;
     }
 
-    let coverage_ratio = state.coverage_ratio(strategy_type);
+    // Use effective_coverage_ratio() for consistent mode selection across different
+    // dimension counts. This normalizes to a 1000-cell reference (old 3D 10-bin grid).
+    let coverage_ratio = state
+        .coverage
+        .get(&strategy_type)
+        .map_or(0.0, |c| c.effective_coverage_ratio());
     let has_winners = state.has_winners(strategy_type);
 
-    // NEW: More aggressive exploration probabilities
-    // Reduced exploitation, increased random/coverage at all stages
-    // Format: (local, exploit, random, coverage)
-    let (local, exploit, random, coverage) = if coverage_ratio < 0.3 {
-        // Early exploration: heavy random + coverage
-        (0.15, 0.05, 0.40, 0.40)
-    } else if coverage_ratio < 0.6 {
-        // Mid exploration: still favor exploration over exploitation
-        (0.20, 0.15, 0.35, 0.30)
+    // Calculate decaying exploitation probability
+    // Starts at initial_exploit_pct and decays toward exploit_floor_pct over time
+    let exploit_prob = if has_winners {
+        calculate_exploit_probability(iteration, config)
     } else {
-        // Late exploration: still maintain significant random component
-        // OLD: (0.30, 0.35, 0.15, 0.20) - too much exploitation!
-        // NEW: Balance exploitation with continued exploration
-        (0.20, 0.25, 0.30, 0.25)
+        0.0
     };
 
-    // If no winners, redistribute exploit probability to random
-    let (local, exploit, random, _coverage) = if !has_winners {
-        (local, 0.0, random + exploit, coverage)
+    // Distribute remaining probability among other modes based on coverage
+    // Format: (local, random, coverage) - exploit is handled separately
+    let remaining = 1.0 - exploit_prob;
+    let (local_ratio, random_ratio, coverage_ratio_target) = if coverage_ratio < 0.3 {
+        // Early exploration: heavy random + coverage
+        (0.15, 0.45, 0.40)
+    } else if coverage_ratio < 0.6 {
+        // Mid exploration: more balanced
+        (0.20, 0.45, 0.35)
     } else {
-        (local, exploit, random, coverage)
+        // Late exploration: still maintain significant random component
+        (0.25, 0.40, 0.35)
     };
+
+    // Scale to remaining probability
+    let local = remaining * local_ratio;
+    let random = remaining * random_ratio;
+    let _coverage = remaining * coverage_ratio_target;
 
     let roll = rng.gen::<f64>();
     if roll < local {
         ExplorationMode::LocalJitter
-    } else if roll < local + exploit {
+    } else if roll < local + exploit_prob {
         ExplorationMode::ExploitWinner
-    } else if roll < local + exploit + random {
+    } else if roll < local + exploit_prob + random {
         ExplorationMode::PureRandom
     } else {
         ExplorationMode::MaximizeCoverage
@@ -761,6 +884,195 @@ pub fn record_history_entry(state: &mut ExplorationState, entry: &HistoryEntry) 
     }
 }
 
+// =============================================================================
+// Config Deduplication Index
+// =============================================================================
+
+/// A date range when a config was tested.
+#[derive(Debug, Clone)]
+struct TestedDateRange {
+    start: NaiveDate,
+    end: NaiveDate,
+}
+
+/// Index of previously tested configs with their date ranges.
+///
+/// Used to skip configs that have already been tested with a "similar" date range.
+/// Two date ranges are considered similar if |start1-start2| + |end1-end2| ≤ threshold_days.
+#[derive(Debug, Default)]
+pub struct TestedConfigsIndex {
+    /// Map from config_hash to list of tested date ranges
+    entries: HashMap<u64, Vec<TestedDateRange>>,
+    /// Threshold for "similar" date ranges (combined start+end difference in days)
+    /// Default is 180 days (6 months combined)
+    threshold_days: i64,
+}
+
+impl TestedConfigsIndex {
+    /// Create a new index with the default threshold (180 days).
+    pub fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            threshold_days: 180,
+        }
+    }
+
+    /// Create a new index with a custom threshold.
+    pub fn with_threshold(threshold_days: i64) -> Self {
+        Self {
+            entries: HashMap::new(),
+            threshold_days,
+        }
+    }
+
+    /// Check if a config was already tested with a similar date range.
+    ///
+    /// Returns true if there exists a previous test where:
+    /// |prev_start - start| + |prev_end - end| <= threshold_days
+    pub fn was_tested_with_similar_range(
+        &self,
+        config_hash: u64,
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> bool {
+        if let Some(ranges) = self.entries.get(&config_hash) {
+            for range in ranges {
+                let start_diff = (range.start - start).num_days().abs();
+                let end_diff = (range.end - end).num_days().abs();
+                if start_diff + end_diff <= self.threshold_days {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Add a tested config with its date range to the index.
+    pub fn add(&mut self, config_hash: u64, start: NaiveDate, end: NaiveDate) {
+        self.entries
+            .entry(config_hash)
+            .or_default()
+            .push(TestedDateRange { start, end });
+    }
+
+    /// Get the number of unique configs in the index.
+    pub fn unique_configs(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Get the total number of test records (including duplicates).
+    pub fn total_records(&self) -> usize {
+        self.entries.values().map(|v| v.len()).sum()
+    }
+}
+
+/// Build a TestedConfigsIndex from existing YOLO history files.
+///
+/// Parses JSONL files from `artifacts/yolo_history/` directory and builds
+/// an index of all previously tested configs with their date ranges.
+pub fn build_tested_configs_index(history_dir: &Path) -> io::Result<TestedConfigsIndex> {
+    use std::io::BufRead;
+
+    let mut index = TestedConfigsIndex::new();
+
+    if !history_dir.exists() {
+        return Ok(index);
+    }
+
+    let entries = std::fs::read_dir(history_dir)?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "jsonl") {
+            let file = std::fs::File::open(&path)?;
+            let reader = std::io::BufReader::new(file);
+
+            for line in reader.lines().map_while(Result::ok) {
+                if let Ok(entry) = serde_json::from_str::<HistoryEntry>(&line) {
+                    // Only add if we have date information
+                    if let (Some(start), Some(end)) = (entry.tested_start, entry.tested_end) {
+                        index.add(entry.config_hash, start, end);
+                    }
+                }
+            }
+        }
+    }
+
+    tracing::info!(
+        unique_configs = index.unique_configs(),
+        total_records = index.total_records(),
+        "Built tested configs index from history"
+    );
+
+    Ok(index)
+}
+
+// =============================================================================
+// LHS Integration Helpers
+// =============================================================================
+
+use crate::latin_hypercube::generate_lhs_samples;
+
+/// Generate Latin Hypercube Samples for a strategy type.
+///
+/// Returns samples in actual parameter space (not normalized), suitable for
+/// direct use in building strategy configs.
+///
+/// # Arguments
+/// * `strategy_type` - The strategy type to generate samples for
+/// * `n_samples` - Number of samples to generate (typically 10-15)
+/// * `rng` - Random number generator
+///
+/// # Returns
+/// Vec of samples, where each sample is a Vec<f64> of parameter values
+/// in the same order as get_param_bounds() returns.
+/// Returns empty Vec if strategy has no defined bounds.
+pub fn generate_lhs_for_strategy<R: Rng>(
+    strategy_type: StrategyTypeId,
+    n_samples: usize,
+    rng: &mut R,
+) -> Vec<Vec<f64>> {
+    let bounds = get_param_bounds(strategy_type);
+    if bounds.is_empty() {
+        return Vec::new();
+    }
+
+    // Convert ParamBounds to (min, max, step) tuples for LHS
+    let lhs_bounds: Vec<(f64, f64, f64)> = bounds.iter().map(|b| (b.min, b.max, b.step)).collect();
+
+    generate_lhs_samples(n_samples, lhs_bounds, rng)
+}
+
+/// Convert LHS samples to NormalizedConfigs for exploration tracking.
+///
+/// Takes raw parameter values from LHS and normalizes them to [0,1] space.
+pub fn lhs_samples_to_normalized(
+    strategy_type: StrategyTypeId,
+    samples: &[Vec<f64>],
+) -> Vec<NormalizedConfig> {
+    let bounds = get_param_bounds(strategy_type);
+    if bounds.is_empty() {
+        return Vec::new();
+    }
+
+    samples
+        .iter()
+        .filter_map(|sample| {
+            if sample.len() != bounds.len() {
+                return None;
+            }
+            let normalized_params: Vec<f64> = sample
+                .iter()
+                .zip(bounds.iter())
+                .map(|(value, bound)| bound.normalize(*value))
+                .collect();
+            Some(NormalizedConfig {
+                strategy_type,
+                params: normalized_params,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -814,5 +1126,82 @@ mod tests {
         assert_eq!(bounds.len(), 2);
         assert_eq!(bounds[0].name, "atr_period");
         assert_eq!(bounds[1].name, "multiplier");
+    }
+
+    #[test]
+    fn test_exploit_probability_decay() {
+        let config = ExplorationConfig::default();
+
+        // During warmup (0-49): 0%
+        assert!((calculate_exploit_probability(0, &config) - 0.0).abs() < 0.001);
+        assert!((calculate_exploit_probability(49, &config) - 0.0).abs() < 0.001);
+
+        // First period after warmup (50-149): 25%
+        assert!((calculate_exploit_probability(50, &config) - 0.25).abs() < 0.001);
+        assert!((calculate_exploit_probability(149, &config) - 0.25).abs() < 0.001);
+
+        // Second period (150-249): 25% * 0.9 = 22.5%
+        assert!((calculate_exploit_probability(150, &config) - 0.225).abs() < 0.001);
+
+        // Third period (250-349): 25% * 0.9^2 = 20.25%
+        assert!((calculate_exploit_probability(250, &config) - 0.2025).abs() < 0.001);
+
+        // Very late (floor at 5%)
+        let late_prob = calculate_exploit_probability(10000, &config);
+        assert!(
+            (late_prob - 0.05).abs() < 0.001,
+            "Expected floor of 5%, got {}",
+            late_prob
+        );
+    }
+
+    #[test]
+    fn test_effective_coverage_ratio() {
+        let mut coverage = StrategyCoverage::new(DEFAULT_CELL_SIZE, 2);
+
+        // Empty coverage
+        assert!((coverage.effective_coverage_ratio() - 0.0).abs() < 0.001);
+
+        // Add 500 unique cells -> 500 / 1000 = 0.5
+        for i in 0..500u64 {
+            coverage.visited_cells.insert(i, 1);
+        }
+        assert!((coverage.effective_coverage_ratio() - 0.5).abs() < 0.001);
+
+        // Add 600 more cells -> 1100 / 1000 = capped at 1.0
+        for i in 500..1100u64 {
+            coverage.visited_cells.insert(i, 1);
+        }
+        assert!((coverage.effective_coverage_ratio() - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_tested_configs_index() {
+        let mut index = TestedConfigsIndex::with_threshold(180); // 6 months combined
+
+        let date1 = NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
+        let date2 = NaiveDate::from_ymd_opt(2024, 12, 31).unwrap();
+
+        // Not tested yet
+        assert!(!index.was_tested_with_similar_range(12345, date1, date2));
+
+        // Add to index
+        index.add(12345, date1, date2);
+
+        // Exact match -> should be similar
+        assert!(index.was_tested_with_similar_range(12345, date1, date2));
+
+        // Within threshold (start +30, end -30 = 60 total diff < 180)
+        let date1_shifted = NaiveDate::from_ymd_opt(2020, 2, 1).unwrap();
+        let date2_shifted = NaiveDate::from_ymd_opt(2024, 12, 1).unwrap();
+        assert!(index.was_tested_with_similar_range(12345, date1_shifted, date2_shifted));
+
+        // Outside threshold (start +100, end -100 = 200 total diff > 180)
+        let date1_far = NaiveDate::from_ymd_opt(2020, 4, 11).unwrap(); // +100 days
+        let date2_far = NaiveDate::from_ymd_opt(2024, 9, 22).unwrap(); // -100 days
+        assert!(!index.was_tested_with_similar_range(12345, date1_far, date2_far));
+
+        // Different config hash
+        assert!(!index.was_tested_with_similar_range(99999, date1, date2));
     }
 }

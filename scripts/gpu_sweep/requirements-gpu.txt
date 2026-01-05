@@ -1,0 +1,27 @@
+# GPU Mega-Sweep Dependencies
+#
+# Install with:
+#   pip install -r scripts/gpu_sweep/requirements-gpu.txt
+#
+# Note: cupy-cuda12x requires CUDA 12.x toolkit installed on your system.
+# For other CUDA versions, replace with:
+#   - cupy-cuda11x  (CUDA 11.x)
+#   - cupy-cuda110  (CUDA 11.0)
+# Check your CUDA version with: nvcc --version
+
+# Core GPU computation
+cupy-cuda12x>=13.0.0  # CuPy with CUDA 12.x support (RTX 5070 Ti)
+
+# Data handling
+polars>=0.20.0  # Fast DataFrame operations
+
+# CLI and config
+click>=8.0.0  # Command-line interface
+pyyaml>=6.0.0  # YAML configuration
+
+# Progress and output
+rich>=13.0.0  # Pretty console output
+tqdm>=4.0.0  # Progress bars (optional)
+
+# For validation against Rust results
+numpy>=1.24.0  # Array operations for comparison

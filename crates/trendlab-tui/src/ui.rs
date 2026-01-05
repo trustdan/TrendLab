@@ -606,6 +606,47 @@ fn draw_yolo_config_modal(f: &mut Frame, app: &App) {
         Span::styled(format!("{}", config.warmup_iterations), warmup_style),
     ]));
 
+    // Combo mode
+    let combo_style = if focused == YoloConfigField::ComboMode {
+        Style::default()
+            .fg(colors::GREEN)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(colors::FG)
+    };
+    let combo_marker = if focused == YoloConfigField::ComboMode {
+        "▶ "
+    } else {
+        "  "
+    };
+    lines.push(Line::from(vec![
+        Span::styled(combo_marker, combo_style),
+        Span::styled("Combos:        ", Style::default().fg(colors::FG_DARK)),
+        Span::styled(config.combo_mode.display_name(), combo_style),
+    ]));
+
+    // Combo warmup (iterations before combo testing begins)
+    let combo_warmup_style = if focused == YoloConfigField::ComboWarmup {
+        Style::default()
+            .fg(colors::GREEN)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(colors::FG)
+    };
+    let combo_warmup_marker = if focused == YoloConfigField::ComboWarmup {
+        "▶ "
+    } else {
+        "  "
+    };
+    lines.push(Line::from(vec![
+        Span::styled(combo_warmup_marker, combo_warmup_style),
+        Span::styled("Combo warmup:  ", Style::default().fg(colors::FG_DARK)),
+        Span::styled(
+            format!("{}", config.combo_warmup_iterations),
+            combo_warmup_style,
+        ),
+    ]));
+
     lines.push(Line::from(""));
 
     // Show sweep depth options horizontally when focused
