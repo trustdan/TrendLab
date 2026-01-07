@@ -476,20 +476,30 @@ pub fn get_param_bounds(strategy_type: StrategyTypeId) -> Vec<ParamBounds> {
         | StrategyTypeId::SupertrendConfirmed
         | StrategyTypeId::SupertrendAsymmetric
         | StrategyTypeId::SupertrendCooldown => vec![
+            // WIDENED: was 5-50, now 3-100
             ParamBounds::new("atr_period", 3.0, 100.0, 1.0),
+            // WIDENED: was 1.0-5.0, now 0.5-10.0
             ParamBounds::new("multiplier", 0.5, 10.0, 0.1),
         ],
         StrategyTypeId::FiftyTwoWeekHighMomentum | StrategyTypeId::FiftyTwoWeekHighTrailing => {
+            // Use same WIDENED bounds as base FiftyTwoWeekHigh
             vec![
-                ParamBounds::new("period", 20.0, 1000.0, 5.0),
-                ParamBounds::new("entry_pct", 0.50, 1.0, 0.01),
-                ParamBounds::new("exit_pct", 0.30, 0.99, 0.01),
+                // WIDENED: was 20-260, now 10-300
+                ParamBounds::new("period", 10.0, 300.0, 5.0),
+                // WIDENED: was 0.85-1.0, now 0.80-1.0
+                ParamBounds::new("entry_pct", 0.80, 1.0, 0.01),
+                // WIDENED: was 0.60-0.95, now 0.50-0.95
+                ParamBounds::new("exit_pct", 0.50, 0.95, 0.01),
             ]
         }
         StrategyTypeId::ParabolicSarFiltered | StrategyTypeId::ParabolicSarDelayed => vec![
-            ParamBounds::new("af_start", 0.005, 0.20, 0.005),
-            ParamBounds::new("af_step", 0.005, 0.20, 0.005),
-            ParamBounds::new("af_max", 0.1, 1.0, 0.01),
+            // Use same WIDENED bounds as base ParabolicSar
+            // WIDENED: was 0.01-0.05, now 0.005-0.1
+            ParamBounds::new("af_start", 0.005, 0.1, 0.005),
+            // WIDENED: was 0.01-0.05, now 0.005-0.1
+            ParamBounds::new("af_step", 0.005, 0.1, 0.005),
+            // WIDENED: was 0.1-0.5, now 0.1-0.5 (already wide)
+            ParamBounds::new("af_max", 0.1, 0.5, 0.01),
         ],
         // Strategies without clear parameter bounds or fixed params
         StrategyTypeId::TurtleS1 | StrategyTypeId::TurtleS2 => {
@@ -758,6 +768,7 @@ pub fn select_exploration_mode(
 /// Select exploration mode with iteration awareness and configuration.
 /// Forces pure random mode every `force_random_every_n` iterations.
 /// During warmup phase, disables winner exploitation to allow broader exploration.
+/// When nonlocal_jump_probability is very high (>=0.8), also forces more pure exploration.
 pub fn select_exploration_mode_with_config(
     rng: &mut impl Rng,
     state: &ExplorationState,
@@ -765,6 +776,20 @@ pub fn select_exploration_mode_with_config(
     iteration: u32,
     config: &ExplorationConfig,
 ) -> ExplorationMode {
+    // High randomization mode: when user sets 80%+ randomization, force more exploration
+    // This prevents tight clustering even after winners establish themselves
+    if config.nonlocal_jump_probability >= 0.8 {
+        let roll = rng.gen::<f64>();
+        // 70% PureRandom, 20% MaximizeCoverage, 10% LocalJitter - never exploit
+        return if roll < 0.70 {
+            ExplorationMode::PureRandom
+        } else if roll < 0.90 {
+            ExplorationMode::MaximizeCoverage
+        } else {
+            ExplorationMode::LocalJitter
+        };
+    }
+
     // During warmup: only exploration, no exploitation
     // This prevents locking in early winners that may not be statistically significant
     if iteration < config.warmup_iterations {

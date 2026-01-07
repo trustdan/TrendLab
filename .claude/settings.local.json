@@ -148,7 +148,9 @@
       "Bash(dir /s /b c:UsersDanTrendLabtargetreleaseartifacts*.json)",
       "Bash(python scripts/merge_leaderboards.py:*)",
       "Bash(set RUST_LOG=info:*)",
-      "Bash(targetreleasetrendlab-tui.exe)"
+      "Bash(targetreleasetrendlab-tui.exe)",
+      "Bash(\"C:\\\\tools\\\\Anaconda3\\\\Anaconda3\\\\python.exe\" scripts/analyze_yolo.py --data-dir target/release/artifacts --export-csv --output-dir reports/analysis)",
+      "Bash(powershell -Command \"cd ''c:\\\\Users\\\\Dan\\\\TrendLab''; python scripts/analyze_yolo.py --data-dir target/release/artifacts --export-csv --output-dir reports/analysis\")"
     ]
   }
 }

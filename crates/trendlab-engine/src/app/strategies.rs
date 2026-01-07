@@ -247,9 +247,10 @@ pub struct MACrossoverConfig {
 
 impl Default for MACrossoverConfig {
     fn default() -> Self {
+        // Optimized: YOLO analysis found long-term MAs (fast 185-195, slow 115-175) work best
         Self {
-            fast_period: 10,
-            slow_period: 50,
+            fast_period: 190,
+            slow_period: 150,
             ma_type: 0, // SMA
         }
     }
@@ -327,8 +328,9 @@ pub struct SupertrendConfig {
 
 impl Default for SupertrendConfig {
     fn default() -> Self {
+        // Optimized: YOLO analysis found atr_period 4-7 with multiplier 3.0 performs best
         Self {
-            atr_period: 10,
+            atr_period: 7,
             multiplier: 3.0,
         }
     }

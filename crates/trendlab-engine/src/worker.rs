@@ -2327,6 +2327,24 @@ async fn handle_yolo_mode(
         per_symbol_leaderboard.total_iterations = all_time_iteration;
         cross_symbol_leaderboard.total_iterations = all_time_iteration;
 
+        // Re-seed RNG periodically to break out of deterministic sequences
+        // This introduces more variance in exploration, especially after winners establish
+        // High randomization (>=80%) uses shorter interval (10) for maximum variance
+        let reseed_interval: u32 = if randomization_pct >= 0.8 { 10 } else { 25 };
+        if session_iteration > 1 && session_iteration % reseed_interval == 0 {
+            let new_seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(42)
+                ^ (session_iteration as u64 * 0x517cc1b727220a95);
+            rng = ChaCha8Rng::seed_from_u64(new_seed);
+            debug!(
+                session_iteration = session_iteration,
+                new_seed = new_seed,
+                "Re-seeded RNG for increased variance"
+            );
+        }
+
         debug!(
             session_iteration = session_iteration,
             all_time_iteration = all_time_iteration,
