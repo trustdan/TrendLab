@@ -259,6 +259,48 @@ cargo run -p trendlab-cli -- report export --run-id sweep_001 --output results.c
 3. Ranked results by Sharpe ratio and other metrics
 4. Generated a report you can share or analyze further
 
+## Research Findings
+
+Multi-period backtesting analysis (1995-2026) across 453 symbols identified robust strategy configurations across 30-year, 20-year, and 10-year timeframes.
+
+### Strategy Rankings (20-year period: 2006-2026)
+
+| Strategy                      | Median Sharpe | Win Ratio | Notes                                       |
+|-------------------------------|---------------|-----------|---------------------------------------------|
+| Larry Williams (2.0/1.5)      | 0.413         | 87.1%     | Top performer across all periods            |
+| Supertrend (16/3.0)           | 0.402         | 95.2%     | Universal winner (top 20 in all 3 periods)  |
+| Parabolic SAR (0.02/0.02/0.2) | 0.410         | 95.2%     | Standard parameters optimal                 |
+| 52-Week High (75/0.95/0.80)   | 0.369         | 91.9%     | Shorter period = faster reaction            |
+
+### Universal Winners
+
+Configurations appearing in top 20 performers across all three time periods (30yr, 20yr, 10yr):
+
+- **Supertrend ATR 16**: Most robust across all timeframes, 95.2% win ratio
+- **Parabolic SAR (default)**: 0.02/0.02/0.2 parameters work best
+- **Larry Williams 2.0/1.5**: Consistent top performer
+
+### Cross-Period Insights
+
+| Period   | Timeframe | Median Sharpe | Characteristics                                 |
+|----------|-----------|---------------|-------------------------------------------------|
+| **20yr** | 2006-2026 | 0.180         | Most balanced, includes 2008 crisis & COVID     |
+| **10yr** | 2016-2026 | 0.399         | Highest absolute returns, recent bull market    |
+| **30yr** | 1995-1996 | 0.180         | 74.9% hit rate, most consistent entries         |
+
+### Key Insights
+
+- **Real Estate sector** outperforms across most trend strategies
+- **Conservative parameters** beat aggressive optimization (avoid over-fitting)
+- **Signal freshness matters**: Filter to last 1-2 bars to avoid stale entries
+- **Universal winners** show robust performance regardless of start date
+
+Research data available in `reports/analysis/`:
+
+- `robustness_scores.csv` — Win ratios and robust configs
+- `strategy_sector_combos.csv` — Sector-strategy performance matrix
+- `period_summary.csv` — Multi-period comparison analysis
+
 ## TUI Features
 
 The TUI provides an interactive terminal interface for backtesting exploration.
@@ -1089,6 +1131,57 @@ Press `y` to open the configuration modal with these settings:
 | Warmup Iters        | 0-200                        | 50           | Iterations before winner exploitation  |
 
 Use `↑/↓` to navigate fields, `←/→` to adjust values, `Enter` to start.
+
+## YOLO Analysis & Reports
+
+After running YOLO mode sweeps, analyze results and update reports using the Polars Python script.
+
+**YOLO Results Location**: `artifacts/yolo_history/` contains JSONL files from each YOLO session.
+
+### Running Analysis
+
+```bash
+# From project root - analyze and update all reports
+python scripts/analyze_yolo.py --data-dir artifacts/yolo_history --export-csv --output-dir reports/analysis
+```
+
+### Output Files
+
+| File | Description |
+|------|-------------|
+| `reports/analysis/yolo_strategy_comparison.csv` | Overall performance by strategy type |
+| `reports/analysis/yolo_strategy_comparison_10yr.csv` | Recent market performance (2016-2026) |
+| `reports/analysis/yolo_strategy_comparison_30yr.csv` | Long-term historical performance (1996-2026) |
+| `reports/analysis/yolo_top_configs.csv` | Best configurations across all backtests |
+| `reports/analysis/yolo_top_configs_10yr.csv` | Best configs for recent markets |
+| `reports/analysis/yolo_robust_configs.csv` | Configs with consistent cross-symbol performance |
+| `reports/analysis/yolo_all_runs.csv` | Complete run data with date ranges |
+
+### 10-Year vs 30-Year Backtests
+
+The analysis script separates results by backtest period to reveal regime-dependent performance:
+
+**10-Year Backtests (2016-2026)** - Recent bull market bias:
+- Higher CAGRs (0.7-1.0%) and Sharpe ratios (0.27-0.40)
+- More volatile: lower hit rates (81-95%)
+- ParabolicSar and LarryWilliams rank highest
+
+**30-Year Backtests (1996-2026)** - Includes crisis periods:
+- Lower but more consistent returns (0.2-0.4% CAGR)
+- Higher hit rates (87-98%) showing robustness
+- Supertrend and ParabolicSar most reliable
+- Tests through 2000 dot-com crash and 2008 financial crisis
+
+**Key Insight**: Strategies optimized on recent data may not survive older market regimes. Use 30-year data for confidence in robustness.
+
+### When to Update Reports
+
+**IMPORTANT**: Always run the analysis script after significant YOLO sessions to keep reports current:
+
+1. After extended YOLO runs (100+ iterations)
+2. When adding new strategy types
+3. Before generating Pine Scripts (to identify best configs)
+4. When reviewing overall system performance
 
 ## Daily Signal Scanner
 

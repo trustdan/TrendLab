@@ -4,13 +4,23 @@
 # Usage:
 #   trendlab-cli scan --watchlist configs/watchlist.toml --output signals.json
 #
-# Research Summary (2015-2025, 10-year backtest, 210 symbols):
-#   - Top strategies by median Sharpe: Supertrend (0.415), FiftyTwoWeekHigh (0.409),
-#     ParabolicSar (0.409), LarryWilliams (0.408), MACrossover (0.291)
-#   - Best sectors: ETF Industrials (0.615), ETF Broad Market (0.604),
-#     ETF Technology (0.574), Financial (0.471)
-#   - Universal winners (rank top-half on 90%+ symbols): Supertrend 10/3.0,
-#     52-Week High 165/0.95/0.8, Larry Williams 2.0/1.5, PSAR 0.02/0.02/0.2
+# Research Summary (Multi-period analysis 1995-2026, 453 symbols):
+#
+#   20-year period (2006-2026) - Primary timeframe:
+#     - Larry Williams (2.0/1.5): 0.413 median Sharpe, 87.1% win ratio
+#     - Supertrend (16/3.0): 0.402 Sharpe, 95.2% win ratio
+#     - ParabolicSar (default): 0.410 Sharpe, 95.2% win ratio
+#     - 52-Week High (75/0.95/0.80): 0.369 Sharpe, 91.9% win ratio
+#
+#   Universal Winners (top 20 across all 3 periods: 30yr, 20yr, 10yr):
+#     - Supertrend ATR 16 (most robust across all timeframes)
+#     - ParabolicSar 0.02/0.02/0.2 (standard default parameters)
+#     - Larry Williams 2.0/1.5 (top performer)
+#
+#   Cross-period insights:
+#     - 20yr (2006-2026): 0.180 median Sharpe, most balanced performance
+#     - 10yr (2016-2026): 0.399 median Sharpe, highest absolute returns
+#     - 30yr (1995-1996): 74.9% avg hit rate, most consistent entries
 
 [watchlist]
 name = "Daily Alerts"
@@ -35,8 +45,8 @@ description = "Curated universe with research-backed robust strategy configs"
 #   psar:0.02,0.02,0.2      - 96.7% win ratio, Avg Sharpe 0.400, 89% top-half
 default_strategies = [
     "larry:2.0,1.5",
-    "supertrend:10,3.0",
-    "52wk_high:165,0.95,0.80",
+    "supertrend:16,3.0",
+    "52wk_high:75,0.95,0.80",
     "psar:0.02,0.02,0.2",
 ]
 
