@@ -2331,7 +2331,7 @@ async fn handle_yolo_mode(
         // This introduces more variance in exploration, especially after winners establish
         // High randomization (>=80%) uses shorter interval (10) for maximum variance
         let reseed_interval: u32 = if randomization_pct >= 0.8 { 10 } else { 25 };
-        if session_iteration > 1 && session_iteration % reseed_interval == 0 {
+        if session_iteration > 1 && session_iteration.is_multiple_of(reseed_interval) {
             let new_seed = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos() as u64)
